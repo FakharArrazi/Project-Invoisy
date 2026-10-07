@@ -9,6 +9,9 @@
 
 const CURRENCY = "DA";            // default currency (can be changed in Settings)
 const WALK_IN = "Walk-in Customer";
+const LOW_STOCK = 5;              // stock at or below this shows "Low stock"
+const LOGO_MAX_W = 320;           // stored logo size (shown at 160x100 max, 2x keeps it sharp)
+const LOGO_MAX_H = 200;
 
 const DEFAULT_SETTINGS = {
   businessName: "My Store",
@@ -16,6 +19,7 @@ const DEFAULT_SETTINGS = {
   phone: "",
   email: "",
   currency: CURRENCY,
+  logo: "",                         // store logo, stored as a PNG data URL
 };
 
 const DEMO_PRODUCTS = [
@@ -58,6 +62,13 @@ function formatDate(iso) {
   if (isNaN(d)) return "";
   const pad = (n) => String(n).padStart(2, "0");
   return pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + "/" + d.getFullYear();
+}
+
+function formatDateTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return formatDate(iso) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
 }
 
 function formatInvoiceNumber(n) {
@@ -126,10 +137,25 @@ function saveProducts() {
   return writeStorage("products", state.products);
 }
 
+// Invoices saved before payments existed are treated as fully paid at their sale date.
+function normalizeInvoice(inv) {
+  if (!inv || typeof inv !== "object" || !inv.invoiceNumber || !Array.isArray(inv.items)) return null;
+  let payments;
+  if (Array.isArray(inv.payments)) {
+    payments = inv.payments
+      .filter((p) => p && Number.isFinite(Number(p.amount)) && Number(p.amount) > 0)
+      .map((p) => ({ amount: round2(Number(p.amount)), timestamp: p.timestamp || inv.date }));
+  } else {
+    const total = toNumber(inv.total);
+    payments = total > 0 ? [{ amount: total, timestamp: inv.date }] : [];
+  }
+  return { ...inv, id: String(inv.id || uid()), payments };
+}
+
 function loadInvoices() {
   const stored = readStorage("invoices", []);
   if (!Array.isArray(stored)) return [];
-  return stored.filter((inv) => inv && typeof inv === "object" && inv.invoiceNumber && Array.isArray(inv.items));
+  return stored.map(normalizeInvoice).filter(Boolean);
 }
 
 function loadSettings() {
@@ -141,6 +167,7 @@ function loadSettings() {
     }
   }
   if (!settings.currency.trim()) settings.currency = CURRENCY;
+  if (!settings.logo.startsWith("data:image/")) settings.logo = "";
   return settings;
 }
 
@@ -162,6 +189,7 @@ function newSale() {
     customer: { name: "", phone: "", address: "" },
     discountType: "amount", discountValue: "",
     taxType: "amount", taxValue: "",
+    paidValue: "",                          // amount paid now; empty = paid in full
   };
 }
 
@@ -420,6 +448,32 @@ function calculateTotals(sale) {
   return { subtotal, discount, tax, total };
 }
 
+// Amount received with the sale. An empty field means paid in full.
+function salePaid(sale, total) {
+  if (String(sale.paidValue).trim() === "") return total;
+  const v = Number(sale.paidValue);
+  return Number.isFinite(v) && v > 0 ? Math.min(round2(v), total) : 0;
+}
+
+// Total paid, remaining balance and status are always calculated from the payments list.
+function paymentInfo(inv) {
+  const payments = Array.isArray(inv.payments) ? inv.payments : [];
+  const paid = round2(payments.reduce((sum, p) => sum + toNumber(p.amount), 0));
+  const remaining = Math.max(0, round2(toNumber(inv.total) - paid));
+  const cls = remaining <= 0 ? "paid" : paid > 0 ? "partial" : "unpaid";
+  const status = { paid: "PAID", partial: "PARTIALLY PAID", unpaid: "UNPAID" }[cls];
+  return { payments, paid, remaining, status, cls };
+}
+
+function paidError() {
+  const raw = String(state.sale.paidValue).trim();
+  if (raw === "") return "";
+  const v = Number(raw);
+  if (!Number.isFinite(v) || v < 0) return "Amount paid can't be negative.";
+  if (round2(v) > calculateTotals(state.sale).total) return "Amount paid can't be more than the invoice total.";
+  return "";
+}
+
 function adjustmentError() {
   const s = state.sale;
   for (const [label, type, value] of [["Discount", s.discountType, s.discountValue], ["Tax", s.taxType, s.taxValue]]) {
@@ -441,7 +495,7 @@ function validateSale() {
     else if (item.qty > p.stock) errors.push(`${p.name}: ${stockMessage(p.stock)}`);
     if (!Number.isFinite(item.unitPrice) || item.unitPrice < 0) errors.push(`${p.name}: price can't be negative.`);
   }
-  const adj = adjustmentError();
+  const adj = adjustmentError() || paidError();
   if (adj) errors.push(adj);
   if (!Number.isFinite(calculateTotals(state.sale).total)) errors.push("The invoice total is not valid.");
   return errors;
@@ -467,6 +521,7 @@ function clearSale() {
   $("custAddress").value = "";
   $("discountValue").value = "";
   $("taxValue").value = "";
+  $("amountPaid").value = "";
   $("discountType").value = "amount";
   $("taxType").value = "amount";
   showError("saleError", "");
@@ -482,6 +537,7 @@ function clearSale() {
 
 function buildInvoiceData(sale, invoiceNumber, dateIso) {
   const totals = calculateTotals(sale);
+  const paid = salePaid(sale, totals.total);
   const items = sale.items.map((item) => {
     const p = findProduct(item.productId);
     return {
@@ -507,6 +563,7 @@ function buildInvoiceData(sale, invoiceNumber, dateIso) {
     discount: totals.discount,
     tax: totals.tax,
     total: totals.total,
+    payments: paid > 0 ? [{ amount: paid, timestamp: dateIso }] : [],
     discountPercent: sale.discountType === "percent" ? toNumber(sale.discountValue) : null,
     taxPercent: sale.taxType === "percent" ? toNumber(sale.taxValue) : null,
     currency: s.currency,
@@ -570,10 +627,30 @@ function deleteInvoice(id) {
   notify(`${inv.invoiceNumber} deleted.`);
 }
 
+// Adds a cash payment (current date/time) to a saved invoice. Items and stock are never touched.
+function addPayment(id, rawAmount) {
+  const inv = state.invoices.find((i) => i.id === id);
+  if (!inv) return { error: "Invoice not found." };
+  const { remaining } = paymentInfo(inv);
+  if (remaining <= 0) return { error: "This invoice is already fully paid." };
+  const amount = Number(rawAmount);
+  if (rawAmount === "" || !Number.isFinite(amount) || amount <= 0) return { error: "Enter a payment amount greater than 0." };
+  if (round2(amount) > remaining) return { error: "Payment cannot be greater than the remaining balance." };
+
+  const updated = { ...inv, payments: [...inv.payments, { amount: round2(amount), timestamp: new Date().toISOString() }] };
+  const invoices = state.invoices.map((i) => (i.id === id ? updated : i));
+  if (!writeStorage("invoices", invoices)) return { error: "The payment could not be saved." };
+  state.invoices = invoices;
+  if (state.previewInvoice && state.previewInvoice.id === id) state.previewInvoice = updated;
+  return { ok: true };
+}
+
 function viewInvoice(id) {
   const inv = state.invoices.find((i) => i.id === id);
   if (!inv) return;
   state.previewInvoice = inv;
+  $("payAmount").value = "";
+  showError("payError", "");
   showView("sell", { keepPreview: true });
 }
 
@@ -592,6 +669,54 @@ function printInvoice(invoice) {
 /* ==========================================================================
    RENDERING
    ========================================================================== */
+
+/* ==========================================================================
+   STORE LOGO
+   ========================================================================== */
+
+function renderLogoSetting() {
+  const logo = state.settings.logo;
+  $("logoPreview").innerHTML = logo ? `<img src="${esc(logo)}" alt="Store logo">` : '<span class="muted small">No logo</span>';
+  $("removeLogo").disabled = !logo;
+}
+
+function saveLogo(dataUrl) {
+  const previous = state.settings.logo;
+  state.settings.logo = dataUrl;
+  if (!writeStorage("settings", state.settings)) { state.settings.logo = previous; return; }
+  renderLogoSetting();
+  renderInvoice();
+  notify(dataUrl ? "Logo saved." : "Logo removed.");
+}
+
+// Reads a PNG, shrinks it to fit LOGO_MAX_W x LOGO_MAX_H (never enlarges, keeps transparency) and saves it.
+function chooseLogo(file) {
+  showError("logoError", "");
+  if (!file) return;
+  if (file.type !== "image/png" && !/\.png$/i.test(file.name)) { showError("logoError", "Please choose a PNG image."); return; }
+  const reader = new FileReader();
+  reader.onerror = () => showError("logoError", "That file could not be read.");
+  reader.onload = () => {
+    const img = new Image();
+    img.onerror = () => showError("logoError", "That file is not a valid PNG image.");
+    img.onload = () => {
+      const scale = Math.min(1, LOGO_MAX_W / img.naturalWidth, LOGO_MAX_H / img.naturalHeight);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      saveLogo(canvas.toDataURL("image/png"));
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function stockBadge(stock) {
+  if (stock <= 0) return ' <span class="badge out">Out of stock</span>';
+  if (stock <= LOW_STOCK) return ' <span class="badge low">Low stock</span>';
+  return "";
+}
 
 function renderResults() {
   const box = $("results");
@@ -615,11 +740,11 @@ function renderResults() {
 
   box.innerHTML = state.results.map((p) => {
     const meta = [p.sku, p.category].filter(Boolean).join(", ");
-    const stock = p.stock > 0 ? `Stock: ${p.stock}` : "Out of stock";
+    const stock = p.stock <= 0 ? "Out of stock" : p.stock <= LOW_STOCK ? `Low stock: ${p.stock}` : `Stock: ${p.stock}`;
     return `<div class="result" role="option" data-id="${esc(p.id)}" aria-selected="${p.id === state.selectedId}">` +
       `<div><div>${esc(p.name)}</div>${meta ? `<div class="meta">${esc(meta)}</div>` : ""}</div>` +
       `<div class="price">${esc(money(p.sellingPrice))}</div>` +
-      `<div class="stock${p.stock > 0 ? "" : " out"}">${stock}</div></div>`;
+      `<div class="stock${p.stock <= 0 ? " out" : p.stock <= LOW_STOCK ? " low" : ""}">${stock}</div></div>`;
   }).join("");
 
   const selected = box.querySelector('[aria-selected="true"]');
@@ -631,6 +756,7 @@ function renderSelected() {
   $("selectedInfo").innerHTML = p
     ? `<strong>${esc(p.name)}</strong>` +
       (p.stock > 0 ? `<span>Stock: ${p.stock}</span>` : '<span class="out">Out of stock</span>') +
+      (p.stock > 0 && p.stock <= LOW_STOCK ? '<span class="low">Low stock</span>' : "") +
       `<span>Price: ${esc(money(p.sellingPrice))}</span>`
     : '<span class="none">Select a product from the list.</span>';
 }
@@ -661,6 +787,8 @@ function renderTotals() {
   $("tDiscount").textContent = money(t.discount);
   $("tTax").textContent = money(t.tax);
   $("tTotal").textContent = money(t.total);
+  $("tRemaining").textContent = money(Math.max(0, round2(t.total - salePaid(state.sale, t.total))));
+  $("amountPaid").placeholder = numberFormat.format(t.total);
 }
 
 // Updates totals, line totals and the preview without rebuilding the inputs (keeps focus).
@@ -684,6 +812,7 @@ function invoiceHtml(inv) {
   const num = (n) => numberFormat.format(toNumber(n));
   const pct = (p) => (p ? ` (${numberFormat.format(p)}%)` : "");
   const line = (text) => (text ? `<div>${esc(text)}</div>` : "");
+  const logo = state.settings.logo ? `<img class="inv-logo" src="${esc(state.settings.logo)}" alt="Store logo">` : "";
 
   const rows = inv.items.length
     ? inv.items.map((i) =>
@@ -691,13 +820,27 @@ function invoiceHtml(inv) {
       ).join("")
     : '<tr><td colspan="4" class="none">No items yet</td></tr>';
 
+  const pay = paymentInfo(inv);
+  const hasItems = inv.items.length > 0;
+  const paidRows = hasItems
+    ? `<tr><td>Total Paid</td><td>${esc(money(pay.paid, cur))}</td></tr><tr class="due"><td>Remaining</td><td>${esc(money(pay.remaining, cur))}</td></tr>`
+    : "";
+  const history = hasItems
+    ? `<div class="inv-status"><span class="${pay.cls}">STATUS: ${pay.status}</span></div>
+    <section class="inv-payments"><h3>PAYMENT HISTORY</h3>${
+      pay.payments.length
+        ? pay.payments.map((p) => `<div class="inv-pay"><span class="when">${esc(formatDateTime(p.timestamp))}</span><span>Paid: ${esc(money(p.amount, cur))}</span></div>`).join("")
+        : '<div class="inv-pay"><span class="when">No payments yet.</span></div>'
+    }</section>`
+    : "";
+
   return `<header class="inv-head">
-      <div><div class="inv-biz-name">${esc(biz.name)}</div>${line(biz.address)}${line(biz.phone)}${line(biz.email)}</div>
+      <div>${logo}<div class="inv-biz-name">${esc(biz.name)}</div>${line(biz.address)}${line(biz.phone)}${line(biz.email)}</div>
       <div class="inv-title">INVOICE</div>
     </header>
     <div class="inv-meta">
       <div><div class="label">Customer</div><div class="inv-customer">${esc(cust.name || WALK_IN)}${cust.phone ? "\n" + esc(cust.phone) : ""}${cust.address ? "\n" + esc(cust.address) : ""}</div></div>
-      <div class="right"><div><span class="label">Invoice:</span> ${esc(inv.invoiceNumber)}</div><div><span class="label">Date:</span> ${esc(formatDate(inv.date))}</div></div>
+      <div class="right"><div><span class="label">Invoice:</span> ${esc(inv.invoiceNumber)}</div><div><span class="label">Date:</span> ${esc(formatDateTime(inv.date))}</div></div>
     </div>
     <table class="inv-table">
       <thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Price (${esc(cur)})</th><th class="num">Total (${esc(cur)})</th></tr></thead>
@@ -708,8 +851,27 @@ function invoiceHtml(inv) {
       <tr><td>Discount${pct(inv.discountPercent)}</td><td>${esc(money(toNumber(inv.discount), cur))}</td></tr>
       <tr><td>Tax${pct(inv.taxPercent)}</td><td>${esc(money(toNumber(inv.tax), cur))}</td></tr>
       <tr class="grand"><td>TOTAL</td><td>${esc(money(toNumber(inv.total), cur))}</td></tr>
+      ${paidRows}
     </table>
+    ${history}
     <p class="inv-thanks">Thank you for your purchase.</p>`;
+}
+
+// Payment box above a saved invoice: totals plus the "Add Payment" control.
+function renderPayBox() {
+  const inv = state.previewInvoice;
+  $("payBox").hidden = !inv;
+  if (!inv) return;
+  const cur = inv.currency || state.settings.currency;
+  const info = paymentInfo(inv);
+  const full = info.remaining <= 0;
+  $("payNumber").textContent = inv.invoiceNumber;
+  $("payTotal").textContent = money(toNumber(inv.total), cur);
+  $("payPaid").textContent = money(info.paid, cur);
+  $("payRemaining").textContent = money(info.remaining, cur);
+  $("payAmount").disabled = full;
+  $("payBtn").disabled = full;
+  $("payAmount").placeholder = full ? "Fully paid" : "Max " + numberFormat.format(info.remaining);
 }
 
 function renderInvoice() {
@@ -717,6 +879,7 @@ function renderInvoice() {
   $("invoice").innerHTML = invoiceHtml(saved || draftInvoice());
   $("previewStatus").textContent = saved ? "Saved invoice" : "Live preview";
   $("backToSale").hidden = !saved;
+  renderPayBox();
 }
 
 function renderStock() {
@@ -742,7 +905,7 @@ function renderStock() {
     `<td><div>${esc(p.name)}</div>${p.category ? `<div class="muted small">${esc(p.category)}</div>` : ""}</td>` +
     `<td>${p.sku ? esc(p.sku) : '<span class="muted">-</span>'}</td>` +
     `<td class="num">${esc(money(p.sellingPrice))}</td>` +
-    `<td class="num">${p.stock}</td>` +
+    `<td class="num">${p.stock}${stockBadge(p.stock)}</td>` +
     `<td class="num"><div class="row-actions">` +
     `<button type="button" class="btn small" data-action="dec" aria-label="Decrease stock of ${esc(p.name)} by 1"${p.stock < 1 ? " disabled" : ""}>-</button>` +
     `<button type="button" class="btn small" data-action="inc" aria-label="Increase stock of ${esc(p.name)} by 1">+</button>` +
@@ -772,22 +935,43 @@ function renderRestockInfo() {
     (raw !== "" && Number.isInteger(qty) && qty > 0 ? ` After adding: ${p.stock + qty}.` : "");
 }
 
+function searchInvoices(query) {
+  const terms = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+  return [...state.invoices].reverse().filter((inv) => {
+    const c = inv.customer || {};
+    const phone = String(c.phone || "");
+    const haystack = (inv.invoiceNumber + " " + (c.name || WALK_IN) + " " + phone + " " + phone.replace(/\s+/g, "")).toLowerCase();
+    return terms.every((t) => haystack.includes(t));
+  });
+}
+
 function renderInvoices() {
-  const list = [...state.invoices].reverse();
+  const hasInvoices = state.invoices.length > 0;
+  const list = searchInvoices($("invoiceFilter").value);
+  $("invoiceFilter").hidden = !hasInvoices;
   $("invoiceTable").hidden = list.length === 0;
   $("invoiceEmpty").hidden = list.length > 0;
-  $("invoiceBody").innerHTML = list.map((inv) =>
-    `<tr data-id="${esc(inv.id)}">` +
-    `<td>${esc(inv.invoiceNumber)}</td>` +
-    `<td>${esc(formatDate(inv.date))}</td>` +
-    `<td>${esc((inv.customer && inv.customer.name) || WALK_IN)}</td>` +
-    `<td class="num">${esc(money(toNumber(inv.total), inv.currency))}</td>` +
-    `<td class="num"><div class="row-actions">` +
-    `<button type="button" class="btn small" data-action="view">View</button>` +
-    `<button type="button" class="btn small" data-action="print">Print</button>` +
-    `<button type="button" class="btn small danger" data-action="delete">Delete</button>` +
-    `</div></td></tr>`
-  ).join("");
+  $("invoiceEmpty").innerHTML = hasInvoices
+    ? `<p class="muted">No invoices match "${esc($("invoiceFilter").value)}".</p>`
+    : '<p><strong>No invoices yet.</strong></p><p class="muted">Completed sales will appear here.</p>';
+  $("invoiceBody").innerHTML = list.map((inv) => {
+    const pay = paymentInfo(inv);
+    const label = { paid: "Paid", partial: "Partial", unpaid: "Unpaid" }[pay.cls];
+    return `<tr data-id="${esc(inv.id)}">` +
+      `<td>${esc(inv.invoiceNumber)}</td>` +
+      `<td>${esc(formatDate(inv.date))}</td>` +
+      `<td>${esc((inv.customer && inv.customer.name) || WALK_IN)}</td>` +
+      `<td class="num">${esc(money(toNumber(inv.total), inv.currency))}</td>` +
+      `<td class="num">${esc(money(pay.paid, inv.currency))}</td>` +
+      `<td class="num">${esc(money(pay.remaining, inv.currency))}</td>` +
+      `<td><span class="badge ${pay.cls}">${label}</span></td>` +
+      `<td class="num"><div class="row-actions">` +
+      `<button type="button" class="btn small" data-action="view">View</button>` +
+      `<button type="button" class="btn small" data-action="pay"${pay.remaining <= 0 ? " disabled" : ""}>Add Payment</button>` +
+      `<button type="button" class="btn small" data-action="print">Print</button>` +
+      `<button type="button" class="btn small danger" data-action="delete">Delete</button>` +
+      `</div></td></tr>`;
+  }).join("");
 }
 
 function applyCurrency() {
@@ -801,6 +985,7 @@ function fillSettingsForm() {
   $("sPhone").value = s.phone;
   $("sEmail").value = s.email;
   $("sCurrency").value = s.currency;
+  renderLogoSetting();
 }
 
 function renderAll() {
@@ -960,10 +1145,16 @@ function bindEvents() {
   for (const [id, key] of Object.entries(adjustFields)) {
     $(id).addEventListener("input", () => {
       state.sale[key] = $(id).value;
-      showError("saleError", adjustmentError());
+      showError("saleError", adjustmentError() || paidError());
       refreshLive();
     });
   }
+
+  $("amountPaid").addEventListener("input", () => {
+    state.sale.paidValue = $("amountPaid").value;
+    showError("saleError", paidError());
+    refreshLive();
+  });
 
   $("clearSale").addEventListener("click", clearSale);
   $("completeSale").addEventListener("click", completeSale);
@@ -1027,9 +1218,30 @@ function bindEvents() {
     if (!btn) return;
     const id = btn.closest("tr").dataset.id;
     if (btn.dataset.action === "view") viewInvoice(id);
+    else if (btn.dataset.action === "pay") { viewInvoice(id); $("payAmount").focus(); }
     else if (btn.dataset.action === "print") printInvoice(state.invoices.find((i) => i.id === id));
     else if (btn.dataset.action === "delete") deleteInvoice(id);
   });
+
+  $("invoiceFilter").addEventListener("input", renderInvoices);
+
+  // Add a payment to the invoice shown in the preview
+  $("payForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (!state.previewInvoice) return;
+    const result = addPayment(state.previewInvoice.id, $("payAmount").value.trim());
+    if (result.error) {
+      showError("payError", result.error);
+      $("payAmount").focus();
+      return;
+    }
+    showError("payError", "");
+    $("payAmount").value = "";
+    renderInvoices();
+    renderInvoice();
+    notify("Payment added.");
+  });
+  $("payAmount").addEventListener("input", () => showError("payError", ""));
 
   // Preview
   $("printBtn").addEventListener("click", () => printInvoice());
@@ -1042,6 +1254,7 @@ function bindEvents() {
   $("settingsForm").addEventListener("submit", (e) => {
     e.preventDefault();
     state.settings = {
+      ...state.settings,
       businessName: $("sName").value.trim(),
       address: $("sAddress").value.trim(),
       phone: $("sPhone").value.trim(),
@@ -1053,11 +1266,15 @@ function bindEvents() {
     renderAll();
   });
   $("loadDemo").addEventListener("click", loadDemoData);
+  $("chooseLogo").addEventListener("click", () => $("logoFile").click());
+  $("logoFile").addEventListener("change", (e) => { chooseLogo(e.target.files[0]); e.target.value = ""; });
+  $("removeLogo").addEventListener("click", () => saveLogo(""));
 
   // Another tab changed the data: pick it up.
   window.addEventListener("storage", (e) => {
     if (e.key !== null && !["products", "invoices", "settings", "invoiceCounter"].includes(e.key)) return;
     loadAll();
+    if (state.previewInvoice) state.previewInvoice = state.invoices.find((i) => i.id === state.previewInvoice.id) || null;
     showError("saleError", "");
     const notes = syncSaleWithProducts();
     renderAll();

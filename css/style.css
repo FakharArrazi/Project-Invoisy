@@ -247,6 +247,44 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 .inv-totals .grand td { font-weight: 700; font-size: 15px; border-top: 1px solid #000; padding-top: 7px; }
 .inv-thanks { margin-top: 28px; text-align: center; color: #333; }
 
+/* ---------- Logo, payments, badges ---------- */
+
+.inv-logo { display: block; max-width: 160px; max-height: 100px; width: auto; height: auto; margin-bottom: 8px; }
+.inv-totals .due td { font-weight: 700; }
+.inv-status { margin-top: 14px; text-align: right; font-weight: 700; letter-spacing: 0.5px; }
+.inv-status span { display: inline-block; padding: 3px 10px; border: 2px solid currentColor; }
+.inv-status .paid { color: #1b6e3c; }
+.inv-status .partial { color: #8a5a00; }
+.inv-status .unpaid { color: #b3261e; }
+.inv-payments { margin-top: 16px; padding-top: 8px; border-top: 1px solid #000; }
+.inv-payments h3 { margin: 0 0 6px; font-size: 12px; letter-spacing: 1px; }
+.inv-pay { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border-bottom: 1px solid #ddd; }
+.inv-pay .when { color: #555; }
+
+.badge { display: inline-block; padding: 1px 7px; font-size: 12px; border: 1px solid currentColor; border-radius: 10px; white-space: nowrap; }
+.badge.paid { color: #1b6e3c; }
+.badge.partial, .badge.low { color: #8a5a00; }
+.badge.unpaid, .badge.out { color: var(--danger); }
+.result .stock.low, .selected .low { color: #8a5a00; }
+
+.totals .pay-input { align-items: center; gap: 12px; padding-top: 8px; }
+.totals .pay-input label { margin: 0; }
+.totals .pay-input input { width: 140px; text-align: right; }
+.totals .due { font-weight: 600; }
+.totals .pay-hint { margin: 4px 0 0; text-align: right; }
+
+.pay-box { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 10px; }
+.pay-summary > div { display: flex; justify-content: space-between; padding: 2px 0; }
+.pay-summary .grand { font-weight: 700; border-top: 1px solid var(--border); margin-top: 4px; padding-top: 5px; }
+.pay-box form { margin-top: 10px; }
+.pay-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+
+.logo-setting { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.logo-setting .actions { margin-top: 0; }
+#logoPreview { display: flex; align-items: center; justify-content: center; min-width: 120px; min-height: 70px; padding: 6px; border: 1px dashed var(--border-strong); border-radius: 4px; }
+#logoPreview img { display: block; max-width: 160px; max-height: 100px; }
+#invoiceFilter { max-width: 280px; }
+
 /* ---------- Toast ---------- */
 
 .toast {
@@ -288,16 +326,17 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 
 /* ---------- Print: only the invoice ---------- */
 
-@page { size: A4; margin: 15mm; }
+/* Margin 0 stops the browser printing its own header/footer (file path, URL, date). The invoice gets its margin from padding instead. */
+@page { size: A4; margin: 0; }
 
 @media print {
   html, body { height: auto; background: #fff; }
   .sidebar, main, .no-print, .toast { display: none !important; }
   .app { display: block; height: auto; }
   .preview-panel { display: block !important; width: auto; padding: 0; overflow: visible; }
-  .invoice { border: 0; padding: 0; font-size: 11pt; }
+  .invoice { border: 0; padding: 15mm; font-size: 11pt; }
   .inv-biz-name { font-size: 15pt; }
   .inv-title { font-size: 20pt; }
   .inv-table th, .inv-table td { font-size: 10.5pt; }
-  .inv-table tr, .inv-totals { page-break-inside: avoid; }
+  .inv-table tr, .inv-totals, .inv-status, .inv-payments { page-break-inside: avoid; }
 }

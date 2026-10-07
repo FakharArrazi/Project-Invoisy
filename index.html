@@ -117,6 +117,9 @@
           <div><span>Discount</span><span id="tDiscount"></span></div>
           <div><span>Tax</span><span id="tTax"></span></div>
           <div class="grand"><span>Total</span><span id="tTotal"></span></div>
+          <div class="pay-input"><label for="amountPaid">Amount Paid</label><input type="number" id="amountPaid" min="0" step="any"></div>
+          <div class="due"><span>Remaining</span><span id="tRemaining"></span></div>
+          <p class="muted small pay-hint">Leave Amount Paid empty if the customer pays in full.</p>
         </div>
 
         <p class="error" id="saleError" role="alert"></p>
@@ -225,6 +228,11 @@
     <section class="view" id="view-invoices" hidden>
       <h1>Invoices</h1>
       <div class="panel">
+        <div class="panel-head">
+          <h2>Invoice history</h2>
+          <label class="sr-only" for="invoiceFilter">Search invoices</label>
+          <input type="search" id="invoiceFilter" placeholder="Search invoice, customer or phone..." autocomplete="off">
+        </div>
         <div class="table-wrap">
           <table class="table" id="invoiceTable">
             <thead>
@@ -233,16 +241,16 @@
                 <th>Date</th>
                 <th>Customer</th>
                 <th class="num">Total</th>
+                <th class="num">Paid</th>
+                <th class="num">Remaining</th>
+                <th>Status</th>
                 <th class="num">Actions</th>
               </tr>
             </thead>
             <tbody id="invoiceBody"></tbody>
           </table>
         </div>
-        <div class="empty" id="invoiceEmpty" hidden>
-          <p><strong>No invoices yet.</strong></p>
-          <p class="muted">Completed sales will appear here.</p>
-        </div>
+        <div class="empty" id="invoiceEmpty" hidden></div>
       </div>
     </section>
 
@@ -280,6 +288,19 @@
         </form>
       </div>
       <div class="panel narrow">
+        <h2>Store logo</h2>
+        <div class="logo-setting">
+          <div id="logoPreview"></div>
+          <div class="actions left">
+            <input type="file" id="logoFile" accept="image/png" hidden>
+            <button type="button" class="btn" id="chooseLogo">Choose Logo</button>
+            <button type="button" class="btn danger" id="removeLogo">Remove Logo</button>
+          </div>
+        </div>
+        <p class="muted small">PNG image. It is resized to fit and shown above the business name on invoices.</p>
+        <p class="error" id="logoError" role="alert"></p>
+      </div>
+      <div class="panel narrow">
         <h2>Demo data</h2>
         <p class="muted">Add a few sample products to try the app. Products you already have are kept.</p>
         <div class="actions left">
@@ -298,6 +319,22 @@
         <button type="button" class="btn" id="backToSale" hidden>Back to current sale</button>
         <button type="button" class="btn primary" id="printBtn">Print / PDF</button>
       </div>
+    </div>
+    <div class="pay-box no-print" id="payBox" hidden>
+      <div class="pay-summary">
+        <div><span>Invoice</span><strong id="payNumber"></strong></div>
+        <div><span>Total</span><span id="payTotal"></span></div>
+        <div><span>Paid</span><span id="payPaid"></span></div>
+        <div class="grand"><span>Remaining</span><span id="payRemaining"></span></div>
+      </div>
+      <form id="payForm" novalidate>
+        <label for="payAmount">New payment</label>
+        <div class="pay-row">
+          <input type="number" id="payAmount" min="0" step="any">
+          <button type="submit" class="btn primary" id="payBtn">Add Payment</button>
+        </div>
+      </form>
+      <p class="error" id="payError" role="alert"></p>
     </div>
     <article class="invoice" id="invoice"></article>
   </aside>
