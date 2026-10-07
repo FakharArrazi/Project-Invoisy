@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Simple Invoice</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app" id="app" data-view="sell">
+
+  <!-- SIDEBAR -->
+  <nav class="sidebar" aria-label="Main">
+    <button type="button" class="nav-btn" data-view="sell">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a1 1 0 0 0 1 .8h8.9a1 1 0 0 0 1-.8L20 7H6"/></svg>
+      <span>Sell</span>
+    </button>
+    <button type="button" class="nav-btn" data-view="stock">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>
+      <span>Stock</span>
+    </button>
+    <button type="button" class="nav-btn" data-view="invoices">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8l-5-5z"/><path d="M14 3v5h5M8 13h8M8 17h6"/></svg>
+      <span>Invoices</span>
+    </button>
+    <button type="button" class="nav-btn" data-view="settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M19 6h1M4 12h2M12 12h8M4 18h8M18 18h2"/><circle cx="16" cy="6" r="2.5"/><circle cx="9" cy="12" r="2.5"/><circle cx="15" cy="18" r="2.5"/></svg>
+      <span>Settings</span>
+    </button>
+  </nav>
+
+  <main>
+
+    <!-- SELL -->
+    <section class="view" id="view-sell">
+      <h1>Sell</h1>
+
+      <div class="panel">
+        <h2>Add products</h2>
+        <label class="sr-only" for="search">Search products</label>
+        <input type="search" id="search" placeholder="Search products by name, SKU or category..." autocomplete="off">
+        <div class="results" id="results" role="listbox" aria-label="Products"></div>
+        <form class="add-row" id="addForm" novalidate>
+          <div class="selected" id="selectedInfo"></div>
+          <div class="add-qty">
+            <label for="addQty">Quantity</label>
+            <input type="number" id="addQty" min="1" step="1" value="1">
+          </div>
+          <button type="submit" class="btn primary">Add to Sale</button>
+        </form>
+        <p class="error" id="addError" role="alert"></p>
+      </div>
+
+      <div class="panel">
+        <h2>Current sale</h2>
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Product</th>
+                <th class="num">Qty</th>
+                <th class="num">Unit price</th>
+                <th class="num">Total</th>
+                <th><span class="sr-only">Remove</span></th>
+              </tr>
+            </thead>
+            <tbody id="saleBody"></tbody>
+          </table>
+        </div>
+
+        <div class="sale-fields">
+          <fieldset>
+            <legend>Customer (optional)</legend>
+            <div class="grid-2">
+              <div class="field">
+                <label for="custName">Name</label>
+                <input type="text" id="custName" placeholder="Walk-in Customer" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="custPhone">Phone</label>
+                <input type="text" id="custPhone" autocomplete="off">
+              </div>
+            </div>
+            <div class="field">
+              <label for="custAddress">Address</label>
+              <input type="text" id="custAddress" autocomplete="off">
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Discount and tax</legend>
+            <div class="field">
+              <label for="discountValue">Discount</label>
+              <div class="with-unit">
+                <input type="number" id="discountValue" min="0" step="any" placeholder="0">
+                <select id="discountType" aria-label="Discount type">
+                  <option value="amount" data-currency></option>
+                  <option value="percent">%</option>
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label for="taxValue">Tax</label>
+              <div class="with-unit">
+                <input type="number" id="taxValue" min="0" step="any" placeholder="0">
+                <select id="taxType" aria-label="Tax type">
+                  <option value="amount" data-currency></option>
+                  <option value="percent">%</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+        </div>
+
+        <div class="totals">
+          <div><span>Subtotal</span><span id="tSubtotal"></span></div>
+          <div><span>Discount</span><span id="tDiscount"></span></div>
+          <div><span>Tax</span><span id="tTax"></span></div>
+          <div class="grand"><span>Total</span><span id="tTotal"></span></div>
+        </div>
+
+        <p class="error" id="saleError" role="alert"></p>
+        <div class="actions">
+          <button type="button" class="btn" id="clearSale">Clear</button>
+          <button type="button" class="btn primary" id="completeSale">Complete Sale</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STOCK -->
+    <section class="view" id="view-stock" hidden>
+      <h1>Stock</h1>
+      <div class="stock-layout">
+
+        <div class="panel">
+          <h2 id="productFormTitle">Add product</h2>
+          <form id="productForm" novalidate>
+            <div class="field">
+              <label for="pName">Product name</label>
+              <input type="text" id="pName" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="pDesc">Description</label>
+              <input type="text" id="pDesc" autocomplete="off">
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="pPrice">Selling price</label>
+                <input type="number" id="pPrice" min="0" step="any">
+              </div>
+              <div class="field">
+                <label for="pCost">Purchase price <small>(optional)</small></label>
+                <input type="number" id="pCost" min="0" step="any">
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="pStock">Stock quantity</label>
+                <input type="number" id="pStock" min="0" step="1" value="0">
+              </div>
+              <div class="field">
+                <label for="pSku">SKU <small>(optional)</small></label>
+                <input type="text" id="pSku" autocomplete="off">
+              </div>
+            </div>
+            <div class="field">
+              <label for="pCategory">Category <small>(optional)</small></label>
+              <input type="text" id="pCategory" list="categoryList" autocomplete="off">
+              <datalist id="categoryList"></datalist>
+            </div>
+            <p class="error" id="productError" role="alert"></p>
+            <div class="actions left">
+              <button type="submit" class="btn primary" id="productSubmit">Add Product</button>
+              <button type="button" class="btn" id="productCancel" hidden>Cancel</button>
+            </div>
+          </form>
+        </div>
+
+        <div>
+          <div class="panel">
+            <h2>Add stock</h2>
+            <form class="restock" id="restockForm" novalidate>
+              <div class="field">
+                <label for="rProduct">Product</label>
+                <select id="rProduct"></select>
+              </div>
+              <div class="field">
+                <label for="rQty">Quantity to add</label>
+                <input type="number" id="rQty" min="1" step="1" placeholder="0">
+              </div>
+              <button type="submit" class="btn primary">Add Stock</button>
+            </form>
+            <p class="muted" id="restockInfo"></p>
+            <p class="error" id="restockError" role="alert"></p>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <h2>Products</h2>
+              <label class="sr-only" for="stockFilter">Filter products</label>
+              <input type="search" id="stockFilter" placeholder="Filter products..." autocomplete="off">
+            </div>
+            <div class="table-wrap">
+              <table class="table" id="stockTable">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>SKU</th>
+                    <th class="num">Price</th>
+                    <th class="num">Stock</th>
+                    <th class="num">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="stockBody"></tbody>
+              </table>
+            </div>
+            <div class="empty" id="stockEmpty" hidden></div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- INVOICES -->
+    <section class="view" id="view-invoices" hidden>
+      <h1>Invoices</h1>
+      <div class="panel">
+        <div class="table-wrap">
+          <table class="table" id="invoiceTable">
+            <thead>
+              <tr>
+                <th>Invoice</th>
+                <th>Date</th>
+                <th>Customer</th>
+                <th class="num">Total</th>
+                <th class="num">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="invoiceBody"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="invoiceEmpty" hidden>
+          <p><strong>No invoices yet.</strong></p>
+          <p class="muted">Completed sales will appear here.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="view" id="view-settings" hidden>
+      <h1>Settings</h1>
+      <div class="panel narrow">
+        <h2>Business details</h2>
+        <form id="settingsForm" novalidate>
+          <div class="field">
+            <label for="sName">Business name</label>
+            <input type="text" id="sName" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="sAddress">Address</label>
+            <input type="text" id="sAddress" autocomplete="off">
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label for="sPhone">Phone</label>
+              <input type="text" id="sPhone" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="sEmail">Email</label>
+              <input type="text" id="sEmail" autocomplete="off">
+            </div>
+          </div>
+          <div class="field">
+            <label for="sCurrency">Currency</label>
+            <input type="text" id="sCurrency" maxlength="8" autocomplete="off">
+          </div>
+          <div class="actions left">
+            <button type="submit" class="btn primary">Save Settings</button>
+          </div>
+        </form>
+      </div>
+      <div class="panel narrow">
+        <h2>Demo data</h2>
+        <p class="muted">Add a few sample products to try the app. Products you already have are kept.</p>
+        <div class="actions left">
+          <button type="button" class="btn" id="loadDemo">Load Demo Data</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- LIVE INVOICE PREVIEW -->
+  <aside class="preview-panel" aria-label="Invoice preview">
+    <div class="preview-bar no-print">
+      <span class="muted" id="previewStatus"></span>
+      <div class="preview-buttons">
+        <button type="button" class="btn" id="backToSale" hidden>Back to current sale</button>
+        <button type="button" class="btn primary" id="printBtn">Print / PDF</button>
+      </div>
+    </div>
+    <article class="invoice" id="invoice"></article>
+  </aside>
+
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="script.js"></script>
+</body>
+</html>
