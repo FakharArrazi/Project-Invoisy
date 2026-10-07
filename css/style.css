@@ -11,6 +11,7 @@
   --danger: #b3261e;
   --sidebar-w: 76px;
   --preview-w: 440px;
+  --topbar-h: 52px;
 }
 
 * { box-sizing: border-box; }
@@ -42,7 +43,57 @@ small { color: var(--muted); font-weight: normal; }
 .app {
   display: grid;
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr) auto;
-  height: 100vh;
+  height: calc(100vh - var(--topbar-h));
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: var(--topbar-h);
+  padding: 0 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 4px 8px;
+  margin-left: -8px;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.brand:hover { background: var(--accent-tint); }
+.brand-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.brand-logo {
+  display: flex; align-items: center; justify-content: center;
+  flex: none; width: 30px; height: 30px;
+  color: #fff; background: var(--accent); border-radius: 7px;
+}
+.brand-logo svg, .account svg {
+  width: 18px; height: 18px;
+  fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+.account {
+  display: flex; align-items: center; justify-content: center;
+  flex: none; width: 32px; height: 32px;
+  color: var(--muted); border: 1px solid var(--border-strong); border-radius: 50%;
 }
 
 .sidebar {
@@ -127,6 +178,9 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 .field { margin-bottom: 10px; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: end; }
 .with-unit { display: grid; grid-template-columns: 1fr 72px; gap: 6px; }
+.radio-row { display: flex; gap: 24px; }
+.radio-row label { display: flex; align-items: center; gap: 6px; margin: 0; }
+.radio-row input { width: auto; }
 
 .btn {
   font: inherit;
@@ -308,7 +362,7 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 /* ---------- Smaller screens ---------- */
 
 @media (max-width: 1180px) {
-  .app { grid-template-columns: var(--sidebar-w) minmax(0, 1fr); height: auto; min-height: 100vh; }
+  .app { grid-template-columns: var(--sidebar-w) minmax(0, 1fr); height: auto; min-height: calc(100vh - var(--topbar-h)); }
   main { overflow: visible; padding-bottom: 0; }
   .preview-panel { grid-column: 2; width: auto; padding: 20px; overflow: visible; }
   .stock-layout { grid-template-columns: minmax(0, 1fr); }
@@ -327,11 +381,11 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 /* ---------- Print: only the invoice ---------- */
 
 /* Margin 0 stops the browser printing its own header/footer (file path, URL, date). The invoice gets its margin from padding instead. */
-@page { size: A4; margin: 0; }
+@page { margin: 0; }
 
 @media print {
   html, body { height: auto; background: #fff; }
-  .sidebar, main, .no-print, .toast { display: none !important; }
+  .topbar, .sidebar, main, .no-print, .toast { display: none !important; }
   .app { display: block; height: auto; }
   .preview-panel { display: block !important; width: auto; padding: 0; overflow: visible; }
   .invoice { border: 0; padding: 15mm; font-size: 11pt; }
@@ -339,4 +393,8 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
   .inv-title { font-size: 20pt; }
   .inv-table th, .inv-table td { font-size: 10.5pt; }
   .inv-table tr, .inv-totals, .inv-status, .inv-payments { page-break-inside: avoid; }
+  html[data-paper="a5"] .invoice { padding: 10mm; font-size: 10pt; }
+  html[data-paper="a5"] .inv-biz-name { font-size: 13pt; }
+  html[data-paper="a5"] .inv-title { font-size: 17pt; }
+  html[data-paper="a5"] .inv-table th, html[data-paper="a5"] .inv-table td { font-size: 9.5pt; }
 }

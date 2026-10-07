@@ -3,10 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Simple Invoice</title>
+  <title>Invoisy</title>
   <link rel="stylesheet" href="css/style.css">
+  <style id="paperStyle"></style>
 </head>
 <body>
+<header class="topbar">
+  <button type="button" class="brand" id="brand" title="Home">
+    <span class="brand-logo" id="brandLogo" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8l-5-5z"/><path d="M14 3v5h5M8 13h8M8 17h6"/></svg>
+    </span>
+    <span class="brand-name">Invoisy</span>
+  </button>
+  <span class="account" role="img" aria-label="Account (coming soon)" title="Account (coming soon)">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+  </span>
+</header>
 <div class="app" id="app" data-view="sell">
 
   <!-- SIDEBAR -->
@@ -286,6 +298,13 @@
             <button type="submit" class="btn primary">Save Settings</button>
           </div>
         </form>
+      </div>
+      <div class="panel narrow">
+        <h2>Invoice paper size</h2>
+        <div class="radio-row" role="radiogroup" aria-label="Invoice paper size">
+          <label><input type="radio" name="paper" id="paperA4" value="A4"> A4</label>
+          <label><input type="radio" name="paper" id="paperA5" value="A5"> A5</label>
+        </div>
       </div>
       <div class="panel narrow">
         <h2>Store logo</h2>

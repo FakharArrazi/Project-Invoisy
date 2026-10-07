@@ -20,6 +20,7 @@ const DEFAULT_SETTINGS = {
   email: "",
   currency: CURRENCY,
   logo: "",                         // store logo, stored as a PNG data URL
+  paper: "A4",                      // invoice paper size: "A4" or "A5"
 };
 
 const DEMO_PRODUCTS = [
@@ -168,6 +169,7 @@ function loadSettings() {
   }
   if (!settings.currency.trim()) settings.currency = CURRENCY;
   if (!settings.logo.startsWith("data:image/")) settings.logo = "";
+  if (!["A4", "A5"].includes(settings.paper)) settings.paper = "A4";
   return settings;
 }
 
@@ -988,7 +990,23 @@ function fillSettingsForm() {
   renderLogoSetting();
 }
 
+function applyPaperSize() {
+  const paper = state.settings.paper;
+  $("paperStyle").textContent = `@page { size: ${paper}; }`;
+  document.documentElement.dataset.paper = paper.toLowerCase();
+  $("paper" + paper).checked = true;
+}
+
+function savePaper(paper) {
+  const previous = state.settings.paper;
+  state.settings.paper = paper;
+  if (writeStorage("settings", state.settings)) notify("Paper size set to " + paper + ".");
+  else state.settings.paper = previous;
+  applyPaperSize();
+}
+
 function renderAll() {
+  applyPaperSize();
   applyCurrency();
   renderResults();
   renderSelected();
@@ -1043,6 +1061,7 @@ function selectProduct(id) {
 function bindEvents() {
   // Navigation and shared buttons
   document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
+  $("brand").addEventListener("click", () => showView("sell"));
   document.addEventListener("click", (e) => {
     const action = e.target.closest("[data-action='goto-add'], [data-action='demo']");
     if (!action) return;
@@ -1269,6 +1288,7 @@ function bindEvents() {
   $("chooseLogo").addEventListener("click", () => $("logoFile").click());
   $("logoFile").addEventListener("change", (e) => { chooseLogo(e.target.files[0]); e.target.value = ""; });
   $("removeLogo").addEventListener("click", () => saveLogo(""));
+  document.querySelectorAll('input[name="paper"]').forEach((r) => r.addEventListener("change", () => savePaper(r.value)));
 
   // Another tab changed the data: pick it up.
   window.addEventListener("storage", (e) => {

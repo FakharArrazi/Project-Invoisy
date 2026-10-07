@@ -40,11 +40,11 @@ Invoices can also be viewed and printed from **Invoices** (View, Print, Delete).
 
 ## Print / save as PDF
 
-Click **Print / PDF** next to the invoice (or **Print** in the Invoices list). In the browser's print dialog choose your printer, or **Save as PDF**. Only the invoice is printed, on A4, with its full payment history. If your browser still prints a web address or file path at the top or bottom of the page, untick **Headers and footers** in the print dialog.
+Click **Print / PDF** next to the invoice (or **Print** in the Invoices list). In the browser's print dialog choose your printer, or **Save as PDF**. Only the invoice is printed, on A4 or A5 (chosen in **Settings**), with its full payment history. If your browser still prints a web address or file path at the top or bottom of the page, untick **Headers and footers** in the print dialog.
 
 ## Change business details or currency
 
-**Settings** holds the business name, address, phone, email, currency (default `DA`) and the store logo (**Choose Logo** / **Remove Logo**, PNG only). The logo is saved in the browser and shown above the business name on every invoice. New invoices use the current values; saved invoices keep the ones they were created with. The default currency is also the `CURRENCY` constant at the top of `script.js`.
+**Settings** holds the business name, address, phone, email, currency (default `DA`), the invoice paper size (A4 or A5, default A4) and the store logo (**Choose Logo** / **Remove Logo**, PNG only). The logo is saved in the browser and shown above the business name on every invoice. New invoices use the current values; saved invoices keep the ones they were created with. The default currency is also the `CURRENCY` constant at the top of `script.js`.
 
 ## Files
 
