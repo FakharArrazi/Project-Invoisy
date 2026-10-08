@@ -213,6 +213,7 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
   border: 1px solid var(--border);
   border-radius: 4px;
 }
+.results:empty { display: none; }
 .result {
   display: grid;
   grid-template-columns: 1fr auto 90px;
@@ -269,7 +270,7 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 
 /* ---------- Stock view ---------- */
 
-.stock-layout { display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 16px; align-items: start; }
+.stock-layout { display: grid; grid-template-columns: 460px minmax(0, 1fr); gap: 16px; align-items: start; }
 .stock-layout > * { min-width: 0; }
 .restock { display: grid; grid-template-columns: 1fr 140px auto; gap: 10px; align-items: end; }
 .restock .field { margin-bottom: 0; }

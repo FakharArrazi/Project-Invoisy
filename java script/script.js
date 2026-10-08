@@ -25,11 +25,12 @@ const DEFAULT_SETTINGS = {
 };
 
 const DEMO_PRODUCTS = [
-  { name: "Coca Cola 33cl", description: "330ml Coca Cola bottle", sku: "COCA33",   category: "Drinks", sellingPrice: 80,  purchasePrice: 60, stock: 50 },
-  { name: "Chips",          description: "Salted potato chips",    sku: "CHIPS01",  category: "Snacks", sellingPrice: 120, purchasePrice: 90, stock: 24 },
-  { name: "Water 1.5L",     description: "Bottled water 1.5L",     sku: "WATER15",  category: "Drinks", sellingPrice: 50,  purchasePrice: 35, stock: 40 },
-  { name: "Coffee",         description: "Ground coffee, 250g",    sku: "COFFEE01", category: "Drinks", sellingPrice: 350, purchasePrice: 280, stock: 15 },
-  { name: "Chocolate",      description: "Milk chocolate bar",     sku: "CHOC01",   category: "Snacks", sellingPrice: 100, purchasePrice: 70, stock: 30 },
+  { name: "Coca Cola 33cl", description: "330ml Coca Cola bottle", sku: "COCA33",   category: "Drinks", sellingPrice: 80,  priceUnit: "piece", purchasePrice: 60, stock: 50 },
+  { name: "Chips",          description: "Salted potato chips",    sku: "CHIPS01",  category: "Snacks", sellingPrice: 120, priceUnit: "piece", purchasePrice: 90, stock: 24 },
+  { name: "Water 1.5L",     description: "Bottled water 1.5L",     sku: "WATER15",  category: "Drinks", sellingPrice: 50,  priceUnit: "piece", purchasePrice: 35, stock: 40 },
+  { name: "Coffee",         description: "Ground coffee, 250g",    sku: "COFFEE01", category: "Drinks", sellingPrice: 350, priceUnit: "piece", purchasePrice: 280, stock: 15 },
+  { name: "Chocolate",      description: "Milk chocolate bar",     sku: "CHOC01",   category: "Snacks", sellingPrice: 100, priceUnit: "piece", purchasePrice: 70, stock: 30 },
+  { name: "Demo Floor Tile", tileSize: "60*60", coveragePerBox: 1.44, sku: "TILE6060", category: "Tiles", sellingPrice: 800, priceUnit: "m2", purchasePrice: 600, stock: 20 },
 ];
 
 /* ---------- Helpers ---------- */
@@ -98,10 +99,10 @@ const MIRROR_KEY = "invoisy-data";            // browser copy of the data file (
 const LEGACY_KEYS = ["products", "invoices", "settings", "invoiceCounter"];
 const DERIVED_INVOICE_FIELDS = ["amountPaid", "remaining", "status"];   // written to the file for readability only
 // Units a line on a sale can be sold in. The unit belongs to the sale line, not to the product.
-const SELLING_UNITS = ["piece", "box", "m2", "kg"];
-const UNIT_LABELS = { piece: "Piece", box: "Box", m2: "m²", kg: "kg" };
+const SELLING_UNITS = ["piece", "box", "m2", "kg", "m"];
+const UNIT_LABELS = { piece: "Piece", box: "Box", m2: "m²", kg: "kg", m: "m" };
 // m² can be typed when adding to a sale, but it is converted to boxes and never stored on a sale line.
-const SALE_LINE_UNITS = ["piece", "box", "kg"];
+const SALE_LINE_UNITS = ["piece", "box", "kg", "m"];
 const unitLabel = (unit) => UNIT_LABELS[unit] || UNIT_LABELS.piece;
 
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -126,6 +127,8 @@ function normalizeProduct(raw) {
     sku: String(raw.sku || ""),
     category: String(raw.category || ""),
     sellingPrice: Number.isFinite(price) && price >= 0 ? price : 0,
+    // What the selling price is per (piece, box, m2, kg, m). null = saved before this field existed.
+    priceUnit: Pricing.isPriceUnit(raw.priceUnit) ? raw.priceUnit : null,
     purchasePrice: hasCost ? Number(raw.purchasePrice) : null,
     stock: Number.isFinite(stock) && stock >= 0 ? stock : 0,
   };
@@ -153,6 +156,12 @@ function productDetails(product) {
   const details = [];
   if (product.coveragePerBox != null) details.push(`${numberFormat.format(product.coveragePerBox)} m² per box`);
   return details.join(", ");
+}
+
+// "800 DA / m²". A product saved without a price unit shows just the amount.
+function priceLabel(product) {
+  const unit = Pricing.priceUnitLabel(product.priceUnit);
+  return money(product.sellingPrice) + (unit ? ` / ${unit}` : "");
 }
 
 // "60*120" or "60 × 120 cm" -> "60 × 120"
@@ -221,6 +230,7 @@ function productProblem(p) {
   if (p.tileSize !== undefined && (!isStr(p.tileSize) || (p.tileSize.trim() && !isTileSize(p.tileSize)))) return "has an invalid tile size";
   if (p.coveragePerBox !== undefined && p.coveragePerBox !== null && (!isNum(p.coveragePerBox) || p.coveragePerBox <= 0)) return "has an invalid box coverage";
   if (!isNum(p.sellingPrice) || p.sellingPrice < 0) return "has an invalid selling price";
+  if (p.priceUnit !== undefined && p.priceUnit !== null && !Pricing.isPriceUnit(p.priceUnit)) return "has an invalid price unit";
   if (p.purchasePrice != null && (!isNum(p.purchasePrice) || p.purchasePrice < 0)) return "has an invalid purchase price";
   if (!Number.isInteger(p.stock) || p.stock < 0) return "has an invalid stock quantity";
   return "";
@@ -898,6 +908,28 @@ function searchProducts(query) {
     .sort((a, b) => productLabel(a).localeCompare(productLabel(b)));
 }
 
+// Sell page search: nothing is listed until the user types. Best matches first:
+// names that start with the text, then names with a word that starts with it, then the rest.
+const MAX_SEARCH_RESULTS = 8;
+
+function findMatches(query) {
+  const terms = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return [];
+  const rank = (p) => {
+    const name = p.name.toLowerCase();
+    return terms.reduce((sum, t) => {
+      if (name.startsWith(t)) return sum;
+      if (name.split(/[\s\-—*×x]+/).some((w) => w.startsWith(t))) return sum + 1;
+      return sum + 2;
+    }, 0);
+  };
+  return searchProducts(query)
+    .map((p) => ({ p, score: rank(p) }))
+    .sort((a, b) => a.score - b.score)   // stable: ties stay alphabetical
+    .slice(0, MAX_SEARCH_RESULTS)
+    .map((m) => m.p);
+}
+
 function readProductForm() {
   const get = (id) => $(id).value.trim();
   const fail = (field, error) => ({ field, error });
@@ -917,6 +949,12 @@ function readProductForm() {
   const price = Number(priceRaw);
   if (priceRaw === "" || !Number.isFinite(price)) return fail("pPrice", "Selling price is required.");
   if (price < 0) return fail("pPrice", "Selling price can't be negative.");
+
+  const priceUnit = get("pPriceUnit");
+  if (!Pricing.isPriceUnit(priceUnit)) return fail("pPriceUnit", "Choose what the selling price is per.");
+  if (priceUnit === "m2" && coverageRaw === "") {
+    return fail("pCoveragePerBox", "Coverage per box is needed when the price is per m².");
+  }
 
   const costRaw = get("pCost");
   const cost = Number(costRaw);
@@ -942,6 +980,7 @@ function readProductForm() {
       sku,
       category: get("pCategory"),
       sellingPrice: price,
+      priceUnit,
       purchasePrice: costRaw === "" ? null : cost,
       stock,
     },
@@ -1027,6 +1066,7 @@ function startEditProduct(id) {
   $("pCoveragePerBox").value = p.coveragePerBox == null ? "" : p.coveragePerBox;
   $("pDesc").value = p.description;
   $("pPrice").value = p.sellingPrice;
+  $("pPriceUnit").value = p.priceUnit || "";   // empty for products saved before price units
   $("pCost").value = p.purchasePrice == null ? "" : p.purchasePrice;
   $("pStock").value = p.stock;
   $("pSku").value = p.sku;
@@ -1119,8 +1159,12 @@ function addToSale(productId, rawQty, rawUnit) {
   const inSale = qtyInSale(productId);
   if (inSale + qty > product.stock) return { error: stockMessage(product.stock, inSale) };
 
+  // The price of one unit comes from the selling price and its price unit (800 DA per m² -> 1,152 DA per box).
+  const priced = Pricing.priceForUnit(product, sellingUnit);
+  if (priced.error) return { error: priced.error };
+
   if (item) item.qty += qty;
-  else state.sale.items.push({ lineId: uid(), productId, qty, sellingUnit, unitPrice: product.sellingPrice });
+  else state.sale.items.push({ lineId: uid(), productId, qty, sellingUnit, unitPrice: priced.price });
   return { ok: true, converted };
 }
 
@@ -1129,6 +1173,9 @@ function updateSaleUnit(lineId, rawUnit) {
   const item = findSaleItem(lineId);
   if (!item) return { error: "This product is no longer in the sale." };
   if (!SALE_LINE_UNITS.includes(rawUnit)) return { error: "Choose a valid unit." };
+  const product = findProduct(item.productId);
+  const priced = product ? Pricing.priceForUnit(product, rawUnit) : { price: item.unitPrice };
+  if (priced.error) return { error: priced.error, revert: true };   // the line keeps its old unit
   item.sellingUnit = rawUnit;
   const twin = state.sale.items.find((i) => i !== item && i.productId === item.productId && i.sellingUnit === rawUnit);
   if (twin) {
@@ -1136,6 +1183,7 @@ function updateSaleUnit(lineId, rawUnit) {
     state.sale.items = state.sale.items.filter((i) => i !== item);
     return { merged: true };
   }
+  item.unitPrice = priced.price;   // a price typed by hand on this line is replaced by the unit's price
   return {};
 }
 
@@ -1293,7 +1341,9 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
       sku: p ? p.sku : "",
       qty: item.qty,
       unitPrice: item.unitPrice,
-      total: round2(item.qty * item.unitPrice),
+      total: Pricing.lineTotal(item.qty, item.unitPrice),
+      priceUnit: p ? p.priceUnit : null,
+      productPrice: p ? p.sellingPrice : item.unitPrice,
     };
   });
   const s = data.settings;
@@ -1479,7 +1529,8 @@ function renderResults() {
     return;
   }
 
-  state.results = searchProducts(query);
+  state.results = findMatches(query);
+  if (!query.trim()) { box.innerHTML = ""; return; }   // nothing typed: no list
   if (state.results.length === 0) {
     box.innerHTML = `<div class="empty"><p class="muted">No products match "${esc(query)}".</p></div>`;
     return;
@@ -1490,7 +1541,7 @@ function renderResults() {
     const stock = p.stock <= 0 ? "Out of stock" : p.stock <= LOW_STOCK ? `Low stock: ${p.stock}` : `Stock: ${p.stock}`;
     return `<div class="result" role="option" data-id="${esc(p.id)}" aria-selected="${p.id === state.selectedId}">` +
       `<div><div>${esc(productLabel(p))}</div>${meta ? `<div class="meta">${esc(meta)}</div>` : ""}</div>` +
-      `<div class="price">${esc(money(p.sellingPrice))}</div>` +
+      `<div class="price">${esc(priceLabel(p))}</div>` +
       `<div class="stock${p.stock <= 0 ? " out" : p.stock <= LOW_STOCK ? " low" : ""}">${stock}</div></div>`;
   }).join("");
 
@@ -1505,8 +1556,16 @@ function renderSelected() {
       (productDetails(p) ? `<span>${esc(productDetails(p))}</span>` : "") +
       (p.stock > 0 ? `<span>Stock: ${p.stock}</span>` : '<span class="out">Out of stock</span>') +
       (p.stock > 0 && p.stock <= LOW_STOCK ? '<span class="low">Low stock</span>' : "") +
-      `<span>Price: ${esc(money(p.sellingPrice))}</span>`
-    : '<span class="none">Select a product from the list.</span>';
+      `<span>Price: ${esc(priceLabel(p))}</span>` +
+      boxPriceNote(p)
+    : '<span class="none">Search for a product to add it.</span>';
+}
+
+// "Box: 1,152 DA" for a tile priced per m², so the cashier sees what one box costs.
+function boxPriceNote(p) {
+  if (!p.priceUnit || p.priceUnit === "box" || !p.coveragePerBox) return "";
+  const box = Pricing.priceForUnit(p, "box");
+  return box.error ? "" : `<span>Box: ${esc(money(box.price))}</span>`;
 }
 
 function unitOptions(selected) {
@@ -1569,7 +1628,7 @@ function invoiceHtml(inv) {
 
   const rows = inv.items.length
     ? inv.items.map((i) =>
-        `<tr><td>${esc(invoiceItemLabel(i))}</td><td class="num">${num(i.qty)} ${esc(unitLabel(i.sellingUnit))}</td><td class="num">${num(i.unitPrice)}</td><td class="num">${num(i.total != null ? i.total : toNumber(i.qty) * toNumber(i.unitPrice))}</td></tr>`
+        `<tr><td>${esc(invoiceItemLabel(i))}</td><td class="num">${num(i.qty)} ${esc(unitLabel(i.sellingUnit))}</td><td class="num">${num(i.unitPrice)}${i.sellingUnit ? ` <span class="inv-unit">/ ${esc(unitLabel(i.sellingUnit))}</span>` : ""}</td><td class="num">${num(i.total != null ? i.total : toNumber(i.qty) * toNumber(i.unitPrice))}</td></tr>`
       ).join("")
     : '<tr><td colspan="4" class="none">No items yet</td></tr>';
 
@@ -1657,7 +1716,7 @@ function renderStock() {
     `<tr data-id="${esc(p.id)}">` +
     `<td><div>${esc(productLabel(p))}</div>${[productDetails(p), p.category].filter(Boolean).length ? `<div class="muted small">${esc([productDetails(p), p.category].filter(Boolean).join(", "))}</div>` : ""}</td>` +
     `<td>${p.sku ? esc(p.sku) : '<span class="muted">-</span>'}</td>` +
-    `<td class="num">${esc(money(p.sellingPrice))}</td>` +
+    `<td class="num">${esc(priceLabel(p))}</td>` +
     `<td class="num">${p.stock}${stockBadge(p.stock)}</td>` +
     `<td class="num"><div class="row-actions">` +
     `<button type="button" class="btn small" data-action="dec" aria-label="Decrease stock of ${esc(p.name)} by 1"${p.stock < 1 ? " disabled" : ""}>-</button>` +
@@ -1884,7 +1943,7 @@ function bindEvents() {
   // Product picker
   const search = $("search");
   search.addEventListener("input", () => {
-    state.results = searchProducts(search.value);
+    state.results = findMatches(search.value);
     state.selectedId = state.results.length ? state.results[0].id : null;
     renderResults();
     renderSelected();
@@ -1952,7 +2011,13 @@ function bindEvents() {
   saleBody.addEventListener("change", (e) => {
     const unitSelect = e.target.closest("select[data-field='unit']");
     if (unitSelect) {
-      const result = updateSaleUnit(unitSelect.closest("tr").dataset.id, unitSelect.value);
+      const rowId = unitSelect.closest("tr").dataset.id;
+      const result = updateSaleUnit(rowId, unitSelect.value);
+      if (result.revert) {
+        unitSelect.value = findSaleItem(rowId).sellingUnit;
+        unitSelect.closest("tr").querySelector("[data-row-error]").textContent = result.error;
+        return;
+      }
       if (result.merged) {
         state.previewInvoice = null;
         renderSale();
@@ -2173,6 +2238,10 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     getSale: () => state.sale,
     productProblem,
     productLabel,
+    findMatches,
+    priceLabel,
+    buildInvoiceData,
+    calculateTotals,
     invoiceItemLabel,
     readProductForm,
     buildData,

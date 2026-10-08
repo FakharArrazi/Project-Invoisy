@@ -62,6 +62,26 @@ On the first start after this update Invoisy reads the old `products`, `invoices
 2. Fill in the form (name, selling price and stock are the essentials) and click **Add Product**.
 3. To add stock to an existing product, use **Add Stock**. Use `-` / `+` in the table for quick changes, or **Edit** / **Delete**.
 
+### Selling price and price unit
+
+The **Selling price** always has a unit next to it: per piece, per box, per m², per kg or per m. It says what the price is for. A tile can be `800 DA per m²`, cement `300 DA per kg`, a chair `500 DA per piece`.
+
+When you sell, you pick the unit next to the quantity (**Quantity: 2 | Unit: Box**) and the app works out the price of one unit of that kind:
+
+| Product | Price | Sold as | Price of 1 unit | 2 units |
+| --- | --- | --- | --- | --- |
+| Tile 60*60, 1.44 m² per box | 800 DA per m² | Box | 1.44 x 800 = 1,152 DA | 2,304 DA |
+| same tile | 800 DA per m² | Piece | 0.36 x 800 = 288 DA | 576 DA |
+| Cement | 300 DA per kg | kg | 300 DA | 600 DA |
+
+- Piece, box and m² are linked through the **Tile size** (area of one piece) and **Coverage per box**, so keep those filled in for tiles. A price per m² needs the coverage per box.
+- kg and m only match themselves. A product priced per kg can't be sold by the box, and the app says so.
+- Typing an area (unit m²) still sells whole boxes, rounded up, at the box price.
+- Changing the unit on a sale line replaces the line's price with the price for the new unit. You can still type a different price on the line afterwards.
+- Products saved before this field existed have no price unit: they keep working as before (the price is used as typed for any unit). Edit them and choose a unit to switch them over; the field is required when saving.
+- Invoices show the price with its unit (`1,152 / Box`).
+- Stock quantities are not converted between units: stock is one count per product, as before.
+
 New here? **Settings → Load Demo Data** adds a few sample products.
 
 ## Create an invoice
@@ -94,5 +114,7 @@ Click **Print / PDF** next to the invoice (or **Print** in the Invoices list). I
 
 - `index.html` - page structure
 - `css/style.css` - styles, including the print rules
+- `css/pricing.css` - styles for the price unit field and unit labels
+- `java script/pricing.js` - price units and the unit price conversions (no DOM, no storage)
 - `java script/script.js` - all the logic, including the data file layer
 - `invoisy-data.json` - your data (created by you in Settings, not in Git)

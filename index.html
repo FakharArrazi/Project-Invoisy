@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Invoisy</title>
   <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/pricing.css">
   <style id="paperStyle"></style>
 </head>
 <body>
@@ -49,7 +50,7 @@
 
     <!-- SELL -->
     <section class="view" id="view-sell">
-      <h1>Sell</h1>
+      <h1 class="sr-only">Sell</h1>
 
       <div class="panel">
         <h2>Add products</h2>
@@ -69,6 +70,7 @@
               <option value="box">Box</option>
               <option value="m2">m²</option>
               <option value="kg">kg</option>
+              <option value="m">m</option>
             </select>
           </div>
           <button type="submit" class="btn primary">Add to Sale</button>
@@ -157,7 +159,7 @@
 
     <!-- STOCK -->
     <section class="view" id="view-stock" hidden>
-      <h1>Stock</h1>
+      <h1 class="sr-only">Stock</h1>
       <div class="stock-layout">
 
         <div class="panel">
@@ -181,10 +183,20 @@
               <label for="pDesc">Description</label>
               <input type="text" id="pDesc" autocomplete="off">
             </div>
-            <div class="grid-2">
+            <div class="grid-2 price-row">
               <div class="field">
                 <label for="pPrice">Selling price</label>
-                <input type="number" id="pPrice" min="0" step="any">
+                <div class="price-with-unit">
+                  <input type="number" id="pPrice" min="0" step="any">
+                  <select id="pPriceUnit" aria-label="Price unit">
+                    <option value="">Per...</option>
+                    <option value="piece" selected>per piece</option>
+                    <option value="box">per box</option>
+                    <option value="m2">per m²</option>
+                    <option value="kg">per kg</option>
+                    <option value="m">per m</option>
+                  </select>
+                </div>
               </div>
               <div class="field">
                 <label for="pCost">Purchase price <small>(optional)</small></label>
@@ -265,7 +277,7 @@
 
     <!-- INVOICES -->
     <section class="view" id="view-invoices" hidden>
-      <h1>Invoices</h1>
+      <h1 class="sr-only">Invoices</h1>
       <div class="panel">
         <div class="panel-head">
           <h2>Invoice history</h2>
@@ -295,8 +307,8 @@
 
     <!-- SETTINGS -->
     <section class="view" id="view-settings" hidden>
-      <h1>Settings</h1>
-      <div class="panel narrow">
+      <h1 class="sr-only">Settings</h1>
+      <div class="panel">
         <h2>Data storage</h2>
         <dl class="data-info">
           <dt>Persistent data</dt><dd id="dataFile"></dd>
@@ -316,7 +328,7 @@
         </div>
         <p class="error" id="dataError" role="alert"></p>
       </div>
-      <div class="panel narrow">
+      <div class="panel">
         <h2>Business details</h2>
         <form id="settingsForm" novalidate>
           <div class="field">
@@ -346,14 +358,14 @@
           </div>
         </form>
       </div>
-      <div class="panel narrow">
+      <div class="panel">
         <h2>Invoice paper size</h2>
         <div class="radio-row" role="radiogroup" aria-label="Invoice paper size">
           <label><input type="radio" name="paper" id="paperA4" value="A4"> A4</label>
           <label><input type="radio" name="paper" id="paperA5" value="A5"> A5</label>
         </div>
       </div>
-      <div class="panel narrow">
+      <div class="panel">
         <h2>Store logo</h2>
         <div class="logo-setting">
           <div id="logoPreview"></div>
@@ -366,7 +378,7 @@
         <p class="muted small">PNG image. It is resized to fit and shown above the business name on invoices.</p>
         <p class="error" id="logoError" role="alert"></p>
       </div>
-      <div class="panel narrow">
+      <div class="panel">
         <h2>Demo data</h2>
         <p class="muted">Add a few sample products to try the app. Products you already have are kept.</p>
         <div class="actions left">
@@ -409,6 +421,7 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+<script src="java script/pricing.js"></script>
 <script src="java script/script.js"></script>
 </body>
 </html>

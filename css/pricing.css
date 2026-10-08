@@ -1,0 +1,8 @@
+/* Selling price + price unit (Stock form) and the unit shown next to prices on invoices. */
+
+.grid-2.price-row { grid-template-columns: 3fr 2fr; }
+.field .price-with-unit { display: flex; gap: 6px; }
+.field .price-with-unit input { flex: 1 1 0; min-width: 0; width: auto; }
+.field .price-with-unit select { flex: 0 0 auto; width: 110px; }
+
+.inv-unit { font-size: 0.85em; color: var(--muted); white-space: nowrap; }
