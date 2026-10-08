@@ -97,6 +97,7 @@ const DATA_FILE_NAME = "invoisy-data.json";
 const MIRROR_KEY = "invoisy-data";            // browser copy of the data file (fallback and recovery)
 const LEGACY_KEYS = ["products", "invoices", "settings", "invoiceCounter"];
 const DERIVED_INVOICE_FIELDS = ["amountPaid", "remaining", "status"];   // written to the file for readability only
+const SELLING_UNITS = ["piece", "box"];
 
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const isStr = (v) => typeof v === "string";
@@ -108,9 +109,15 @@ function normalizeProduct(raw) {
   const price = Number(raw.sellingPrice);
   const stock = Math.floor(Number(raw.stock));
   const hasCost = raw.purchasePrice !== "" && raw.purchasePrice != null && Number.isFinite(Number(raw.purchasePrice)) && Number(raw.purchasePrice) >= 0;
+  const coverage = Number(raw.coveragePerBox);
   return {
     id: String(raw.id || uid()),
     name: String(raw.name),
+    manufacturer: String(raw.manufacturer || ""),
+    // tileSize is the physical size of one tile. It is deliberately separate from box coverage.
+    tileSize: String(raw.tileSize != null ? raw.tileSize : raw.dimensions || ""),
+    coveragePerBox: Number.isFinite(coverage) && coverage > 0 ? coverage : null,
+    sellingUnit: SELLING_UNITS.includes(raw.sellingUnit) ? raw.sellingUnit : "piece",
     description: String(raw.description || ""),
     sku: String(raw.sku || ""),
     category: String(raw.category || ""),
@@ -118,6 +125,28 @@ function normalizeProduct(raw) {
     purchasePrice: hasCost ? Number(raw.purchasePrice) : null,
     stock: Number.isFinite(stock) && stock >= 0 ? stock : 0,
   };
+}
+
+function isTileSize(value) {
+  return /^\d+(?:[.,]\d+)?\s*[×x]\s*\d+(?:[.,]\d+)?\s*(?:mm|cm|m)$/i.test(String(value).trim());
+}
+
+// A display label is derived at render time; it is never the persisted product value.
+function productLabel(product) {
+  if (!product) return "";
+  return [product.name, product.tileSize, product.manufacturer].filter(Boolean).join(" — ");
+}
+
+function productDetails(product) {
+  if (!product) return "";
+  const details = [];
+  if (product.sellingUnit) details.push(`Sold by ${product.sellingUnit}`);
+  if (product.coveragePerBox != null) details.push(`${numberFormat.format(product.coveragePerBox)} m² per box`);
+  return details.join(", ");
+}
+
+function invoiceItemLabel(item) {
+  return [item.name, item.tileSize, item.manufacturer].filter(Boolean).join(" — ");
 }
 
 // Invoices saved before payments existed are treated as fully paid at their sale date.
@@ -170,6 +199,11 @@ function productProblem(p) {
   if (!isObj(p)) return "is not an object";
   if (!isStr(p.id) || !p.id) return "has no id";
   if (!isStr(p.name) || !p.name.trim()) return "has no name";
+  if (p.manufacturer !== undefined && !isStr(p.manufacturer)) return "has an invalid manufacturer";
+  if (p.tileSize !== undefined && (!isStr(p.tileSize) || (p.tileSize.trim() && !isTileSize(p.tileSize)))) return "has an invalid tile size";
+  if (p.sellingUnit !== undefined && !SELLING_UNITS.includes(p.sellingUnit)) return "has an invalid selling unit";
+  if (p.coveragePerBox !== undefined && p.coveragePerBox !== null && (!isNum(p.coveragePerBox) || p.coveragePerBox <= 0)) return "has an invalid box coverage";
+  if (p.sellingUnit === "box" && (!isNum(p.coveragePerBox) || p.coveragePerBox <= 0)) return "needs a box coverage greater than 0";
   if (!isNum(p.sellingPrice) || p.sellingPrice < 0) return "has an invalid selling price";
   if (p.purchasePrice != null && (!isNum(p.purchasePrice) || p.purchasePrice < 0)) return "has an invalid purchase price";
   if (!Number.isInteger(p.stock) || p.stock < 0) return "has an invalid stock quantity";
@@ -842,10 +876,10 @@ function searchProducts(query) {
   const terms = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
   return state.products
     .filter((p) => {
-      const haystack = (p.name + " " + p.sku + " " + p.category).toLowerCase();
+      const haystack = (p.name + " " + p.manufacturer + " " + p.tileSize + " " + p.sku + " " + p.category).toLowerCase();
       return terms.every((t) => haystack.includes(t));
     })
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => productLabel(a).localeCompare(productLabel(b)));
 }
 
 function readProductForm() {
@@ -854,6 +888,17 @@ function readProductForm() {
 
   const name = get("pName");
   if (!name) return fail("pName", "Product name is required.");
+  const tileSize = get("pTileSize");
+  if (tileSize && !isTileSize(tileSize)) return fail("pTileSize", "Tile size must look like 60 × 120 cm.");
+  const sellingUnit = $("pSellingUnit").value;
+  const coverageRaw = get("pCoveragePerBox");
+  const coveragePerBox = Number(coverageRaw);
+  if (coverageRaw !== "" && (!Number.isFinite(coveragePerBox) || coveragePerBox <= 0)) {
+    return fail("pCoveragePerBox", "Coverage per box must be greater than 0.");
+  }
+  if (sellingUnit === "box" && coverageRaw === "") {
+    return fail("pCoveragePerBox", "Coverage per box is required when selling by box.");
+  }
 
   const priceRaw = get("pPrice");
   const price = Number(priceRaw);
@@ -877,6 +922,10 @@ function readProductForm() {
   return {
     values: {
       name,
+      manufacturer: get("pManufacturer"),
+      tileSize,
+      coveragePerBox: coverageRaw === "" ? null : coveragePerBox,
+      sellingUnit,
       description: get("pDesc"),
       sku,
       category: get("pCategory"),
@@ -896,7 +945,7 @@ async function addProduct(values) {
   }
   resetProductForm();
   renderAll();
-  notify(`${values.name} added.` + savedNote(r));
+  notify(`${productLabel(values)} added.` + savedNote(r));
   $("pName").focus();
 }
 
@@ -913,7 +962,7 @@ async function updateProduct(id, values) {
   }
   resetProductForm();
   renderAll();
-  notify(`${values.name} updated.` + savedNote(r));
+  notify(`${productLabel(values)} updated.` + savedNote(r));
 }
 
 async function deleteProduct(id) {
@@ -961,6 +1010,10 @@ function startEditProduct(id) {
   if (!p) return;
   state.editingId = id;
   $("pName").value = p.name;
+  $("pManufacturer").value = p.manufacturer;
+  $("pTileSize").value = p.tileSize;
+  $("pCoveragePerBox").value = p.coveragePerBox == null ? "" : p.coveragePerBox;
+  $("pSellingUnit").value = p.sellingUnit;
   $("pDesc").value = p.description;
   $("pPrice").value = p.sellingPrice;
   $("pCost").value = p.purchasePrice == null ? "" : p.purchasePrice;
@@ -996,7 +1049,7 @@ function loadDemoData() {
       let added = 0;
       for (const demo of DEMO_PRODUCTS) {
         if (have.has(demo.sku.toLowerCase())) continue;
-        d.products.push({ id: uid(), ...demo });
+        d.products.push(normalizeProduct({ id: uid(), ...demo }));
         added++;
       }
       return added ? { added } : { skip: true };
@@ -1176,6 +1229,10 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
     return {
       productId: item.productId,
       name: p ? p.name : "(deleted product)",
+      manufacturer: p ? p.manufacturer : "",
+      tileSize: p ? p.tileSize : "",
+      coveragePerBox: p ? p.coveragePerBox : null,
+      sellingUnit: p ? p.sellingUnit : "piece",
       sku: p ? p.sku : "",
       qty: item.qty,
       unitPrice: item.unitPrice,
@@ -1372,10 +1429,10 @@ function renderResults() {
   }
 
   box.innerHTML = state.results.map((p) => {
-    const meta = [p.sku, p.category].filter(Boolean).join(", ");
+    const meta = [productDetails(p), p.sku, p.category].filter(Boolean).join(", ");
     const stock = p.stock <= 0 ? "Out of stock" : p.stock <= LOW_STOCK ? `Low stock: ${p.stock}` : `Stock: ${p.stock}`;
     return `<div class="result" role="option" data-id="${esc(p.id)}" aria-selected="${p.id === state.selectedId}">` +
-      `<div><div>${esc(p.name)}</div>${meta ? `<div class="meta">${esc(meta)}</div>` : ""}</div>` +
+      `<div><div>${esc(productLabel(p))}</div>${meta ? `<div class="meta">${esc(meta)}</div>` : ""}</div>` +
       `<div class="price">${esc(money(p.sellingPrice))}</div>` +
       `<div class="stock${p.stock <= 0 ? " out" : p.stock <= LOW_STOCK ? " low" : ""}">${stock}</div></div>`;
   }).join("");
@@ -1387,7 +1444,8 @@ function renderResults() {
 function renderSelected() {
   const p = findProduct(state.selectedId);
   $("selectedInfo").innerHTML = p
-    ? `<strong>${esc(p.name)}</strong>` +
+    ? `<strong>${esc(productLabel(p))}</strong>` +
+      (productDetails(p) ? `<span>${esc(productDetails(p))}</span>` : "") +
       (p.stock > 0 ? `<span>Stock: ${p.stock}</span>` : '<span class="out">Out of stock</span>') +
       (p.stock > 0 && p.stock <= LOW_STOCK ? '<span class="low">Low stock</span>' : "") +
       `<span>Price: ${esc(money(p.sellingPrice))}</span>`
@@ -1401,7 +1459,7 @@ function renderSale() {
   } else {
     body.innerHTML = state.sale.items.map((item) => {
       const p = findProduct(item.productId);
-      const name = p ? p.name : "(deleted product)";
+      const name = p ? productLabel(p) : "(deleted product)";
       return `<tr data-id="${esc(item.productId)}">` +
         `<td><div>${esc(name)}</div><div class="muted small">Available: ${p ? p.stock : 0}</div><div class="error small" data-row-error></div></td>` +
         `<td class="num"><input class="qty-input" type="number" min="1" step="1" value="${item.qty}" data-field="qty" aria-label="Quantity of ${esc(name)}"></td>` +
@@ -1449,7 +1507,7 @@ function invoiceHtml(inv) {
 
   const rows = inv.items.length
     ? inv.items.map((i) =>
-        `<tr><td>${esc(i.name)}</td><td class="num">${num(i.qty)}</td><td class="num">${num(i.unitPrice)}</td><td class="num">${num(i.total != null ? i.total : toNumber(i.qty) * toNumber(i.unitPrice))}</td></tr>`
+        `<tr><td>${esc(invoiceItemLabel(i))}</td><td class="num">${num(i.qty)}</td><td class="num">${num(i.unitPrice)}</td><td class="num">${num(i.total != null ? i.total : toNumber(i.qty) * toNumber(i.unitPrice))}</td></tr>`
       ).join("")
     : '<tr><td colspan="4" class="none">No items yet</td></tr>';
 
@@ -1535,7 +1593,7 @@ function renderStock() {
 
   $("stockBody").innerHTML = list.map((p) =>
     `<tr data-id="${esc(p.id)}">` +
-    `<td><div>${esc(p.name)}</div>${p.category ? `<div class="muted small">${esc(p.category)}</div>` : ""}</td>` +
+    `<td><div>${esc(productLabel(p))}</div>${[productDetails(p), p.category].filter(Boolean).length ? `<div class="muted small">${esc([productDetails(p), p.category].filter(Boolean).join(", "))}</div>` : ""}</td>` +
     `<td>${p.sku ? esc(p.sku) : '<span class="muted">-</span>'}</td>` +
     `<td class="num">${esc(money(p.sellingPrice))}</td>` +
     `<td class="num">${p.stock}${stockBadge(p.stock)}</td>` +
@@ -1550,8 +1608,8 @@ function renderStock() {
   // Restock selector (keep the current choice) and category suggestions.
   const select = $("rProduct");
   const previous = select.value;
-  const sorted = [...state.products].sort((a, b) => a.name.localeCompare(b.name));
-  select.innerHTML = sorted.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
+  const sorted = [...state.products].sort((a, b) => productLabel(a).localeCompare(productLabel(b)));
+  select.innerHTML = sorted.map((p) => `<option value="${esc(p.id)}">${esc(productLabel(p))}</option>`).join("");
   if (sorted.some((p) => p.id === previous)) select.value = previous;
   select.disabled = !hasProducts;
   $("categoryList").innerHTML = [...new Set(state.products.map((p) => p.category).filter(Boolean))]
@@ -2020,11 +2078,28 @@ function bindEvents() {
 
 /* ---------- Start ---------- */
 
-const startupNotices = loadLocalCopy();
-bindEvents();
-resetProductForm();
-showView("sell");
-renderStorage();
-storage.ready = initStorage(startupNotices).catch((e) => {
-  setStorageMode("disconnected", "The data file could not be opened. " + errorText(e));
-});
+if (globalThis.__INVOISY_TEST_EXPORTS__) {
+  Object.assign(globalThis.__INVOISY_TEST_EXPORTS__, {
+    normalizeProduct,
+    productProblem,
+    productLabel,
+    invoiceItemLabel,
+    readProductForm,
+    buildData,
+    buildPayload,
+    parseDataText,
+    applyData,
+    commit,
+    readMirror,
+    DEFAULT_SETTINGS,
+  });
+} else {
+  const startupNotices = loadLocalCopy();
+  bindEvents();
+  resetProductForm();
+  showView("sell");
+  renderStorage();
+  storage.ready = initStorage(startupNotices).catch((e) => {
+    setStorageMode("disconnected", "The data file could not be opened. " + errorText(e));
+  });
+}

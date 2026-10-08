@@ -158,6 +158,16 @@
               <label for="pName">Product name</label>
               <input type="text" id="pName" autocomplete="off">
             </div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="pManufacturer">Manufacturer / brand <small>(optional for existing products)</small></label>
+                <input type="text" id="pManufacturer" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="pTileSize">Tile size <small>(for example, 60 × 120 cm)</small></label>
+                <input type="text" id="pTileSize" placeholder="60 × 120 cm" autocomplete="off">
+              </div>
+            </div>
             <div class="field">
               <label for="pDesc">Description</label>
               <input type="text" id="pDesc" autocomplete="off">
@@ -180,6 +190,19 @@
               <div class="field">
                 <label for="pSku">SKU <small>(optional)</small></label>
                 <input type="text" id="pSku" autocomplete="off">
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="pSellingUnit">Selling unit</label>
+                <select id="pSellingUnit">
+                  <option value="piece">Piece</option>
+                  <option value="box">Box</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="pCoveragePerBox">Coverage per box (m²)</label>
+                <input type="number" id="pCoveragePerBox" min="0" step="any" placeholder="For example, 2.88">
               </div>
             </div>
             <div class="field">

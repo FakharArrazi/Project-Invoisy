@@ -8,6 +8,14 @@ Open `index.html` in a browser. No installation, no backend.
 
 (Optional) To use a tiny local server instead: `python3 -m http.server`, then open http://localhost:8000.
 
+## Tests
+
+With Node.js 18 or newer installed, run:
+
+```
+node --test tests/product-model.test.js
+```
+
 ## Where data is stored
 
 Invoisy stores its persistent application data in a local `invoisy-data.json` file. The file contains inventory, invoices (with every item and every individual payment), settings, business information, logo data, paper size and invoice numbering. It is plain JSON with a `version` field, so it can be backed up, copied or inspected with any text editor.
