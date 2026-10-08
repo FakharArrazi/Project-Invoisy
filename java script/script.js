@@ -97,7 +97,12 @@ const DATA_FILE_NAME = "invoisy-data.json";
 const MIRROR_KEY = "invoisy-data";            // browser copy of the data file (fallback and recovery)
 const LEGACY_KEYS = ["products", "invoices", "settings", "invoiceCounter"];
 const DERIVED_INVOICE_FIELDS = ["amountPaid", "remaining", "status"];   // written to the file for readability only
-const SELLING_UNITS = ["piece", "box"];
+// Units a line on a sale can be sold in. The unit belongs to the sale line, not to the product.
+const SELLING_UNITS = ["piece", "box", "m2", "kg"];
+const UNIT_LABELS = { piece: "Piece", box: "Box", m2: "m²", kg: "kg" };
+// m² can be typed when adding to a sale, but it is converted to boxes and never stored on a sale line.
+const SALE_LINE_UNITS = ["piece", "box", "kg"];
+const unitLabel = (unit) => UNIT_LABELS[unit] || UNIT_LABELS.piece;
 
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const isStr = (v) => typeof v === "string";
@@ -117,7 +122,6 @@ function normalizeProduct(raw) {
     // tileSize is the physical size of one tile. It is deliberately separate from box coverage.
     tileSize: String(raw.tileSize != null ? raw.tileSize : raw.dimensions || ""),
     coveragePerBox: Number.isFinite(coverage) && coverage > 0 ? coverage : null,
-    sellingUnit: SELLING_UNITS.includes(raw.sellingUnit) ? raw.sellingUnit : "piece",
     description: String(raw.description || ""),
     sku: String(raw.sku || ""),
     category: String(raw.category || ""),
@@ -127,8 +131,15 @@ function normalizeProduct(raw) {
   };
 }
 
+// Accepts 60*120, 12*15, 60x120 or 60 × 120 (an old "cm" suffix is still accepted so saved data keeps loading).
 function isTileSize(value) {
-  return /^\d+(?:[.,]\d+)?\s*[×x]\s*\d+(?:[.,]\d+)?\s*(?:mm|cm|m)$/i.test(String(value).trim());
+  return /^\d+(?:[.,]\d+)?\s*[*×x]\s*\d+(?:[.,]\d+)?\s*(?:mm|cm|m)?$/i.test(String(value).trim());
+}
+
+// Stores whatever was typed in one format: "60*120".
+function normalizeTileSize(value) {
+  const m = String(value).trim().match(/^(\d+(?:[.,]\d+)?)\s*[*×x]\s*(\d+(?:[.,]\d+)?)/i);
+  return m ? `${m[1].replace(",", ".")}*${m[2].replace(",", ".")}` : String(value).trim();
 }
 
 // A display label is derived at render time; it is never the persisted product value.
@@ -140,13 +151,20 @@ function productLabel(product) {
 function productDetails(product) {
   if (!product) return "";
   const details = [];
-  if (product.sellingUnit) details.push(`Sold by ${product.sellingUnit}`);
   if (product.coveragePerBox != null) details.push(`${numberFormat.format(product.coveragePerBox)} m² per box`);
   return details.join(", ");
 }
 
+// "60*120" or "60 × 120 cm" -> "60 × 120"
+function formatTileSize(size) {
+  const m = String(size || "").match(/^\s*(\d+(?:[.,]\d+)?)\s*[*×x]\s*(\d+(?:[.,]\d+)?)/i);
+  return m ? `${m[1]} × ${m[2]}` : String(size || "").trim();
+}
+
+// Invoice wording: golden era (60 × 120) garnada
 function invoiceItemLabel(item) {
-  return [item.name, item.tileSize, item.manufacturer].filter(Boolean).join(" — ");
+  const size = formatTileSize(item.tileSize);
+  return [item.name, size ? `(${size})` : "", item.manufacturer].filter(Boolean).join(" ");
 }
 
 // Invoices saved before payments existed are treated as fully paid at their sale date.
@@ -201,9 +219,7 @@ function productProblem(p) {
   if (!isStr(p.name) || !p.name.trim()) return "has no name";
   if (p.manufacturer !== undefined && !isStr(p.manufacturer)) return "has an invalid manufacturer";
   if (p.tileSize !== undefined && (!isStr(p.tileSize) || (p.tileSize.trim() && !isTileSize(p.tileSize)))) return "has an invalid tile size";
-  if (p.sellingUnit !== undefined && !SELLING_UNITS.includes(p.sellingUnit)) return "has an invalid selling unit";
   if (p.coveragePerBox !== undefined && p.coveragePerBox !== null && (!isNum(p.coveragePerBox) || p.coveragePerBox <= 0)) return "has an invalid box coverage";
-  if (p.sellingUnit === "box" && (!isNum(p.coveragePerBox) || p.coveragePerBox <= 0)) return "needs a box coverage greater than 0";
   if (!isNum(p.sellingPrice) || p.sellingPrice < 0) return "has an invalid selling price";
   if (p.purchasePrice != null && (!isNum(p.purchasePrice) || p.purchasePrice < 0)) return "has an invalid purchase price";
   if (!Number.isInteger(p.stock) || p.stock < 0) return "has an invalid stock quantity";
@@ -216,7 +232,7 @@ function invoiceProblem(inv) {
   if (!isStr(inv.invoiceNumber) || !/^INV-\d+$/.test(inv.invoiceNumber)) return "has an invalid invoice number";
   if (!isDate(inv.date)) return "has an invalid date";
   if (!Array.isArray(inv.items)) return "has no item list";
-  if (inv.items.some((i) => !isObj(i) || !isNum(i.qty) || i.qty <= 0 || !isNum(i.unitPrice) || i.unitPrice < 0)) return "has an invalid item";
+  if (inv.items.some((i) => !isObj(i) || !isNum(i.qty) || i.qty <= 0 || !isNum(i.unitPrice) || i.unitPrice < 0 || (i.sellingUnit !== undefined && !SELLING_UNITS.includes(i.sellingUnit)))) return "has an invalid item";
   for (const key of ["subtotal", "discount", "tax", "total"]) {
     if (!isNum(inv[key]) || inv[key] < 0) return `has an invalid ${key}`;
   }
@@ -324,7 +340,7 @@ function parseDataText(text) {
 
 function newSale() {
   return {
-    items: [],                              // { productId, qty, unitPrice }
+    items: [],                              // { lineId, productId, qty, sellingUnit, unitPrice }
     customer: { name: "", phone: "", address: "" },
     discountType: "amount", discountValue: "",
     taxType: "amount", taxValue: "",
@@ -888,16 +904,13 @@ function readProductForm() {
 
   const name = get("pName");
   if (!name) return fail("pName", "Product name is required.");
-  const tileSize = get("pTileSize");
-  if (tileSize && !isTileSize(tileSize)) return fail("pTileSize", "Tile size must look like 60 × 120 cm.");
-  const sellingUnit = $("pSellingUnit").value;
+  const tileSizeRaw = get("pTileSize");
+  if (tileSizeRaw && !isTileSize(tileSizeRaw)) return fail("pTileSize", "Tile size must look like 60*120.");
+  const tileSize = tileSizeRaw ? normalizeTileSize(tileSizeRaw) : "";
   const coverageRaw = get("pCoveragePerBox");
   const coveragePerBox = Number(coverageRaw);
   if (coverageRaw !== "" && (!Number.isFinite(coveragePerBox) || coveragePerBox <= 0)) {
     return fail("pCoveragePerBox", "Coverage per box must be greater than 0.");
-  }
-  if (sellingUnit === "box" && coverageRaw === "") {
-    return fail("pCoveragePerBox", "Coverage per box is required when selling by box.");
   }
 
   const priceRaw = get("pPrice");
@@ -925,7 +938,6 @@ function readProductForm() {
       manufacturer: get("pManufacturer"),
       tileSize,
       coveragePerBox: coverageRaw === "" ? null : coveragePerBox,
-      sellingUnit,
       description: get("pDesc"),
       sku,
       category: get("pCategory"),
@@ -1013,7 +1025,6 @@ function startEditProduct(id) {
   $("pManufacturer").value = p.manufacturer;
   $("pTileSize").value = p.tileSize;
   $("pCoveragePerBox").value = p.coveragePerBox == null ? "" : p.coveragePerBox;
-  $("pSellingUnit").value = p.sellingUnit;
   $("pDesc").value = p.description;
   $("pPrice").value = p.sellingPrice;
   $("pCost").value = p.purchasePrice == null ? "" : p.purchasePrice;
@@ -1065,53 +1076,93 @@ function loadDemoData() {
    CURRENT SALE
    ========================================================================== */
 
-function findSaleItem(productId) {
-  return state.sale.items.find((i) => i.productId === productId);
+// A sale line is one product in one unit, so the same product can appear on several lines
+// (for example 5 boxes and 2 pieces). Lines are found by lineId.
+function findSaleItem(lineId) {
+  return state.sale.items.find((i) => i.lineId === lineId);
+}
+
+// Quantity of a product already on the sale across all its lines, optionally ignoring one line.
+function qtyInSale(productId, exceptLineId, sale = state.sale) {
+  return sale.items.reduce((sum, i) => (i.productId === productId && i.lineId !== exceptLineId ? sum + toNumber(i.qty) : sum), 0);
+}
+
+// Total quantity per product across all lines, for stock checks.
+function totalsByProduct(items) {
+  const totals = new Map();
+  for (const i of items) totals.set(i.productId, (totals.get(i.productId) || 0) + toNumber(i.qty));
+  return totals;
 }
 
 function stockMessage(available, inSale) {
   return `Not enough stock. Available quantity: ${available}.` + (inSale ? ` ${inSale} already in this sale.` : "");
 }
 
-function addToSale(productId, rawQty) {
+function addToSale(productId, rawQty, rawUnit) {
   const product = findProduct(productId);
   if (!product) return { error: "Select a product first." };
-  const qty = Number(rawQty);
-  if (rawQty === "" || !Number.isInteger(qty) || qty < 1) {
+  let qty = Number(rawQty);
+  let sellingUnit = SALE_LINE_UNITS.includes(rawUnit) ? rawUnit : "piece";
+  let converted = null;
+  if (rawUnit === "m2") {
+    // Typed in m²: work out how many whole boxes cover that area (rounded up).
+    if (rawQty === "" || !Number.isFinite(qty) || qty <= 0) return { error: "Enter the area in m², greater than 0." };
+    if (!product.coveragePerBox) return { error: `${product.name} has no coverage per box. Edit the product and set it to sell by m².` };
+    const boxes = Math.max(1, Math.ceil(round2(qty / product.coveragePerBox * 1e4) / 1e4));
+    converted = { area: qty, boxes, coverage: product.coveragePerBox };
+    qty = boxes;
+    sellingUnit = "box";
+  } else if (rawQty === "" || !Number.isInteger(qty) || qty < 1) {
     return { error: "Quantity must be a whole number of at least 1." };
   }
-  const item = findSaleItem(productId);
-  const inSale = item ? item.qty : 0;
+  const item = state.sale.items.find((i) => i.productId === productId && i.sellingUnit === sellingUnit);
+  const inSale = qtyInSale(productId);
   if (inSale + qty > product.stock) return { error: stockMessage(product.stock, inSale) };
 
   if (item) item.qty += qty;
-  else state.sale.items.push({ productId, qty, unitPrice: product.sellingPrice });
-  return { ok: true };
+  else state.sale.items.push({ lineId: uid(), productId, qty, sellingUnit, unitPrice: product.sellingPrice });
+  return { ok: true, converted };
 }
 
-function removeFromSale(productId) {
-  state.sale.items = state.sale.items.filter((i) => i.productId !== productId);
+// Returns { merged: true } when the line joined an existing line of the same product and unit.
+function updateSaleUnit(lineId, rawUnit) {
+  const item = findSaleItem(lineId);
+  if (!item) return { error: "This product is no longer in the sale." };
+  if (!SALE_LINE_UNITS.includes(rawUnit)) return { error: "Choose a valid unit." };
+  item.sellingUnit = rawUnit;
+  const twin = state.sale.items.find((i) => i !== item && i.productId === item.productId && i.sellingUnit === rawUnit);
+  if (twin) {
+    twin.qty += item.qty;
+    state.sale.items = state.sale.items.filter((i) => i !== item);
+    return { merged: true };
+  }
+  return {};
+}
+
+function removeFromSale(lineId) {
+  state.sale.items = state.sale.items.filter((i) => i.lineId !== lineId);
 }
 
 // Returns { error } when the value is rejected; { error, clamped } when it was capped to stock.
-function updateSaleQuantity(productId, rawQty) {
-  const item = findSaleItem(productId);
-  const product = findProduct(productId);
+function updateSaleQuantity(lineId, rawQty) {
+  const item = findSaleItem(lineId);
+  const product = item && findProduct(item.productId);
   if (!item || !product) return { error: "This product is no longer available." };
   const qty = Number(rawQty);
   if (rawQty === "" || !Number.isInteger(qty) || qty < 1) {
     return { error: "Quantity must be a whole number of at least 1." };
   }
-  if (qty > product.stock) {
-    item.qty = product.stock;
-    return { error: stockMessage(product.stock), clamped: true };
+  const others = qtyInSale(item.productId, lineId);
+  if (qty + others > product.stock) {
+    item.qty = Math.max(1, product.stock - others);
+    return { error: stockMessage(product.stock, others), clamped: true };
   }
   item.qty = qty;
   return {};
 }
 
-function updateSalePrice(productId, rawPrice) {
-  const item = findSaleItem(productId);
+function updateSalePrice(lineId, rawPrice) {
+  const item = findSaleItem(lineId);
   if (!item) return { error: "This product is no longer in the sale." };
   const price = Number(rawPrice);
   if (rawPrice === "" || !Number.isFinite(price)) return { error: "Enter a price." };
@@ -1178,8 +1229,11 @@ function validateSale() {
     const p = findProduct(item.productId);
     if (!p) { errors.push("A product in this sale no longer exists."); continue; }
     if (!Number.isInteger(item.qty) || item.qty < 1) errors.push(`${p.name}: quantity must be at least 1.`);
-    else if (item.qty > p.stock) errors.push(`${p.name}: ${stockMessage(p.stock)}`);
     if (!Number.isFinite(item.unitPrice) || item.unitPrice < 0) errors.push(`${p.name}: price can't be negative.`);
+  }
+  for (const [productId, total] of totalsByProduct(state.sale.items)) {
+    const p = findProduct(productId);
+    if (p && total > p.stock) errors.push(`${p.name}: ${stockMessage(p.stock)}`);
   }
   const adj = adjustmentError() || paidError();
   if (adj) errors.push(adj);
@@ -1190,11 +1244,14 @@ function validateSale() {
 // Keeps the sale in line with the inventory (deleted products, stock lowered elsewhere).
 function syncSaleWithProducts() {
   const notes = [];
+  const used = new Map();   // stock already given to earlier lines of the same product
   state.sale.items = state.sale.items.filter((item) => {
     const p = findProduct(item.productId);
     if (!p) { notes.push("A product was removed from the sale because it no longer exists."); return false; }
-    if (p.stock < 1) { notes.push(`${p.name} was removed from the sale: out of stock.`); return false; }
-    if (item.qty > p.stock) { item.qty = p.stock; notes.push(`${p.name} was reduced to the available stock (${p.stock}).`); }
+    const left = p.stock - (used.get(p.id) || 0);
+    if (left < 1) { notes.push(`${p.name} was removed from the sale: out of stock.`); return false; }
+    if (item.qty > left) { item.qty = left; notes.push(`${p.name} was reduced to the available stock (${p.stock}).`); }
+    used.set(p.id, (used.get(p.id) || 0) + item.qty);
     return true;
   });
   return notes;
@@ -1232,7 +1289,7 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
       manufacturer: p ? p.manufacturer : "",
       tileSize: p ? p.tileSize : "",
       coveragePerBox: p ? p.coveragePerBox : null,
-      sellingUnit: p ? p.sellingUnit : "piece",
+      sellingUnit: SELLING_UNITS.includes(item.sellingUnit) ? item.sellingUnit : "piece",
       sku: p ? p.sku : "",
       qty: item.qty,
       unitPrice: item.unitPrice,
@@ -1278,10 +1335,10 @@ function completeSale() {
     // One transaction: invoice added + stock decreased + counter increased, saved together or not at all.
     const sale = state.sale;
     const r = await commit((d) => {
-      for (const item of sale.items) {
-        const p = findProduct(item.productId, d);
+      for (const [productId, total] of totalsByProduct(sale.items)) {
+        const p = findProduct(productId, d);
         if (!p) return { error: "A product in this sale no longer exists." };
-        if (item.qty > p.stock) return { error: `${p.name}: ${stockMessage(p.stock)}` };
+        if (total > p.stock) return { error: `${p.name}: ${stockMessage(p.stock)}` };
       }
       const invoice = { id: uid(), ...buildInvoiceData(sale, formatInvoiceNumber(d.counter + 1), new Date().toISOString(), d) };
       for (const item of invoice.items) findProduct(item.productId, d).stock -= item.qty;
@@ -1452,6 +1509,10 @@ function renderSelected() {
     : '<span class="none">Select a product from the list.</span>';
 }
 
+function unitOptions(selected) {
+  return SALE_LINE_UNITS.map((u) => `<option value="${u}"${u === selected ? " selected" : ""}>${esc(unitLabel(u))}</option>`).join("");
+}
+
 function renderSale() {
   const body = $("saleBody");
   if (state.sale.items.length === 0) {
@@ -1460,9 +1521,10 @@ function renderSale() {
     body.innerHTML = state.sale.items.map((item) => {
       const p = findProduct(item.productId);
       const name = p ? productLabel(p) : "(deleted product)";
-      return `<tr data-id="${esc(item.productId)}">` +
+      return `<tr data-id="${esc(item.lineId)}">` +
         `<td><div>${esc(name)}</div><div class="muted small">Available: ${p ? p.stock : 0}</div><div class="error small" data-row-error></div></td>` +
-        `<td class="num"><input class="qty-input" type="number" min="1" step="1" value="${item.qty}" data-field="qty" aria-label="Quantity of ${esc(name)}"></td>` +
+        `<td class="num"><div class="qty-cell"><input class="qty-input" type="number" min="1" step="1" value="${item.qty}" data-field="qty" aria-label="Quantity of ${esc(name)}">` +
+        `<select class="unit-select" data-field="unit" aria-label="Unit of ${esc(name)}">${unitOptions(item.sellingUnit)}</select></div></td>` +
         `<td class="num"><input class="price-input" type="number" min="0" step="any" value="${item.unitPrice}" data-field="price" aria-label="Unit price of ${esc(name)}"></td>` +
         `<td class="num" data-line-total>${esc(money(item.qty * item.unitPrice))}</td>` +
         `<td class="num"><button type="button" class="btn small danger" data-action="remove" aria-label="Remove ${esc(name)} from sale">Remove</button></td>` +
@@ -1507,7 +1569,7 @@ function invoiceHtml(inv) {
 
   const rows = inv.items.length
     ? inv.items.map((i) =>
-        `<tr><td>${esc(invoiceItemLabel(i))}</td><td class="num">${num(i.qty)}</td><td class="num">${num(i.unitPrice)}</td><td class="num">${num(i.total != null ? i.total : toNumber(i.qty) * toNumber(i.unitPrice))}</td></tr>`
+        `<tr><td>${esc(invoiceItemLabel(i))}</td><td class="num">${num(i.qty)} ${esc(unitLabel(i.sellingUnit))}</td><td class="num">${num(i.unitPrice)}</td><td class="num">${num(i.total != null ? i.total : toNumber(i.qty) * toNumber(i.unitPrice))}</td></tr>`
       ).join("")
     : '<tr><td colspan="4" class="none">No items yet</td></tr>';
 
@@ -1849,7 +1911,7 @@ function bindEvents() {
   });
   $("addForm").addEventListener("submit", (e) => {
     e.preventDefault();
-    const result = addToSale(state.selectedId, $("addQty").value.trim());
+    const result = addToSale(state.selectedId, $("addQty").value.trim(), $("addUnit").value);
     if (result.error) {
       showError("addError", result.error);
       $("addQty").focus();
@@ -1857,10 +1919,15 @@ function bindEvents() {
     }
     showError("addError", "");
     showError("saleError", "");
+    if (result.converted) {
+      const c = result.converted;
+      notify(`${numberFormat.format(c.area)} m² = ${c.boxes} box${c.boxes === 1 ? "" : "es"} (${numberFormat.format(c.coverage)} m² per box).`);
+    }
     state.selectedId = null;
     state.previewInvoice = null;
     search.value = "";
     $("addQty").value = 1;
+    $("addUnit").value = "piece";
     renderResults();
     renderSelected();
     renderSale();
@@ -1883,6 +1950,20 @@ function bindEvents() {
     refreshLive();
   });
   saleBody.addEventListener("change", (e) => {
+    const unitSelect = e.target.closest("select[data-field='unit']");
+    if (unitSelect) {
+      const result = updateSaleUnit(unitSelect.closest("tr").dataset.id, unitSelect.value);
+      if (result.merged) {
+        state.previewInvoice = null;
+        renderSale();
+        renderInvoice();
+        return;
+      }
+      unitSelect.closest("tr").querySelector("[data-row-error]").textContent = result.error || "";
+      state.previewInvoice = null;
+      refreshLive();
+      return;
+    }
     // On leaving a field, show the value that is actually in the sale.
     const input = e.target.closest("input[data-field]");
     if (!input) return;
@@ -2081,6 +2162,15 @@ function bindEvents() {
 if (globalThis.__INVOISY_TEST_EXPORTS__) {
   Object.assign(globalThis.__INVOISY_TEST_EXPORTS__, {
     normalizeProduct,
+    normalizeTileSize,
+    formatTileSize,
+    isTileSize,
+    addToSale,
+    updateSaleQuantity,
+    updateSaleUnit,
+    validateSale,
+    syncSaleWithProducts,
+    getSale: () => state.sale,
     productProblem,
     productLabel,
     invoiceItemLabel,

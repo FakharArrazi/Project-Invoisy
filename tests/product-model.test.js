@@ -60,7 +60,6 @@ function ceramic(overrides = {}) {
     manufacturer: "Timgad Ceramic",
     tileSize: "60 × 120 cm",
     coveragePerBox: 2.88,
-    sellingUnit: "box",
     description: "",
     sku: "",
     category: "Tiles",
@@ -118,23 +117,23 @@ test("normalizes existing products without ceramic fields without losing their e
   assert.equal(product.manufacturer, "");
   assert.equal(product.tileSize, "");
   assert.equal(product.coveragePerBox, null);
-  assert.equal(product.sellingUnit, "piece");
+  assert.equal(product.sellingUnit, undefined);
 });
 
 test("validates ceramic form fields and persists a product creation and edit", async () => {
   const { api, field } = loadProductApi();
   const values = {
-    pName: "Everton Grey", pManufacturer: "Timgad Ceramic", pTileSize: "60 × 120 cm",
-    pCoveragePerBox: "2.88", pSellingUnit: "box", pDesc: "", pPrice: "1000", pCost: "800",
+    pName: "Everton Grey", pManufacturer: "Timgad Ceramic", pTileSize: "60*120",
+    pCoveragePerBox: "2.88", pDesc: "", pPrice: "1000", pCost: "800",
     pStock: "12", pSku: "EV-GREY", pCategory: "Tiles",
   };
   for (const [id, value] of Object.entries(values)) field(id).value = value;
   const created = api.readProductForm();
 
   assert.equal(created.error, undefined);
-  assert.equal(created.values.tileSize, "60 × 120 cm");
+  assert.equal(created.values.tileSize, "60*120");
   assert.equal(created.values.coveragePerBox, 2.88);
-  assert.equal(created.values.sellingUnit, "box");
+  assert.equal(created.values.sellingUnit, undefined);
 
   api.applyData({ products: [], invoices: [], settings: { ...api.DEFAULT_SETTINGS }, counter: 0, lastSaved: "" });
   const create = await api.commit((draft) => {
@@ -150,14 +149,74 @@ test("validates ceramic form fields and persists a product creation and edit", a
   const reloaded = api.readMirror().data.products[0];
 
   assert.equal(reloaded.manufacturer, "Timgad Ceramic Updated");
-  assert.equal(reloaded.tileSize, "60 × 120 cm");
+  assert.equal(reloaded.tileSize, "60*120");
   assert.equal(reloaded.coveragePerBox, 3.12);
 
   field("pTileSize").value = "2.88 m²";
   const invalidSize = api.readProductForm();
   assert.equal(invalidSize.field, "pTileSize");
-  field("pTileSize").value = "60 × 120 cm";
+  field("pTileSize").value = "12*15";
+  field("pSku").value = "";
+  assert.equal(api.readProductForm().values.tileSize, "12*15");
   field("pCoveragePerBox").value = "0";
   const invalidCoverage = api.readProductForm();
   assert.equal(invalidCoverage.field, "pCoveragePerBox");
+});
+
+test("accepts any WIDTH*HEIGHT tile size and stores it as 60*120", () => {
+  const { api } = loadProductApi();
+  for (const ok of ["60*120", "12*15", "60 * 120", "60x120", "60 × 120 cm", "7.5*15"]) assert.equal(api.isTileSize(ok), true, ok);
+  for (const bad of ["60", "60*", "abc", "2.88 m²", "60*120*3"]) assert.equal(api.isTileSize(bad), false, bad);
+  assert.equal(api.normalizeTileSize("60 x 120"), "60*120");
+  assert.equal(api.normalizeTileSize("12 × 15 cm"), "12*15");
+});
+
+test("a sale line carries its own selling unit", async () => {
+  const { api } = loadProductApi();
+  api.applyData({ products: [api.normalizeProduct(ceramic({ id: "t1", stock: 10 }))], invoices: [], settings: { ...api.DEFAULT_SETTINGS }, counter: 0, lastSaved: "" });
+  for (const unit of ["piece", "box", "m2", "kg"]) {
+    const { api: fresh } = loadProductApi();
+    fresh.applyData({ products: [fresh.normalizeProduct(ceramic({ id: "t1", stock: 10 }))], invoices: [], settings: { ...fresh.DEFAULT_SETTINGS }, counter: 0, lastSaved: "" });
+    assert.equal(fresh.addToSale("t1", "2", unit).ok, true, unit);
+  }
+  assert.equal(api.addToSale("t1", "2", "box").ok, true);
+  assert.equal(api.addToSale("t1", "1", "box").ok, true);
+  assert.equal(api.addToSale("t1", "1", "kg").ok, true);   // a different unit is a separate line
+});
+
+test("invoice line reads: name (60 × 120) manufacturer", () => {
+  const { api } = loadProductApi();
+  assert.equal(api.invoiceItemLabel({ name: "golden era", tileSize: "60*120", manufacturer: "garnada" }), "golden era (60 × 120) garnada");
+  assert.equal(api.invoiceItemLabel({ name: "golden era", tileSize: "60 × 120 cm", manufacturer: "garnada" }), "golden era (60 × 120) garnada");
+  assert.equal(api.invoiceItemLabel({ name: "Chips", tileSize: "", manufacturer: "" }), "Chips");
+});
+
+test("m² is converted to whole boxes (rounded up); piece and kg stay as entered", () => {
+  const { api } = loadProductApi();
+  const load = () => api.applyData({ products: [api.normalizeProduct(ceramic({ id: "t1", stock: 100, coveragePerBox: 2.88 })), api.normalizeProduct({ id: "k1", name: "Cement", stock: 100, sellingPrice: 5 })], invoices: [], settings: { ...api.DEFAULT_SETTINGS }, counter: 0, lastSaved: "" });
+  load();
+  const r = api.addToSale("t1", "8", "m2");
+  assert.equal(r.ok, true);
+  assert.deepEqual({ ...r.converted }, { area: 8, boxes: 3, coverage: 2.88 });
+  assert.equal(api.addToSale("t1", "5.76", "m2").converted.boxes, 2);   // exact multiple, no extra box
+  assert.equal(api.addToSale("k1", "2", "kg").converted, null);
+  assert.match(api.addToSale("k1", "3", "m2").error, /no coverage per box/);
+});
+
+test("the same product can be sold as 5 boxes and 2 pieces, sharing one stock pool", () => {
+  const { api } = loadProductApi();
+  api.applyData({ products: [api.normalizeProduct(ceramic({ id: "t1", stock: 8 }))], invoices: [], settings: { ...api.DEFAULT_SETTINGS }, counter: 0, lastSaved: "" });
+  assert.equal(api.addToSale("t1", "5", "box").ok, true);
+  assert.equal(api.addToSale("t1", "2", "piece").ok, true);
+  const sale = api.getSale();
+  assert.equal(sale.items.length, 2);
+  assert.equal(JSON.stringify(sale.items.map((i) => [i.qty, i.sellingUnit])), JSON.stringify([[5, "box"], [2, "piece"]]));
+  assert.equal(api.addToSale("t1", "2", "box").error.startsWith("Not enough stock"), true);   // 5 + 2 + 2 > 8
+  assert.equal(api.addToSale("t1", "1", "box").ok, true);                                    // 6 boxes + 2 pieces = 8
+  assert.equal(sale.items[0].qty, 6);
+  assert.equal(api.validateSale().filter((e) => /stock/i.test(e)).length, 0);
+  // changing a line's unit onto an existing line merges them
+  const pieceLine = sale.items.find((i) => i.sellingUnit === "piece");
+  assert.equal(api.updateSaleUnit(pieceLine.lineId, "box").merged, true);
+  assert.equal(JSON.stringify(sale.items.map((i) => [i.qty, i.sellingUnit])), JSON.stringify([[8, "box"]]));
 });

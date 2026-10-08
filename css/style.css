@@ -236,6 +236,8 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 .selected .none { color: var(--muted); }
 .selected .out { color: var(--danger); }
 .add-qty { width: 90px; }
+.add-unit { width: 100px; }
+.add-unit select { width: 100%; }
 
 /* ---------- Tables ---------- */
 
@@ -247,6 +249,8 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 .table td.num { white-space: nowrap; }
 .table input { padding: 5px 7px; text-align: right; }
 .table input.qty-input { width: 72px; }
+.qty-cell { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
+.table select.unit-select { width: 76px; }
 .table input.price-input { width: 96px; }
 .table .row-actions { display: flex; justify-content: flex-end; gap: 4px; }
 .table .empty-row td { text-align: center; color: var(--muted); padding: 24px 8px; }
