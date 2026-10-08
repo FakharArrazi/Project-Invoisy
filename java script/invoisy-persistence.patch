@@ -1,0 +1,1522 @@
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..0b96c36
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,3 @@
++# Private business data (inventory, invoices, payments, settings). Never commit.
++invoisy-data.json
++invoisy-backup-*.json
+diff --git a/README.md b/README.md
+index 090fd77..9b3fde0 100644
+--- a/README.md
++++ b/README.md
+@@ -10,7 +10,43 @@ Open `index.html` in a browser. No installation, no backend.
+ 
+ ## Where data is stored
+ 
+-Everything is saved in your browser's `localStorage` (keys: `products`, `invoices`, `settings`, `invoiceCounter`). Data stays on this computer and in this browser, and survives refreshes. Clearing the browser's site data erases it.
++Invoisy stores its persistent application data in a local `invoisy-data.json` file. The file contains inventory, invoices (with every item and every individual payment), settings, business information, logo data, paper size and invoice numbering. It is plain JSON with a `version` field, so it can be backed up, copied or inspected with any text editor.
++
++Keep `invoisy-data.json` with the Invoisy application folder and back it up regularly. If you move the folder and bring the file with it, you bring your whole business state with you.
++
++The file is intentionally excluded from Git by `.gitignore` because it holds private business data (backup files named `invoisy-backup-*.json` are excluded too). Only those names are ignored; other `.json` files are not.
++
++### Connecting the data file (once)
++
++A web page cannot silently create or find a file on your disk, so you tell Invoisy where the file is. This needs a browser with the File System Access API (Chrome or Edge).
++
++1. Go to **Settings, Data storage**.
++2. First time: click **Create Data File** and save `invoisy-data.json` in the Invoisy folder. Anything already in your browser (see Upgrading below) is written into it.
++3. Already have a file (for example after moving the folder): click **Choose Data File** and select it.
++4. Allow Invoisy to edit the file when the browser asks.
++
++From then on every change (product, stock, sale, payment, settings, logo, paper size) is written to the file straight away, and the app only says "saved" after the file was written and read back successfully. **Save Data Now** forces a save.
++
++The browser remembers the file, but it may ask for permission again after you restart it. When that happens a banner appears: click **Reconnect**. If you move the folder, choose the file again with **Choose Data File**. Until the file is connected, changes made in a browser that supports files are blocked (once a file has been linked) so the file and the browser can never drift apart.
++
++If your browser has no File System Access API (for example Firefox or Safari), or the file is not connected yet, Invoisy still works but keeps the data in the browser only. A banner says so, messages say "Saved in this browser only", and you should use **Export Backup** regularly. If the buttons are disabled when you open `index.html` directly, run `python3 -m http.server` in the folder and open http://localhost:8000 instead.
++
++### Safety
++
++- The data is validated before every write; invalid data is never written.
++- A sale is saved as one step: the invoice, the stock decrease and the invoice counter are written together, or not at all. If the save fails you get an error, nothing changes on screen, and the file is left as it was.
++- If the file is corrupted, empty or edited into an invalid state, Invoisy shows an error, does not overwrite it and does not replace it with empty data. The last browser copy stays visible for viewing and you can export it.
++- If the file was changed by another window or program since Invoisy last saved, the save is refused, the newer file data is loaded and you repeat your action.
++- The invoice counter is checked against the existing invoice numbers on every load and raised if it is too low, so numbers are never reused.
++- A copy of the data is also kept in the browser's `localStorage` (key `invoisy-data`) as a fallback. The data file always wins: whenever the file is loaded it replaces the browser copy. If the file is older than the browser copy, Invoisy asks before loading it.
++
++### Backup and restore
++
++**Export Backup** downloads the complete data as `invoisy-backup-YYYY-MM-DD.json`. **Import Backup** replaces the current data with a backup after you confirm; the backup is validated first and an invalid file changes nothing. The invoice counter never goes backwards on import.
++
++### Upgrading from the old browser-only version
++
++On the first start after this update Invoisy reads the old `products`, `invoices`, `settings` and `invoiceCounter` entries from `localStorage` and converts them to the new format. The old entries are left untouched and are no longer written to. Then create the data file as described above.
+ 
+ ## Add products
+ 
+@@ -44,10 +80,11 @@ Click **Print / PDF** next to the invoice (or **Print** in the Invoices list). I
+ 
+ ## Change business details or currency
+ 
+-**Settings** holds the business name, address, phone, email, currency (default `DA`), the invoice paper size (A4 or A5, default A4) and the store logo (**Choose Logo** / **Remove Logo**, PNG only). The logo is saved in the browser and shown above the business name on every invoice. New invoices use the current values; saved invoices keep the ones they were created with. The default currency is also the `CURRENCY` constant at the top of `script.js`.
++**Settings** holds the business name, address, phone, email, currency (default `DA`), the invoice paper size (A4 or A5, default A4) and the store logo (**Choose Logo** / **Remove Logo**, PNG only). The logo is saved in the data file (as a PNG data URL, so it moves with it) and shown above the business name on every invoice. New invoices use the current values; saved invoices keep the ones they were created with. The default currency is also the `CURRENCY` constant at the top of `script.js`.
+ 
+ ## Files
+ 
+ - `index.html` - page structure
+-- `style.css` - styles, including the print rules
+-- `script.js` - all the logic
++- `css/style.css` - styles, including the print rules
++- `java script/script.js` - all the logic, including the data file layer
++- `invoisy-data.json` - your data (created by you in Settings, not in Git)
+diff --git a/css/style.css b/css/style.css
+index 81a7ea0..75ddc4a 100644
+--- a/css/style.css
++++ b/css/style.css
+@@ -43,7 +43,7 @@ small { color: var(--muted); font-weight: normal; }
+ .app {
+   display: grid;
+   grid-template-columns: var(--sidebar-w) minmax(0, 1fr) auto;
+-  height: calc(100vh - var(--topbar-h));
++  height: calc(100vh - var(--topbar-h) - var(--banner-h, 0px));
+ }
+ 
+ .topbar {
+@@ -339,6 +339,24 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
+ #logoPreview img { display: block; max-width: 160px; max-height: 100px; }
+ #invoiceFilter { max-width: 280px; }
+ 
++.actions.wrap { flex-wrap: wrap; }
++.data-info { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; margin: 0 0 8px; }
++.data-info dt { color: var(--muted); }
++.data-info dd { margin: 0; overflow-wrap: anywhere; }
++#dataState { font-weight: 600; }
++#dataState.state-connected { color: #1e7a3c; }
++#dataState.state-disconnected { color: var(--danger); }
++#dataState.state-unlinked { color: #9a5b00; }
++
++.storage-banner {
++  display: flex; align-items: center; gap: 12px;
++  padding: 8px 16px;
++  font-size: 13px;
++  color: #5a3a00; background: #fff4e0; border-bottom: 1px solid #e8c27a;
++}
++.storage-banner.blocked { color: #7a1912; background: #fdecea; border-color: #f0b4af; }
++.storage-banner span { flex: 1; min-width: 0; }
++
+ /* ---------- Toast ---------- */
+ 
+ .toast {
+@@ -362,7 +380,7 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
+ /* ---------- Smaller screens ---------- */
+ 
+ @media (max-width: 1180px) {
+-  .app { grid-template-columns: var(--sidebar-w) minmax(0, 1fr); height: auto; min-height: calc(100vh - var(--topbar-h)); }
++  .app { grid-template-columns: var(--sidebar-w) minmax(0, 1fr); height: auto; min-height: calc(100vh - var(--topbar-h) - var(--banner-h, 0px)); }
+   main { overflow: visible; padding-bottom: 0; }
+   .preview-panel { grid-column: 2; width: auto; padding: 20px; overflow: visible; }
+   .stock-layout { grid-template-columns: minmax(0, 1fr); }
+diff --git a/index.html b/index.html
+index a208a2f..5fad99c 100644
+--- a/index.html
++++ b/index.html
+@@ -19,6 +19,10 @@
+     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+   </span>
+ </header>
++<div class="storage-banner no-print" id="storageBanner" role="alert" hidden>
++  <span id="bannerText"></span>
++  <button type="button" class="btn small" id="bannerAction" hidden></button>
++</div>
+ <div class="app" id="app" data-view="sell">
+ 
+   <!-- SIDEBAR -->
+@@ -269,6 +273,26 @@
+     <!-- SETTINGS -->
+     <section class="view" id="view-settings" hidden>
+       <h1>Settings</h1>
++      <div class="panel narrow">
++        <h2>Data storage</h2>
++        <dl class="data-info">
++          <dt>Persistent data</dt><dd id="dataFile"></dd>
++          <dt>Status</dt><dd id="dataState"></dd>
++          <dt>Last saved</dt><dd id="dataSaved"></dd>
++        </dl>
++        <p class="muted small" id="dataNote"></p>
++        <div class="actions left wrap">
++          <button type="button" class="btn" id="chooseData">Choose Data File</button>
++          <button type="button" class="btn" id="createData">Create Data File</button>
++          <button type="button" class="btn primary" id="saveNow">Save Data Now</button>
++        </div>
++        <div class="actions left wrap">
++          <button type="button" class="btn" id="exportBackup">Export Backup</button>
++          <button type="button" class="btn" id="importBackup">Import Backup</button>
++          <input type="file" id="importFile" accept=".json,application/json" hidden>
++        </div>
++        <p class="error" id="dataError" role="alert"></p>
++      </div>
+       <div class="panel narrow">
+         <h2>Business details</h2>
+         <form id="settingsForm" novalidate>
+diff --git a/java script/script.js b/java script/script.js
+index 0b78ed0..56e17ed 100644
+--- a/java script/script.js	
++++ b/java script/script.js	
+@@ -2,7 +2,8 @@
+ 
+ /* ==========================================================================
+    Simple Invoice - products, stock, sales and invoices in the browser.
+-   Data is kept in localStorage. No backend, no dependencies.
++   Data lives in a local invoisy-data.json file (with a browser copy as fallback).
++   No backend, no dependencies.
+    ========================================================================== */
+ 
+ /* ---------- Configuration ---------- */
+@@ -82,35 +83,25 @@ function notify(message, type) {
+   toast.textContent = message;
+   toast.className = "toast show" + (type === "error" ? " error" : "");
+   clearTimeout(toastTimer);
+-  toastTimer = setTimeout(() => { toast.className = "toast"; }, 3500);
++  toastTimer = setTimeout(() => { toast.className = "toast"; }, type === "error" ? 8000 : 3500);
+ }
+ 
+ function showError(id, message) {
+   $(id).textContent = message || "";
+ }
+ 
+-/* ---------- Storage (safe) ---------- */
++/* ---------- Data model ---------- */
+ 
+-function readStorage(key, fallback) {
+-  try {
+-    const raw = localStorage.getItem(key);
+-    if (raw === null) return fallback;
+-    const value = JSON.parse(raw);
+-    return value === null || value === undefined ? fallback : value;
+-  } catch (e) {
+-    return fallback;
+-  }
+-}
++const DATA_VERSION = 1;
++const DATA_FILE_NAME = "invoisy-data.json";
++const MIRROR_KEY = "invoisy-data";            // browser copy of the data file (fallback and recovery)
++const LEGACY_KEYS = ["products", "invoices", "settings", "invoiceCounter"];
++const DERIVED_INVOICE_FIELDS = ["amountPaid", "remaining", "status"];   // written to the file for readability only
+ 
+-function writeStorage(key, value) {
+-  try {
+-    localStorage.setItem(key, JSON.stringify(value));
+-    return true;
+-  } catch (e) {
+-    notify("Could not save data. Check that browser storage is available.", "error");
+-    return false;
+-  }
+-}
++const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
++const isStr = (v) => typeof v === "string";
++const isNum = (v) => typeof v === "number" && Number.isFinite(v);
++const isDate = (v) => isStr(v) && !isNaN(new Date(v));
+ 
+ function normalizeProduct(raw) {
+   if (!raw || typeof raw !== "object" || !raw.name) return null;
+@@ -129,38 +120,30 @@ function normalizeProduct(raw) {
+   };
+ }
+ 
+-function loadProducts() {
+-  const stored = readStorage("products", []);
+-  return Array.isArray(stored) ? stored.map(normalizeProduct).filter(Boolean) : [];
+-}
+-
+-function saveProducts() {
+-  return writeStorage("products", state.products);
+-}
+-
+ // Invoices saved before payments existed are treated as fully paid at their sale date.
+ function normalizeInvoice(inv) {
+   if (!inv || typeof inv !== "object" || !inv.invoiceNumber || !Array.isArray(inv.items)) return null;
++  const clean = { ...inv };
++  for (const key of DERIVED_INVOICE_FIELDS) delete clean[key];
++  const amount = (value, fallback) => (value !== "" && value != null && Number.isFinite(Number(value)) ? Number(value) : fallback);
++  const itemsTotal = round2(inv.items.reduce((sum, i) => sum + toNumber(i && i.qty) * toNumber(i && i.unitPrice), 0));
++  clean.subtotal = amount(inv.subtotal, itemsTotal);
++  clean.discount = amount(inv.discount, 0);
++  clean.tax = amount(inv.tax, 0);
++  clean.total = amount(inv.total, Math.max(0, round2(clean.subtotal - clean.discount + clean.tax)));
++
+   let payments;
+   if (Array.isArray(inv.payments)) {
+     payments = inv.payments
+       .filter((p) => p && Number.isFinite(Number(p.amount)) && Number(p.amount) > 0)
+       .map((p) => ({ amount: round2(Number(p.amount)), timestamp: p.timestamp || inv.date }));
+   } else {
+-    const total = toNumber(inv.total);
+-    payments = total > 0 ? [{ amount: total, timestamp: inv.date }] : [];
++    payments = clean.total > 0 ? [{ amount: clean.total, timestamp: inv.date }] : [];
+   }
+-  return { ...inv, id: String(inv.id || uid()), payments };
+-}
+-
+-function loadInvoices() {
+-  const stored = readStorage("invoices", []);
+-  if (!Array.isArray(stored)) return [];
+-  return stored.map(normalizeInvoice).filter(Boolean);
++  return { ...clean, id: String(inv.id || uid()), payments };
+ }
+ 
+-function loadSettings() {
+-  const stored = readStorage("settings", {});
++function normalizeSettings(stored) {
+   const settings = { ...DEFAULT_SETTINGS };
+   if (stored && typeof stored === "object") {
+     for (const key of Object.keys(DEFAULT_SETTINGS)) {
+@@ -173,14 +156,134 @@ function loadSettings() {
+   return settings;
+ }
+ 
+-function loadCounter(invoices) {
+-  let counter = Math.floor(Number(readStorage("invoiceCounter", 0)));
+-  if (!Number.isFinite(counter) || counter < 0) counter = 0;
+-  for (const inv of invoices) {
+-    const n = parseInt(String(inv.invoiceNumber).replace(/\D/g, ""), 10);
+-    if (Number.isFinite(n) && n > counter) counter = n;
++function invoiceSequence(invoiceNumber) {
++  return parseInt(String(invoiceNumber).replace(/\D/g, ""), 10) || 0;
++}
++
++function highestInvoiceNumber(invoices) {
++  return invoices.reduce((max, inv) => Math.max(max, invoiceSequence(inv.invoiceNumber)), 0);
++}
++
++/* ---------- Validation ---------- */
++
++function productProblem(p) {
++  if (!isObj(p)) return "is not an object";
++  if (!isStr(p.id) || !p.id) return "has no id";
++  if (!isStr(p.name) || !p.name.trim()) return "has no name";
++  if (!isNum(p.sellingPrice) || p.sellingPrice < 0) return "has an invalid selling price";
++  if (p.purchasePrice != null && (!isNum(p.purchasePrice) || p.purchasePrice < 0)) return "has an invalid purchase price";
++  if (!Number.isInteger(p.stock) || p.stock < 0) return "has an invalid stock quantity";
++  return "";
++}
++
++function invoiceProblem(inv) {
++  if (!isObj(inv)) return "is not an object";
++  if (!isStr(inv.id) || !inv.id) return "has no id";
++  if (!isStr(inv.invoiceNumber) || !/^INV-\d+$/.test(inv.invoiceNumber)) return "has an invalid invoice number";
++  if (!isDate(inv.date)) return "has an invalid date";
++  if (!Array.isArray(inv.items)) return "has no item list";
++  if (inv.items.some((i) => !isObj(i) || !isNum(i.qty) || i.qty <= 0 || !isNum(i.unitPrice) || i.unitPrice < 0)) return "has an invalid item";
++  for (const key of ["subtotal", "discount", "tax", "total"]) {
++    if (!isNum(inv[key]) || inv[key] < 0) return `has an invalid ${key}`;
+   }
+-  return counter;
++  if (!Array.isArray(inv.payments)) return "has no payment list";
++  if (inv.payments.some((p) => !isObj(p) || !isNum(p.amount) || p.amount <= 0 || !isDate(p.timestamp))) return "has an invalid payment";
++  if (inv.customer != null && !isObj(inv.customer)) return "has invalid customer details";
++  return "";
++}
++
++function settingsProblem(s) {
++  for (const key of Object.keys(DEFAULT_SETTINGS)) {
++    if (s[key] !== undefined && !isStr(s[key])) return `The setting "${key}" is not valid.`;
++  }
++  if (s.paper !== undefined && !["A4", "A5"].includes(s.paper)) return "The paper size must be A4 or A5.";
++  if (s.logo && !s.logo.startsWith("data:image/")) return "The logo is not valid image data.";
++  return "";
++}
++
++function collect(list, label, problemOf, normalize, lenient, problems) {
++  const out = [];
++  list.forEach((item, i) => {
++    const candidate = lenient ? normalize(item) : item;
++    const why = candidate ? problemOf(candidate) : "is not valid";
++    if (why) problems.push(`${label} ${i + 1} ${why}.`);
++    else out.push(lenient ? candidate : normalize(item));
++  });
++  return out;
++}
++
++function firstDuplicate(values) {
++  const seen = new Set();
++  for (const v of values) {
++    if (seen.has(v)) return v;
++    seen.add(v);
++  }
++  return null;
++}
++
++// Turns raw data (file, backup or old browser storage) into application data.
++// Strict mode reports every bad entry; lenient mode (old browser data) leaves bad entries out and reports them.
++function buildData(raw, lenient) {
++  if (!isObj(raw)) return { error: "The data is not an Invoisy data object." };
++  if (!Array.isArray(raw.products)) return { error: "The products list is missing." };
++  if (!Array.isArray(raw.invoices)) return { error: "The invoices list is missing." };
++  if (!isObj(raw.settings)) return { error: "The settings are missing." };
++  if (!lenient) {
++    if (!Number.isInteger(raw.version) || raw.version < 1) return { error: "The data version is missing." };
++    if (raw.version > DATA_VERSION) return { error: `This data was made by a newer version of Invoisy (data version ${raw.version}).` };
++    if (!Number.isInteger(raw.invoiceCounter) || raw.invoiceCounter < 0) return { error: "The invoice counter is not valid." };
++    const settingsIssue = settingsProblem(raw.settings);
++    if (settingsIssue) return { error: settingsIssue };
++  }
++
++  const problems = [];
++  const products = collect(raw.products, "Product", productProblem, normalizeProduct, lenient, problems);
++  const invoices = collect(raw.invoices, "Invoice", invoiceProblem, normalizeInvoice, lenient, problems);
++
++  const dupProduct = firstDuplicate(products.map((p) => p.id));
++  if (dupProduct) return { error: `Two products share the id ${dupProduct}.` };
++  const dupInvoice = firstDuplicate(invoices.map((i) => i.id));
++  if (dupInvoice) return { error: `Two invoices share the id ${dupInvoice}.` };
++  const dupNumber = firstDuplicate(invoices.map((i) => i.invoiceNumber));
++  if (dupNumber) return { error: `Two invoices share the number ${dupNumber}.` };
++
++  const stored = Math.max(0, Math.floor(toNumber(raw.invoiceCounter)));
++  const highest = highestInvoiceNumber(invoices);
++  return {
++    problems,
++    data: {
++      products,
++      invoices,
++      settings: normalizeSettings(raw.settings),
++      counter: Math.max(stored, highest),
++      counterRecovered: highest > stored,
++      lastSaved: isStr(raw.lastSaved) ? raw.lastSaved : "",
++    },
++  };
++}
++
++function validatePersistentData(data) {
++  const built = buildData(data, false);
++  if (built.error) return [built.error];
++  const problems = [...built.problems];
++  if (built.data.counterRecovered) problems.push("The invoice counter is lower than the highest invoice number.");
++  return problems;
++}
++
++function parseDataText(text) {
++  let raw;
++  try {
++    raw = JSON.parse(text);
++  } catch {
++    return { error: "The file is not valid JSON." };
++  }
++  const built = buildData(raw, false);
++  if (built.error) return { error: built.error };
++  if (built.problems.length) {
++    const more = built.problems.length > 3 ? ` (and ${built.problems.length - 3} more)` : "";
++    return { error: built.problems.slice(0, 3).join(" ") + more };
++  }
++  return { data: built.data };
+ }
+ 
+ /* ---------- State ---------- */
+@@ -200,6 +303,7 @@ const state = {
+   invoices: [],
+   settings: { ...DEFAULT_SETTINGS },
+   counter: 0,
++  lastSaved: "",          // time stamp of the data in memory (matches the data file when connected)
+   view: "sell",
+   sale: newSale(),
+   results: [],            // products currently listed in the picker
+@@ -208,19 +312,530 @@ const state = {
+   editingId: null,        // product being edited in the Stock form
+ };
+ 
+-function loadAll() {
+-  state.products = loadProducts();
+-  state.invoices = loadInvoices();
+-  state.settings = loadSettings();
+-  state.counter = loadCounter(state.invoices);
++function applyData(d) {
++  state.products = d.products;
++  state.invoices = d.invoices;
++  state.settings = d.settings;
++  state.counter = d.counter;
++  state.lastSaved = d.lastSaved || "";
++  if (state.previewInvoice) state.previewInvoice = state.invoices.find((i) => i.id === state.previewInvoice.id) || null;
++}
++
++function draftFromState() {
++  return structuredClone({ products: state.products, invoices: state.invoices, settings: state.settings, counter: state.counter });
++}
++
++/* ---------- Persistence: one master data file ----------
++   invoisy-data.json is the source of truth. Every change is built on a copy of the data (a draft),
++   validated, written to the file and read back. Only then does the draft become the live state.
++   A copy is also kept in localStorage (MIRROR_KEY) as a fallback and recovery copy. */
++
++const FS_SUPPORTED = typeof window.showOpenFilePicker === "function" && typeof window.showSaveFilePicker === "function";
++const FILE_TYPES = [{ description: "Invoisy data", accept: { "application/json": [".json"] } }];
++
++const MSG_PERMISSION = "Invoisy no longer has permission to use the data file.";
++const MSG_MISSING = "The data file could not be found. It may have been moved or deleted.";
++
++const storage = {
++  supported: FS_SUPPORTED,
++  mode: FS_SUPPORTED ? "connecting" : "unlinked",   // connecting | connected | unlinked | disconnected
++  reason: "",                                       // why the file is disconnected
++  handle: null,
++  fileName: "",
++  mirrorOk: true,
++  ready: Promise.resolve(),
++};
++
++function defaultData() {
++  return { products: [], invoices: [], settings: { ...DEFAULT_SETTINGS }, counter: 0, lastSaved: "" };
++}
++
++function nextStamp() {
++  let t = Date.now();
++  const previous = Date.parse(state.lastSaved);
++  if (previous >= t) t = previous + 1;
++  return new Date(t).toISOString();
++}
++
++function serializeState(d, lastSaved) {
++  return {
++    version: DATA_VERSION,
++    lastSaved,
++    products: d.products,
++    invoices: d.invoices.map((inv) => {
++      const pay = paymentInfo(inv);
++      return { ...inv, amountPaid: pay.paid, remaining: pay.remaining, status: pay.cls };
++    }),
++    settings: d.settings,
++    invoiceCounter: d.counter,
++  };
++}
++
++// Serializes and validates the data. Nothing that fails here is ever written.
++function buildPayload(d, lastSaved) {
++  let text;
++  try {
++    text = JSON.stringify(serializeState(d, lastSaved), null, 2);
++  } catch {
++    return { error: "The data could not be converted to JSON, so nothing was saved." };
++  }
++  const problems = validatePersistentData(JSON.parse(text));
++  if (problems.length) return { error: "The data failed its safety check, so nothing was saved. " + problems[0] };
++  return { text, lastSaved };
++}
++
++function writeMirror(text) {
++  try {
++    localStorage.setItem(MIRROR_KEY, text);
++    return true;
++  } catch {
++    return false;
++  }
++}
++
++function readMirror() {
++  let text;
++  try {
++    text = localStorage.getItem(MIRROR_KEY);
++  } catch {
++    return {};
++  }
++  if (text === null) return {};
++  const parsed = parseDataText(text);
++  return parsed.error ? { error: parsed.error } : { data: parsed.data };
++}
++
++// Reads the pre-update localStorage keys. They are never modified or deleted.
++function migrateLegacyStorage() {
++  const parts = {};
++  const problems = [];
++  let found = false;
++  for (const key of LEGACY_KEYS) {
++    let raw;
++    try {
++      raw = localStorage.getItem(key);
++    } catch {
++      raw = null;
++    }
++    if (raw === null) continue;
++    found = true;
++    try {
++      parts[key] = JSON.parse(raw);
++    } catch {
++      problems.push(`Saved ${key} could not be read.`);
++    }
++  }
++  if (!found) return null;
++  const built = buildData({
++    products: Array.isArray(parts.products) ? parts.products : [],
++    invoices: Array.isArray(parts.invoices) ? parts.invoices : [],
++    settings: isObj(parts.settings) ? parts.settings : {},
++    invoiceCounter: parts.invoiceCounter,
++  }, true);
++  if (built.error) return { data: defaultData(), problems: [built.error] };
++  return { data: built.data, problems: [...problems, ...built.problems] };
++}
++
++// Starts from the browser copy, or migrates the old localStorage data, or starts empty.
++function loadLocalCopy() {
++  const notices = [];
++  const mirror = readMirror();
++  if (mirror.data) {
++    applyData(mirror.data);
++    return notices;
++  }
++  if (mirror.error) notices.push("The browser copy of the data could not be read and was ignored.");
++
++  const legacy = migrateLegacyStorage();
++  if (!legacy) {
++    applyData(defaultData());
++    return notices;
++  }
++  applyData(legacy.data);
++  const built = buildPayload(draftFromState(), nextStamp());
++  if (!built.error && writeMirror(built.text)) state.lastSaved = built.lastSaved;
++  else notices.push("Your existing data was loaded but could not be copied to the new storage. Export a backup now.");
++  if (legacy.problems.length) {
++    notices.push(`${legacy.problems.length} saved entries could not be read and were left out. Your original browser data was not touched.`);
++  }
++  return notices;
++}
++
++/* -- File handle memory (IndexedDB) -- */
++
++function handleStore(mode, fn) {
++  return new Promise((resolve, reject) => {
++    const open = indexedDB.open("invoisy", 1);
++    open.onupgradeneeded = () => open.result.createObjectStore("kv");
++    open.onerror = () => reject(open.error);
++    open.onsuccess = () => {
++      const tx = open.result.transaction("kv", mode);
++      const req = fn(tx.objectStore("kv"));
++      tx.oncomplete = () => { open.result.close(); resolve(req.result); };
++      tx.onerror = tx.onabort = () => reject(tx.error);
++    };
++  });
++}
++
++const loadHandle = () => handleStore("readonly", (s) => s.get("dataFile"));
++const storeHandle = (handle) => handleStore("readwrite", (s) => s.put(handle, "dataFile"));
++
++/* -- Writing the data file -- */
++
++function errorText(e) {
++  return (e && e.message) || "";
++}
++
++function setStorageMode(mode, reason) {
++  storage.mode = mode;
++  storage.reason = reason || "";
++  renderStorage();
++}
++
++function canWrite() {
++  return storage.mode === "connected" || storage.mode === "unlinked";
++}
++
++function blockedMessage() {
++  const why = storage.mode === "disconnected" ? storage.reason : "The data file is not ready yet.";
++  return why + " Nothing was changed. Reconnect the data file first (Settings, Data storage).";
++}
++
++function describeFileError(e, active) {
++  if (e && e.name === "NotFoundError") {
++    if (active) setStorageMode("disconnected", MSG_MISSING);
++    return MSG_MISSING + " Nothing was saved.";
++  }
++  if (e && e.name === "NotAllowedError") {
++    if (active) setStorageMode("disconnected", MSG_PERMISSION);
++    return MSG_PERMISSION + " Nothing was saved.";
++  }
++  return "The data file could not be written. " + errorText(e);
++}
++
++// Before writing, make sure nobody else changed the file since Invoisy last read or wrote it.
++async function checkUnchanged(handle, expectedStamp) {
++  const current = await (await handle.getFile()).text();
++  if (!current.trim()) {
++    setStorageMode("disconnected", "The data file is empty.");
++    return { error: "The data file is empty, so nothing was saved and the file was not overwritten." };
++  }
++  const parsed = parseDataText(current);
++  if (parsed.error) {
++    const reason = `The Invoisy data file could not be read. Your existing data has not been overwritten. Please check the data file or restore a backup. (${parsed.error})`;
++    setStorageMode("disconnected", reason);
++    return { error: reason };
++  }
++  if (parsed.data.lastSaved === expectedStamp) return null;
++  applyData(parsed.data);
++  storage.mirrorOk = writeMirror(current);
++  refreshAfterLoad();
++  return { error: "The data file was changed by another window or program. The latest data has been loaded and nothing was saved. Please repeat your last action." };
++}
++
++// expectedStamp: the lastSaved the file must still have (null skips the check, for a brand new file).
++async function writeToDataFile(handle, text, expectedStamp, active) {
++  try {
++    if ((await handle.queryPermission({ mode: "readwrite" })) !== "granted") {
++      if (active) setStorageMode("disconnected", MSG_PERMISSION);
++      return { error: MSG_PERMISSION + " Nothing was saved." };
++    }
++    if (expectedStamp !== null) {
++      const changed = await checkUnchanged(handle, expectedStamp);
++      if (changed) return changed;
++    }
++    const writable = await handle.createWritable();
++    try {
++      await writable.write(text);
++      await writable.close();
++    } catch (e) {
++      try { await writable.abort(); } catch { /* already closed */ }
++      throw e;
++    }
++    if ((await (await handle.getFile()).text()) !== text) {
++      return { error: "The data file could not be verified after saving. Please check the file and export a backup." };
++    }
++    return {};
++  } catch (e) {
++    return { error: describeFileError(e, active) };
++  }
++}
++
++async function persistData(draft) {
++  const built = buildPayload(draft, nextStamp());
++  if (built.error) return { error: built.error };
++
++  if (storage.mode === "connected") {
++    const written = await writeToDataFile(storage.handle, built.text, state.lastSaved, true);
++    if (written.error) return written;
++    storage.mirrorOk = writeMirror(built.text);
++    return { lastSaved: built.lastSaved, toFile: true };
++  }
++  if (!writeMirror(built.text)) {
++    storage.mirrorOk = false;
++    return { error: "Could not save data. Check that browser storage is available." };
++  }
++  storage.mirrorOk = true;
++  return { lastSaved: built.lastSaved, toFile: false };
++}
++
++/* -- Transactions: every change goes through enqueue() and commit() -- */
++
++let queue = Promise.resolve();
++function enqueue(task) {
++  const run = async () => {
++    await storage.ready;
++    return task();
++  };
++  const result = queue.then(run, run);
++  queue = result.catch(() => {});
++  return result;
++}
++
++// mutate(draft) edits a copy of the data and returns { error } to cancel, { skip: true } for "nothing to do",
++// or any extra result fields. The live state only changes after the data was saved successfully.
++function commit(mutate) {
++  return enqueue(async () => {
++    if (!canWrite()) return { error: blockedMessage() };
++    const draft = draftFromState();
++    let result;
++    try {
++      result = mutate(draft) || {};
++    } catch (e) {
++      return { error: "Something went wrong, so nothing was saved. " + errorText(e) };
++    }
++    if (result.error || result.skip) return result;
++    const saved = await persistData(draft);
++    if (saved.error) return { error: saved.error };
++    applyData({ ...draft, lastSaved: saved.lastSaved });
++    renderStorage();
++    return { ...result, toFile: saved.toFile };
++  });
++}
++
++let busy = false;
++async function guard(task) {
++  if (busy) return;
++  busy = true;
++  try {
++    await task();
++  } catch (e) {
++    notify("Something went wrong. " + errorText(e), "error");
++  } finally {
++    busy = false;
++  }
++}
++
++function savedNote(result) {
++  return result.toFile ? "" : " Saved in this browser only.";
++}
++
++/* -- Connecting a data file -- */
++
++function describeData(d) {
++  const n = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
++  return `${n(d.products.length, "product")}, ${n(d.invoices.length, "invoice")}`;
++}
++
++function reportFileProblem(message) {
++  showError("dataError", message);
++  notify(message, "error");
++  return false;
++}
++
++async function startNewFile(handle) {
++  const built = buildPayload(draftFromState(), nextStamp());
++  if (built.error) return reportFileProblem(built.error);
++  const written = await writeToDataFile(handle, built.text, null, false);
++  if (written.error) return reportFileProblem(written.error);
++
++  state.lastSaved = built.lastSaved;
++  storage.mirrorOk = writeMirror(built.text);
++  storage.handle = handle;
++  storage.fileName = handle.name;
++  let remembered = true;
++  try { await storeHandle(handle); } catch { remembered = false; }
++  showError("dataError", "");
++  setStorageMode("connected");
++  notify(remembered
++    ? `Data saved to ${handle.name}. Changes are now saved to this file automatically.`
++    : `Data saved to ${handle.name}, but this browser cannot remember the file. Choose it again next time.`);
++  return true;
++}
++
++// chosen = the person just picked this file (otherwise it is the remembered file being reopened).
++async function connectHandle(handle, chosen) {
++  const fail = (message) => (chosen ? reportFileProblem(message) : (setStorageMode("disconnected", message), false));
++
++  let text;
++  try {
++    text = await (await handle.getFile()).text();
++  } catch (e) {
++    return fail(e && e.name === "NotFoundError" ? MSG_MISSING : "The data file could not be opened. " + errorText(e));
++  }
++  if (!text.trim()) {
++    if (chosen) return startNewFile(handle);
++    return fail("The data file is empty. Your data has not been overwritten. Use Create Data File or Choose Data File to set it up again.");
++  }
++  const parsed = parseDataText(text);
++  if (parsed.error) {
++    return fail(`The Invoisy data file could not be read. Your existing data has not been overwritten. Please check the data file or restore a backup. (${parsed.error})`);
++  }
++
++  const incoming = parsed.data;
++  const hasLocal = state.products.length > 0 || state.invoices.length > 0;
++  const sameVersion = incoming.lastSaved !== "" && incoming.lastSaved === state.lastSaved;
++  const browserNewer = Date.parse(state.lastSaved) > Date.parse(incoming.lastSaved);
++  if (hasLocal && !sameVersion && (chosen || browserNewer)) {
++    const lead = chosen
++      ? `Load data from ${handle.name}?`
++      : `The data file ${handle.name} is older than the copy stored in this browser. Load the older file anyway?`;
++    const saved = (iso) => formatDateTime(iso) || "unknown";
++    const ok = confirm(`${lead}\n\nFile: ${describeData(incoming)} (saved ${saved(incoming.lastSaved)})\nBrowser: ${describeData(state)} (saved ${saved(state.lastSaved)})\n\nThe data now shown will be replaced by the data in the file. Use Export Backup first if you want to keep a copy.`);
++    if (!ok) {
++      if (!chosen) setStorageMode("disconnected", "The data file was not loaded because it is older than the copy stored in this browser. Export a backup if you need that copy.");
++      return false;
++    }
++  }
++
++  applyData(incoming);
++  storage.mirrorOk = writeMirror(text);
++  storage.handle = handle;
++  storage.fileName = handle.name;
++  let remembered = true;
++  if (chosen) {
++    try { await storeHandle(handle); } catch { remembered = false; }
++  }
++  showError("dataError", "");
++  setStorageMode("connected");
++  refreshAfterLoad();
++  const notes = [];
++  if (chosen) notes.push(`Data loaded from ${handle.name}.`);
++  if (!remembered) notes.push("This browser cannot remember the file, so choose it again next time.");
++  if (incoming.counterRecovered) notes.push("The invoice counter was corrected to match the existing invoices.");
++  if (notes.length) notify(notes.join(" "), remembered ? undefined : "error");
++  return true;
++}
++
++async function pickDataFile(create) {
++  if (!storage.supported) return;
++  let handle;
++  try {
++    if (create) handle = await window.showSaveFilePicker({ suggestedName: DATA_FILE_NAME, types: FILE_TYPES });
++    else [handle] = await window.showOpenFilePicker({ types: FILE_TYPES, multiple: false });
++    if ((await handle.requestPermission({ mode: "readwrite" })) !== "granted") {
++      reportFileProblem("Permission to change the data file was not granted.");
++      return;
++    }
++  } catch (e) {
++    if (!e || e.name !== "AbortError") reportFileProblem("The data file could not be opened. " + errorText(e));
++    return;
++  }
++  await enqueue(() => connectHandle(handle, true));
++}
++
++async function reconnect() {
++  const handle = storage.handle;
++  if (!handle) return pickDataFile(false);
++  try {
++    if ((await handle.requestPermission({ mode: "readwrite" })) !== "granted") {
++      notify("Permission to change the data file was not granted.", "error");
++      return;
++    }
++  } catch (e) {
++    notify("The data file could not be reopened. " + errorText(e), "error");
++    return;
++  }
++  await enqueue(() => connectHandle(handle, false));
++}
++
++async function initStorage(notices) {
++  if (storage.supported) {
++    let handle = null;
++    try { handle = await loadHandle(); } catch { handle = null; }
++    if (handle) {
++      storage.handle = handle;
++      storage.fileName = handle.name;
++      let granted = false;
++      try { granted = (await handle.queryPermission({ mode: "readwrite" })) === "granted"; } catch { granted = false; }
++      if (granted) await connectHandle(handle, false);
++      else setStorageMode("disconnected", "Invoisy needs your permission to open the data file again. Click Reconnect.");
++    } else {
++      setStorageMode("unlinked");
++    }
++  } else {
++    setStorageMode("unlinked");
++  }
++  if (notices.length) notify(notices.join(" "), "error");
++}
++
++function saveNow() {
++  return guard(async () => {
++    const r = await commit(() => ({}));
++    if (r.error) return reportFileProblem(r.error);
++    showError("dataError", "");
++    notify(`Data saved to ${storage.fileName}.`);
++  });
++}
++
++function exportBackup() {
++  const built = buildPayload(draftFromState(), state.lastSaved || new Date().toISOString());
++  if (built.error) { reportFileProblem(built.error); return; }
++  const pad = (n) => String(n).padStart(2, "0");
++  const now = new Date();
++  const name = `invoisy-backup-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.json`;
++  const url = URL.createObjectURL(new Blob([built.text], { type: "application/json" }));
++  const link = document.createElement("a");
++  link.href = url;
++  link.download = name;
++  document.body.appendChild(link);
++  link.click();
++  link.remove();
++  setTimeout(() => URL.revokeObjectURL(url), 1000);
++  showError("dataError", "");
++  notify(`Backup exported as ${name}.`);
++}
++
++function importBackup(file) {
++  return guard(async () => {
++    showError("dataError", "");
++    if (!file) return;
++    let text;
++    try {
++      text = await file.text();
++    } catch {
++      reportFileProblem("That file could not be read.");
++      return;
++    }
++    const parsed = parseDataText(text);
++    if (parsed.error) {
++      reportFileProblem(`That file is not a valid Invoisy backup, so nothing was changed. (${parsed.error})`);
++      return;
++    }
++    if (!canWrite()) { reportFileProblem(blockedMessage()); return; }
++    const incoming = parsed.data;
++    const saved = formatDateTime(incoming.lastSaved) || "unknown";
++    if (!confirm(`Importing this backup will replace the current Invoisy data.\n\nProducts, stock, invoices, payments, and settings will be replaced.\n\nBackup: ${describeData(incoming)} (saved ${saved})\nCurrent: ${describeData(state)}\n\nContinue?`)) return;
++
++    // The invoice counter never goes backwards, so numbers already issued are not reused.
++    const r = await commit((d) => {
++      d.products = incoming.products;
++      d.invoices = incoming.invoices;
++      d.settings = incoming.settings;
++      d.counter = Math.max(d.counter, incoming.counter);
++    });
++    if (r.error) { reportFileProblem(r.error); return; }
++    refreshAfterLoad();
++    notify("Backup imported." + savedNote(r));
++  });
+ }
+ 
+ /* ==========================================================================
+    PRODUCTS
+    ========================================================================== */
+ 
+-function findProduct(id) {
+-  return state.products.find((p) => p.id === id);
++function findProduct(id, data = state) {
++  return data.products.find((p) => p.id === id);
+ }
+ 
+ function searchProducts(query) {
+@@ -272,59 +887,73 @@ function readProductForm() {
+   };
+ }
+ 
+-function addProduct(values) {
+-  state.products.push({ id: uid(), ...values });
+-  saveProducts();
++async function addProduct(values) {
++  const r = await commit((d) => { d.products.push({ id: uid(), ...values }); });
++  if (r.error) {
++    showError("productError", r.error);
++    notify(r.error, "error");
++    return;
++  }
+   resetProductForm();
+   renderAll();
+-  notify(`${values.name} added.`);
++  notify(`${values.name} added.` + savedNote(r));
+   $("pName").focus();
+ }
+ 
+-function updateProduct(id, values) {
+-  const product = findProduct(id);
+-  if (!product) return;
+-  Object.assign(product, values);
+-  saveProducts();
++async function updateProduct(id, values) {
++  const r = await commit((d) => {
++    const product = findProduct(id, d);
++    if (!product) return { error: "That product no longer exists." };
++    Object.assign(product, values);
++  });
++  if (r.error) {
++    showError("productError", r.error);
++    notify(r.error, "error");
++    return;
++  }
+   resetProductForm();
+   renderAll();
+-  notify(`${product.name} updated.`);
++  notify(`${values.name} updated.` + savedNote(r));
+ }
+ 
+-function deleteProduct(id) {
++async function deleteProduct(id) {
+   const product = findProduct(id);
+   if (!product) return;
+   if (!confirm(`Delete "${product.name}"? This cannot be undone.`)) return;
+-  state.products = state.products.filter((p) => p.id !== id);
++  const r = await commit((d) => { d.products = d.products.filter((p) => p.id !== id); });
++  if (r.error) { notify(r.error, "error"); return; }
+   state.sale.items = state.sale.items.filter((i) => i.productId !== id);
+   if (state.selectedId === id) state.selectedId = null;
+   if (state.editingId === id) resetProductForm();
+-  saveProducts();
+   renderAll();
+-  notify(`${product.name} deleted.`);
++  notify(`${product.name} deleted.` + savedNote(r));
+ }
+ 
+-function adjustStock(id, delta) {
+-  const product = findProduct(id);
+-  if (!product) return;
+-  product.stock = Math.max(0, product.stock + delta);
+-  saveProducts();
++async function adjustStock(id, delta) {
++  const r = await commit((d) => {
++    const product = findProduct(id, d);
++    if (!product) return { skip: true };
++    product.stock = Math.max(0, product.stock + delta);
++  });
++  if (r.error) { notify(r.error, "error"); return; }
+   renderStock();
+   renderResults();
+   renderSelected();
+ }
+ 
+-function addStock(id, rawQty) {
+-  const product = findProduct(id);
+-  if (!product) return { error: "Select a product first." };
++async function addStock(id, rawQty) {
++  if (!findProduct(id)) return { error: "Select a product first." };
+   const qty = Number(rawQty);
+   if (rawQty === "" || !Number.isInteger(qty) || qty < 1) {
+     return { error: "Quantity to add must be a whole number of at least 1." };
+   }
+-  const before = product.stock;
+-  product.stock = before + qty;
+-  saveProducts();
+-  return { ok: true, message: `${product.name}: ${before} + ${qty} = ${product.stock}` };
++  return commit((d) => {
++    const product = findProduct(id, d);
++    if (!product) return { error: "That product no longer exists." };
++    const before = product.stock;
++    product.stock = before + qty;
++    return { message: `${product.name}: ${before} + ${qty} = ${product.stock}` };
++  });
+ }
+ 
+ function startEditProduct(id) {
+@@ -361,20 +990,22 @@ function clearProductErrors() {
+ }
+ 
+ function loadDemoData() {
+-  const have = new Set(state.products.map((p) => p.sku.toLowerCase()).filter(Boolean));
+-  let added = 0;
+-  for (const demo of DEMO_PRODUCTS) {
+-    if (have.has(demo.sku.toLowerCase())) continue;
+-    state.products.push({ id: uid(), ...demo });
+-    added++;
+-  }
+-  if (!added) {
+-    notify("The demo products are already in your stock.");
+-    return;
+-  }
+-  saveProducts();
+-  renderAll();
+-  notify(`${added} demo products added.`);
++  return guard(async () => {
++    const r = await commit((d) => {
++      const have = new Set(d.products.map((p) => p.sku.toLowerCase()).filter(Boolean));
++      let added = 0;
++      for (const demo of DEMO_PRODUCTS) {
++        if (have.has(demo.sku.toLowerCase())) continue;
++        d.products.push({ id: uid(), ...demo });
++        added++;
++      }
++      return added ? { added } : { skip: true };
++    });
++    if (r.error) { notify(r.error, "error"); return; }
++    if (r.skip) { notify("The demo products are already in your stock."); return; }
++    renderAll();
++    notify(`${r.added} demo products added.` + savedNote(r));
++  });
+ }
+ 
+ /* ==========================================================================
+@@ -537,11 +1168,11 @@ function clearSale() {
+    INVOICES
+    ========================================================================== */
+ 
+-function buildInvoiceData(sale, invoiceNumber, dateIso) {
++function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
+   const totals = calculateTotals(sale);
+   const paid = salePaid(sale, totals.total);
+   const items = sale.items.map((item) => {
+-    const p = findProduct(item.productId);
++    const p = findProduct(item.productId, data);
+     return {
+       productId: item.productId,
+       name: p ? p.name : "(deleted product)",
+@@ -551,7 +1182,7 @@ function buildInvoiceData(sale, invoiceNumber, dateIso) {
+       total: round2(item.qty * item.unitPrice),
+     };
+   });
+-  const s = state.settings;
++  const s = data.settings;
+   return {
+     invoiceNumber,
+     date: dateIso,
+@@ -577,60 +1208,57 @@ function draftInvoice() {
+   return buildInvoiceData(state.sale, formatInvoiceNumber(state.counter + 1), new Date().toISOString());
+ }
+ 
+-function saveInvoice(invoice) {
+-  const invoices = [...state.invoices, invoice];
+-  if (!writeStorage("invoices", invoices)) return false;
+-  state.invoices = invoices;
+-  state.counter = Math.max(state.counter, parseInt(invoice.invoiceNumber.replace(/\D/g, ""), 10));
+-  writeStorage("invoiceCounter", state.counter);
+-  return true;
+-}
+-
+ function completeSale() {
+-  // 1-2. Validate the sale and check the stock one final time.
+-  const errors = validateSale();
+-  if (errors.length) {
+-    showError("saleError", errors.join("\n"));
+-    return;
+-  }
+-  showError("saleError", "");
+-
+-  // 3-4. Calculate totals and generate the invoice number.
+-  const invoice = { id: uid(), ...buildInvoiceData(state.sale, formatInvoiceNumber(state.counter + 1), new Date().toISOString()) };
+-
+-  // 5. Save the invoice. If this fails, nothing else changes.
+-  if (!saveInvoice(invoice)) return;
++  return guard(async () => {
++    // Validate the sale and check the stock one final time.
++    const errors = validateSale();
++    if (errors.length) {
++      showError("saleError", errors.join("\n"));
++      return;
++    }
++    showError("saleError", "");
+ 
+-  // 6. Decrease the stock.
+-  for (const item of invoice.items) {
+-    const p = findProduct(item.productId);
+-    if (p) p.stock -= item.qty;
+-  }
+-  saveProducts();
++    // One transaction: invoice added + stock decreased + counter increased, saved together or not at all.
++    const sale = state.sale;
++    const r = await commit((d) => {
++      for (const item of sale.items) {
++        const p = findProduct(item.productId, d);
++        if (!p) return { error: "A product in this sale no longer exists." };
++        if (item.qty > p.stock) return { error: `${p.name}: ${stockMessage(p.stock)}` };
++      }
++      const invoice = { id: uid(), ...buildInvoiceData(sale, formatInvoiceNumber(d.counter + 1), new Date().toISOString(), d) };
++      for (const item of invoice.items) findProduct(item.productId, d).stock -= item.qty;
++      d.invoices.push(invoice);
++      d.counter = Math.max(d.counter, invoiceSequence(invoice.invoiceNumber));
++      return { invoice };
++    });
++    if (r.error) {
++      showError("saleError", r.error);
++      notify(r.error, "error");
++      return;
++    }
+ 
+-  // 7-10. Clear the sale, show the invoice, refresh the screens.
+-  clearSale();
+-  state.previewInvoice = invoice;
+-  state.selectedId = null;
+-  $("search").value = "";
+-  renderAll();
+-  notify(`Sale completed. ${invoice.invoiceNumber} saved.`);
++    clearSale();
++    state.previewInvoice = r.invoice;
++    state.selectedId = null;
++    $("search").value = "";
++    renderAll();
++    notify(`Sale completed. ${r.invoice.invoiceNumber} saved.` + savedNote(r));
++  });
+ }
+ 
+-function deleteInvoice(id) {
++async function deleteInvoice(id) {
+   const inv = state.invoices.find((i) => i.id === id);
+   if (!inv) return;
+   if (!confirm(`Delete ${inv.invoiceNumber}? Stock is not changed.`)) return;
+-  const invoices = state.invoices.filter((i) => i.id !== id);
+-  if (!writeStorage("invoices", invoices)) return;
+-  state.invoices = invoices;
+-  if (state.previewInvoice && state.previewInvoice.id === id) state.previewInvoice = null;
++  const r = await commit((d) => { d.invoices = d.invoices.filter((i) => i.id !== id); });
++  if (r.error) { notify(r.error, "error"); return; }
+   renderAll();
+-  notify(`${inv.invoiceNumber} deleted.`);
++  notify(`${inv.invoiceNumber} deleted.` + savedNote(r));
+ }
+ 
+ // Adds a cash payment (current date/time) to a saved invoice. Items and stock are never touched.
+-function addPayment(id, rawAmount) {
++async function addPayment(id, rawAmount) {
+   const inv = state.invoices.find((i) => i.id === id);
+   if (!inv) return { error: "Invoice not found." };
+   const { remaining } = paymentInfo(inv);
+@@ -639,12 +1267,12 @@ function addPayment(id, rawAmount) {
+   if (rawAmount === "" || !Number.isFinite(amount) || amount <= 0) return { error: "Enter a payment amount greater than 0." };
+   if (round2(amount) > remaining) return { error: "Payment cannot be greater than the remaining balance." };
+ 
+-  const updated = { ...inv, payments: [...inv.payments, { amount: round2(amount), timestamp: new Date().toISOString() }] };
+-  const invoices = state.invoices.map((i) => (i.id === id ? updated : i));
+-  if (!writeStorage("invoices", invoices)) return { error: "The payment could not be saved." };
+-  state.invoices = invoices;
+-  if (state.previewInvoice && state.previewInvoice.id === id) state.previewInvoice = updated;
+-  return { ok: true };
++  return commit((d) => {
++    const target = d.invoices.find((i) => i.id === id);
++    if (!target) return { error: "Invoice not found." };
++    if (round2(amount) > paymentInfo(target).remaining) return { error: "Payment cannot be greater than the remaining balance." };
++    target.payments.push({ amount: round2(amount), timestamp: new Date().toISOString() });
++  });
+ }
+ 
+ function viewInvoice(id) {
+@@ -682,13 +1310,16 @@ function renderLogoSetting() {
+   $("removeLogo").disabled = !logo;
+ }
+ 
+-function saveLogo(dataUrl) {
+-  const previous = state.settings.logo;
+-  state.settings.logo = dataUrl;
+-  if (!writeStorage("settings", state.settings)) { state.settings.logo = previous; return; }
++async function saveLogo(dataUrl) {
++  const r = await commit((d) => { d.settings.logo = dataUrl; });
++  if (r.error) {
++    showError("logoError", r.error);
++    notify(r.error, "error");
++    return;
++  }
+   renderLogoSetting();
+   renderInvoice();
+-  notify(dataUrl ? "Logo saved." : "Logo removed.");
++  notify((dataUrl ? "Logo saved." : "Logo removed.") + savedNote(r));
+ }
+ 
+ // Reads a PNG, shrinks it to fit LOGO_MAX_W x LOGO_MAX_H (never enlarges, keeps transparency) and saves it.
+@@ -997,14 +1628,75 @@ function applyPaperSize() {
+   $("paper" + paper).checked = true;
+ }
+ 
+-function savePaper(paper) {
+-  const previous = state.settings.paper;
+-  state.settings.paper = paper;
+-  if (writeStorage("settings", state.settings)) notify("Paper size set to " + paper + ".");
+-  else state.settings.paper = previous;
++async function savePaper(paper) {
++  const r = await commit((d) => { d.settings.paper = paper; });
++  if (r.error) notify(r.error, "error");
++  else notify("Paper size set to " + paper + "." + savedNote(r));
+   applyPaperSize();
+ }
+ 
++function updateBannerHeight() {
++  const banner = $("storageBanner");
++  document.documentElement.style.setProperty("--banner-h", banner.hidden ? "0px" : banner.offsetHeight + "px");
++}
++
++function renderStorage() {
++  const m = storage.mode;
++  const connected = m === "connected";
++  let text = "";
++  let action = "";
++  let label = "";
++  if (m === "unlinked") {
++    text = storage.supported
++      ? "The data file is not connected, so changes are saved in this browser only."
++      : "This browser cannot save to a data file, so changes are saved in this browser only. Use Chrome or Edge, and use Export Backup regularly.";
++    if (storage.supported) { action = "settings"; label = "Set up data file"; }
++  } else if (m === "disconnected") {
++    text = storage.reason + " Changes are blocked until the data file is reconnected.";
++    action = storage.handle ? "reconnect" : "choose";
++    label = storage.handle ? "Reconnect" : "Choose Data File";
++  }
++  const banner = $("storageBanner");
++  banner.hidden = !text;
++  banner.classList.toggle("blocked", m === "disconnected");
++  $("bannerText").textContent = text;
++  $("bannerAction").hidden = !action;
++  $("bannerAction").textContent = label;
++  $("bannerAction").dataset.action = action;
++  updateBannerHeight();
++
++  const stateText = {
++    connecting: "Checking...",
++    connected: "Connected",
++    unlinked: storage.supported ? "Not connected" : "Not available in this browser",
++    disconnected: "Disconnected",
++  }[m];
++  $("dataFile").textContent = (storage.fileName || DATA_FILE_NAME) + (connected ? "" : " (not connected)");
++  $("dataState").textContent = stateText;
++  $("dataState").className = "state-" + m;
++  $("dataSaved").textContent = state.lastSaved ? formatDateTime(state.lastSaved) + (connected ? "" : " (browser copy)") : "Never";
++  $("dataNote").textContent = (connected
++    ? "Every change is saved to this file automatically. Keep it with the Invoisy folder and back it up regularly."
++    : m === "disconnected" ? storage.reason
++    : "Changes are saved in this browser only. Use Export Backup regularly.") +
++    (storage.mirrorOk ? "" : " The browser recovery copy could not be updated.");
++  $("saveNow").disabled = !connected;
++  $("chooseData").disabled = !storage.supported;
++  $("createData").disabled = !storage.supported;
++}
++
++// Called after the in-memory data was replaced from the file, a backup or another window.
++function refreshAfterLoad() {
++  if (state.editingId && !findProduct(state.editingId)) resetProductForm();
++  if (state.selectedId && !findProduct(state.selectedId)) state.selectedId = null;
++  const notes = syncSaleWithProducts();
++  showError("saleError", "");
++  fillSettingsForm();
++  renderAll();
++  renderStorage();
++  if (notes.length) notify(notes.join(" "), "error");
++}
++
+ function renderAll() {
+   applyPaperSize();
+   applyCurrency();
+@@ -1182,16 +1874,18 @@ function bindEvents() {
+   const productForm = $("productForm");
+   productForm.addEventListener("submit", (e) => {
+     e.preventDefault();
+-    clearProductErrors();
+-    const result = readProductForm();
+-    if (result.error) {
+-      showError("productError", result.error);
+-      $(result.field).setAttribute("aria-invalid", "true");
+-      $(result.field).focus();
+-      return;
+-    }
+-    if (state.editingId) updateProduct(state.editingId, result.values);
+-    else addProduct(result.values);
++    guard(async () => {
++      clearProductErrors();
++      const result = readProductForm();
++      if (result.error) {
++        showError("productError", result.error);
++        $(result.field).setAttribute("aria-invalid", "true");
++        $(result.field).focus();
++        return;
++      }
++      if (state.editingId) await updateProduct(state.editingId, result.values);
++      else await addProduct(result.values);
++    });
+   });
+   productForm.addEventListener("input", (e) => {
+     e.target.removeAttribute("aria-invalid");
+@@ -1202,19 +1896,21 @@ function bindEvents() {
+   // Stock: add stock
+   $("restockForm").addEventListener("submit", (e) => {
+     e.preventDefault();
+-    const result = addStock($("rProduct").value, $("rQty").value.trim());
+-    if (result.error) {
+-      showError("restockError", result.error);
++    guard(async () => {
++      const result = await addStock($("rProduct").value, $("rQty").value.trim());
++      if (result.error) {
++        showError("restockError", result.error);
++        $("rQty").focus();
++        return;
++      }
++      showError("restockError", "");
++      $("rQty").value = "";
++      renderStock();
++      renderResults();
++      renderSelected();
++      notify(result.message + savedNote(result));
+       $("rQty").focus();
+-      return;
+-    }
+-    showError("restockError", "");
+-    $("rQty").value = "";
+-    renderStock();
+-    renderResults();
+-    renderSelected();
+-    notify(result.message);
+-    $("rQty").focus();
++    });
+   });
+   $("rProduct").addEventListener("change", renderRestockInfo);
+   $("rQty").addEventListener("input", () => { showError("restockError", ""); renderRestockInfo(); });
+@@ -1247,18 +1943,20 @@ function bindEvents() {
+   // Add a payment to the invoice shown in the preview
+   $("payForm").addEventListener("submit", (e) => {
+     e.preventDefault();
+-    if (!state.previewInvoice) return;
+-    const result = addPayment(state.previewInvoice.id, $("payAmount").value.trim());
+-    if (result.error) {
+-      showError("payError", result.error);
+-      $("payAmount").focus();
+-      return;
+-    }
+-    showError("payError", "");
+-    $("payAmount").value = "";
+-    renderInvoices();
+-    renderInvoice();
+-    notify("Payment added.");
++    guard(async () => {
++      if (!state.previewInvoice) return;
++      const result = await addPayment(state.previewInvoice.id, $("payAmount").value.trim());
++      if (result.error) {
++        showError("payError", result.error);
++        $("payAmount").focus();
++        return;
++      }
++      showError("payError", "");
++      $("payAmount").value = "";
++      renderInvoices();
++      renderInvoice();
++      notify("Payment added." + savedNote(result));
++    });
+   });
+   $("payAmount").addEventListener("input", () => showError("payError", ""));
+ 
+@@ -1272,39 +1970,61 @@ function bindEvents() {
+   // Settings
+   $("settingsForm").addEventListener("submit", (e) => {
+     e.preventDefault();
+-    state.settings = {
+-      ...state.settings,
+-      businessName: $("sName").value.trim(),
+-      address: $("sAddress").value.trim(),
+-      phone: $("sPhone").value.trim(),
+-      email: $("sEmail").value.trim(),
+-      currency: $("sCurrency").value.trim() || CURRENCY,
+-    };
+-    if (writeStorage("settings", state.settings)) notify("Settings saved.");
+-    fillSettingsForm();
+-    renderAll();
++    guard(async () => {
++      const r = await commit((d) => {
++        d.settings = {
++          ...d.settings,
++          businessName: $("sName").value.trim(),
++          address: $("sAddress").value.trim(),
++          phone: $("sPhone").value.trim(),
++          email: $("sEmail").value.trim(),
++          currency: $("sCurrency").value.trim() || CURRENCY,
++        };
++      });
++      if (r.error) { notify(r.error, "error"); return; }
++      notify("Settings saved." + savedNote(r));
++      fillSettingsForm();
++      renderAll();
++    });
+   });
++
++  // Data storage
++  $("chooseData").addEventListener("click", () => pickDataFile(false));
++  $("createData").addEventListener("click", () => pickDataFile(true));
++  $("saveNow").addEventListener("click", saveNow);
++  $("exportBackup").addEventListener("click", exportBackup);
++  $("importBackup").addEventListener("click", () => $("importFile").click());
++  $("importFile").addEventListener("change", (e) => { importBackup(e.target.files[0]); e.target.value = ""; });
++  $("bannerAction").addEventListener("click", () => {
++    const action = $("bannerAction").dataset.action;
++    if (action === "settings") showView("settings");
++    else if (action === "reconnect") reconnect();
++    else if (action === "choose") pickDataFile(false);
++  });
++  window.addEventListener("resize", updateBannerHeight);
+   $("loadDemo").addEventListener("click", loadDemoData);
+   $("chooseLogo").addEventListener("click", () => $("logoFile").click());
+   $("logoFile").addEventListener("change", (e) => { chooseLogo(e.target.files[0]); e.target.value = ""; });
+   $("removeLogo").addEventListener("click", () => saveLogo(""));
+   document.querySelectorAll('input[name="paper"]').forEach((r) => r.addEventListener("change", () => savePaper(r.value)));
+ 
+-  // Another tab changed the data: pick it up.
++  // Another window saved new data: pick it up (the browser copy is only written after a successful save).
+   window.addEventListener("storage", (e) => {
+-    if (e.key !== null && !["products", "invoices", "settings", "invoiceCounter"].includes(e.key)) return;
+-    loadAll();
+-    if (state.previewInvoice) state.previewInvoice = state.invoices.find((i) => i.id === state.previewInvoice.id) || null;
+-    showError("saleError", "");
+-    const notes = syncSaleWithProducts();
+-    renderAll();
+-    if (notes.length) notify(notes.join(" "), "error");
++    if (e.key !== MIRROR_KEY) return;
++    const mirror = readMirror();
++    if (!mirror.data || mirror.data.lastSaved === state.lastSaved) return;
++    applyData(mirror.data);
++    refreshAfterLoad();
+   });
+ }
+ 
+ /* ---------- Start ---------- */
+ 
+-loadAll();
++const startupNotices = loadLocalCopy();
+ bindEvents();
+ resetProductForm();
+ showView("sell");
++renderStorage();
++storage.ready = initStorage(startupNotices).catch((e) => {
++  setStorageMode("disconnected", "The data file could not be opened. " + errorText(e));
++});

@@ -10,7 +10,43 @@ Open `index.html` in a browser. No installation, no backend.
 
 ## Where data is stored
 
-Everything is saved in your browser's `localStorage` (keys: `products`, `invoices`, `settings`, `invoiceCounter`). Data stays on this computer and in this browser, and survives refreshes. Clearing the browser's site data erases it.
+Invoisy stores its persistent application data in a local `invoisy-data.json` file. The file contains inventory, invoices (with every item and every individual payment), settings, business information, logo data, paper size and invoice numbering. It is plain JSON with a `version` field, so it can be backed up, copied or inspected with any text editor.
+
+Keep `invoisy-data.json` with the Invoisy application folder and back it up regularly. If you move the folder and bring the file with it, you bring your whole business state with you.
+
+The file is intentionally excluded from Git by `.gitignore` because it holds private business data (backup files named `invoisy-backup-*.json` are excluded too). Only those names are ignored; other `.json` files are not.
+
+### Connecting the data file (once)
+
+A web page cannot silently create or find a file on your disk, so you tell Invoisy where the file is. This needs a browser with the File System Access API (Chrome or Edge).
+
+1. Go to **Settings, Data storage**.
+2. First time: click **Create Data File** and save `invoisy-data.json` in the Invoisy folder. Anything already in your browser (see Upgrading below) is written into it.
+3. Already have a file (for example after moving the folder): click **Choose Data File** and select it.
+4. Allow Invoisy to edit the file when the browser asks.
+
+From then on every change (product, stock, sale, payment, settings, logo, paper size) is written to the file straight away, and the app only says "saved" after the file was written and read back successfully. **Save Data Now** forces a save.
+
+The browser remembers the file, but it may ask for permission again after you restart it. When that happens a banner appears: click **Reconnect**. If you move the folder, choose the file again with **Choose Data File**. Until the file is connected, changes made in a browser that supports files are blocked (once a file has been linked) so the file and the browser can never drift apart.
+
+If your browser has no File System Access API (for example Firefox or Safari), or the file is not connected yet, Invoisy still works but keeps the data in the browser only. A banner says so, messages say "Saved in this browser only", and you should use **Export Backup** regularly. If the buttons are disabled when you open `index.html` directly, run `python3 -m http.server` in the folder and open http://localhost:8000 instead.
+
+### Safety
+
+- The data is validated before every write; invalid data is never written.
+- A sale is saved as one step: the invoice, the stock decrease and the invoice counter are written together, or not at all. If the save fails you get an error, nothing changes on screen, and the file is left as it was.
+- If the file is corrupted, empty or edited into an invalid state, Invoisy shows an error, does not overwrite it and does not replace it with empty data. The last browser copy stays visible for viewing and you can export it.
+- If the file was changed by another window or program since Invoisy last saved, the save is refused, the newer file data is loaded and you repeat your action.
+- The invoice counter is checked against the existing invoice numbers on every load and raised if it is too low, so numbers are never reused.
+- A copy of the data is also kept in the browser's `localStorage` (key `invoisy-data`) as a fallback. The data file always wins: whenever the file is loaded it replaces the browser copy. If the file is older than the browser copy, Invoisy asks before loading it.
+
+### Backup and restore
+
+**Export Backup** downloads the complete data as `invoisy-backup-YYYY-MM-DD.json`. **Import Backup** replaces the current data with a backup after you confirm; the backup is validated first and an invalid file changes nothing. The invoice counter never goes backwards on import.
+
+### Upgrading from the old browser-only version
+
+On the first start after this update Invoisy reads the old `products`, `invoices`, `settings` and `invoiceCounter` entries from `localStorage` and converts them to the new format. The old entries are left untouched and are no longer written to. Then create the data file as described above.
 
 ## Add products
 
@@ -44,10 +80,11 @@ Click **Print / PDF** next to the invoice (or **Print** in the Invoices list). I
 
 ## Change business details or currency
 
-**Settings** holds the business name, address, phone, email, currency (default `DA`), the invoice paper size (A4 or A5, default A4) and the store logo (**Choose Logo** / **Remove Logo**, PNG only). The logo is saved in the browser and shown above the business name on every invoice. New invoices use the current values; saved invoices keep the ones they were created with. The default currency is also the `CURRENCY` constant at the top of `script.js`.
+**Settings** holds the business name, address, phone, email, currency (default `DA`), the invoice paper size (A4 or A5, default A4) and the store logo (**Choose Logo** / **Remove Logo**, PNG only). The logo is saved in the data file (as a PNG data URL, so it moves with it) and shown above the business name on every invoice. New invoices use the current values; saved invoices keep the ones they were created with. The default currency is also the `CURRENCY` constant at the top of `script.js`.
 
 ## Files
 
 - `index.html` - page structure
-- `style.css` - styles, including the print rules
-- `script.js` - all the logic
+- `css/style.css` - styles, including the print rules
+- `java script/script.js` - all the logic, including the data file layer
+- `invoisy-data.json` - your data (created by you in Settings, not in Git)

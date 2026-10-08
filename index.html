@@ -19,6 +19,10 @@
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
   </span>
 </header>
+<div class="storage-banner no-print" id="storageBanner" role="alert" hidden>
+  <span id="bannerText"></span>
+  <button type="button" class="btn small" id="bannerAction" hidden></button>
+</div>
 <div class="app" id="app" data-view="sell">
 
   <!-- SIDEBAR -->
@@ -269,6 +273,26 @@
     <!-- SETTINGS -->
     <section class="view" id="view-settings" hidden>
       <h1>Settings</h1>
+      <div class="panel narrow">
+        <h2>Data storage</h2>
+        <dl class="data-info">
+          <dt>Persistent data</dt><dd id="dataFile"></dd>
+          <dt>Status</dt><dd id="dataState"></dd>
+          <dt>Last saved</dt><dd id="dataSaved"></dd>
+        </dl>
+        <p class="muted small" id="dataNote"></p>
+        <div class="actions left wrap">
+          <button type="button" class="btn" id="chooseData">Choose Data File</button>
+          <button type="button" class="btn" id="createData">Create Data File</button>
+          <button type="button" class="btn primary" id="saveNow">Save Data Now</button>
+        </div>
+        <div class="actions left wrap">
+          <button type="button" class="btn" id="exportBackup">Export Backup</button>
+          <button type="button" class="btn" id="importBackup">Import Backup</button>
+          <input type="file" id="importFile" accept=".json,application/json" hidden>
+        </div>
+        <p class="error" id="dataError" role="alert"></p>
+      </div>
       <div class="panel narrow">
         <h2>Business details</h2>
         <form id="settingsForm" novalidate>
