@@ -10,13 +10,13 @@
 </head>
 <body>
 <header class="topbar">
-  <button type="button" class="brand" id="brand" title="Home">
+  <button type="button" class="brand" id="brand" title="Home" data-i18n-title="nav.home">
     <span class="brand-logo" id="brandLogo" aria-hidden="true">
       <svg viewBox="0 0 24 24"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8l-5-5z"/><path d="M14 3v5h5M8 13h8M8 17h6"/></svg>
     </span>
     <span class="brand-name">Invoisy</span>
   </button>
-  <span class="account" role="img" aria-label="Account (coming soon)" title="Account (coming soon)">
+  <span class="account" role="img" aria-label="Account (coming soon)" title="Account (coming soon)" data-i18n-aria-label="account.soon" data-i18n-title="account.soon">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
   </span>
 </header>
@@ -30,19 +30,19 @@
   <nav class="sidebar" aria-label="Main">
     <button type="button" class="nav-btn" data-view="sell">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a1 1 0 0 0 1 .8h8.9a1 1 0 0 0 1-.8L20 7H6"/></svg>
-      <span>Sell</span>
+      <span data-i18n="nav.sell">Sell</span>
     </button>
     <button type="button" class="nav-btn" data-view="stock">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>
-      <span>Stock</span>
+      <span data-i18n="nav.stock">Stock</span>
     </button>
     <button type="button" class="nav-btn" data-view="invoices">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8l-5-5z"/><path d="M14 3v5h5M8 13h8M8 17h6"/></svg>
-      <span>Invoices</span>
+      <span data-i18n="nav.invoices">Invoices</span>
     </button>
     <button type="button" class="nav-btn" data-view="settings">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M19 6h1M4 12h2M12 12h8M4 18h8M18 18h2"/><circle cx="16" cy="6" r="2.5"/><circle cx="9" cy="12" r="2.5"/><circle cx="15" cy="18" r="2.5"/></svg>
-      <span>Settings</span>
+      <span data-i18n="nav.settings">Settings</span>
     </button>
   </nav>
 
@@ -50,45 +50,45 @@
 
     <!-- SELL -->
     <section class="view" id="view-sell">
-      <h1 class="sr-only">Sell</h1>
+      <h1 class="sr-only" data-i18n="nav.sell">Sell</h1>
 
       <div class="panel">
-        <h2>Add products</h2>
-        <label class="sr-only" for="search">Search products</label>
-        <input type="search" id="search" placeholder="Search products by name, SKU or category..." autocomplete="off">
-        <div class="results" id="results" role="listbox" aria-label="Products"></div>
+        <h2 data-i18n="sell.addProducts">Add products</h2>
+        <label class="sr-only" for="search" data-i18n="sell.searchLabel">Search products</label>
+        <input type="search" id="search" placeholder="Search products by name, SKU or category..." data-i18n-placeholder="sell.searchPlaceholder" autocomplete="off">
+        <div class="results" id="results" role="listbox" aria-label="Products" data-i18n-aria-label="sell.productsAria"></div>
         <form class="add-row" id="addForm" novalidate>
           <div class="selected" id="selectedInfo"></div>
           <div class="add-qty">
-            <label for="addQty">Quantity</label>
+            <label for="addQty" data-i18n="sell.quantity">Quantity</label>
             <input type="number" id="addQty" min="0" step="any" value="1">
           </div>
           <div class="add-unit">
-            <label for="addUnit">Unit</label>
+            <label for="addUnit" data-i18n="sell.unit">Unit</label>
             <select id="addUnit">
-              <option value="piece">Piece</option>
-              <option value="box">Box</option>
-              <option value="m2">m²</option>
-              <option value="kg">kg</option>
-              <option value="m">m</option>
+              <option value="piece" data-i18n="unit.piece">Piece</option>
+              <option value="box" data-i18n="unit.box">Box</option>
+              <option value="m2" data-i18n="unit.m2">m²</option>
+              <option value="kg" data-i18n="unit.kg">kg</option>
+              <option value="m" data-i18n="unit.m">m</option>
             </select>
           </div>
-          <button type="submit" class="btn primary">Add to Sale</button>
+          <button type="submit" class="btn primary" data-i18n="sell.addToSale">Add to Sale</button>
         </form>
         <p class="error" id="addError" role="alert"></p>
       </div>
 
       <div class="panel">
-        <h2>Current sale</h2>
+        <h2 data-i18n="sell.currentSale">Current sale</h2>
         <div class="table-wrap">
           <table class="table">
             <thead>
               <tr>
-                <th>Product</th>
-                <th class="num">Qty</th>
-                <th class="num">Unit price</th>
-                <th class="num">Total</th>
-                <th><span class="sr-only">Remove</span></th>
+                <th data-i18n="col.product">Product</th>
+                <th class="num" data-i18n="col.qty">Qty</th>
+                <th class="num" data-i18n="col.unitPrice">Unit price</th>
+                <th class="num" data-i18n="col.total">Total</th>
+                <th><span class="sr-only" data-i18n="common.remove">Remove</span></th>
               </tr>
             </thead>
             <tbody id="saleBody"></tbody>
@@ -97,40 +97,40 @@
 
         <div class="sale-fields">
           <fieldset>
-            <legend>Customer (optional)</legend>
+            <legend data-i18n="sell.customerLegend">Customer (optional)</legend>
             <div class="grid-2">
               <div class="field">
-                <label for="custName">Name</label>
-                <input type="text" id="custName" placeholder="Walk-in Customer" autocomplete="off">
+                <label for="custName" data-i18n="sell.name">Name</label>
+                <input type="text" id="custName" placeholder="Walk-in Customer" data-i18n-placeholder="sell.walkIn" autocomplete="off">
               </div>
               <div class="field">
-                <label for="custPhone">Phone</label>
+                <label for="custPhone" data-i18n="sell.phone">Phone</label>
                 <input type="text" id="custPhone" autocomplete="off">
               </div>
             </div>
             <div class="field">
-              <label for="custAddress">Address</label>
+              <label for="custAddress" data-i18n="sell.address">Address</label>
               <input type="text" id="custAddress" autocomplete="off">
             </div>
           </fieldset>
 
           <fieldset>
-            <legend>Discount and tax</legend>
+            <legend data-i18n="sell.discountTaxLegend">Discount and tax</legend>
             <div class="field">
-              <label for="discountValue">Discount</label>
+              <label for="discountValue" data-i18n="sell.discount">Discount</label>
               <div class="with-unit">
                 <input type="number" id="discountValue" min="0" step="any" placeholder="0">
-                <select id="discountType" aria-label="Discount type">
+                <select id="discountType" aria-label="Discount type" data-i18n-aria-label="sell.discountType">
                   <option value="amount" data-currency></option>
                   <option value="percent">%</option>
                 </select>
               </div>
             </div>
             <div class="field">
-              <label for="taxValue">Tax</label>
+              <label for="taxValue" data-i18n="sell.tax">Tax</label>
               <div class="with-unit">
                 <input type="number" id="taxValue" min="0" step="any" placeholder="0">
-                <select id="taxType" aria-label="Tax type">
+                <select id="taxType" aria-label="Tax type" data-i18n-aria-label="sell.taxType">
                   <option value="amount" data-currency></option>
                   <option value="percent">%</option>
                 </select>
@@ -140,109 +140,109 @@
         </div>
 
         <div class="totals">
-          <div><span>Subtotal</span><span id="tSubtotal"></span></div>
-          <div><span>Discount</span><span id="tDiscount"></span></div>
-          <div><span>Tax</span><span id="tTax"></span></div>
-          <div class="grand"><span>Total</span><span id="tTotal"></span></div>
-          <div class="pay-input"><label for="amountPaid">Amount Paid</label><input type="number" id="amountPaid" min="0" step="any"></div>
-          <div class="due"><span>Remaining</span><span id="tRemaining"></span></div>
-          <p class="muted small pay-hint">Leave Amount Paid empty if the customer pays in full.</p>
+          <div><span data-i18n="sell.subtotal">Subtotal</span><span id="tSubtotal"></span></div>
+          <div><span data-i18n="sell.discount">Discount</span><span id="tDiscount"></span></div>
+          <div><span data-i18n="sell.tax">Tax</span><span id="tTax"></span></div>
+          <div class="grand"><span data-i18n="sell.total">Total</span><span id="tTotal"></span></div>
+          <div class="pay-input"><label for="amountPaid" data-i18n="sell.amountPaid">Amount Paid</label><input type="number" id="amountPaid" min="0" step="any"></div>
+          <div class="due"><span data-i18n="sell.remaining">Remaining</span><span id="tRemaining"></span></div>
+          <p class="muted small pay-hint" data-i18n="sell.payHint">Leave Amount Paid empty if the customer pays in full.</p>
         </div>
 
         <p class="error" id="saleError" role="alert"></p>
         <div class="actions">
-          <button type="button" class="btn" id="clearSale">Clear</button>
-          <button type="button" class="btn primary" id="completeSale">Complete Sale</button>
+          <button type="button" class="btn" id="clearSale" data-i18n="sell.clear">Clear</button>
+          <button type="button" class="btn primary" id="completeSale" data-i18n="sell.complete">Complete Sale</button>
         </div>
       </div>
     </section>
 
     <!-- STOCK -->
     <section class="view" id="view-stock" hidden>
-      <h1 class="sr-only">Stock</h1>
+      <h1 class="sr-only" data-i18n="nav.stock">Stock</h1>
       <div class="stock-layout">
 
         <div class="panel">
           <h2 id="productFormTitle">Add product</h2>
           <form id="productForm" novalidate>
             <div class="field">
-              <label for="pName">Product name</label>
+              <label for="pName" data-i18n="stock.productName">Product name</label>
               <input type="text" id="pName" autocomplete="off">
             </div>
             <div class="grid-2">
               <div class="field">
-                <label for="pManufacturer">Manufacturer / brand <small>(optional for existing products)</small></label>
+                <label for="pManufacturer"><span data-i18n="stock.manufacturer">Manufacturer / brand</span> <small data-i18n="stock.manufacturerHint">(optional for existing products)</small></label>
                 <input type="text" id="pManufacturer" autocomplete="off">
               </div>
               <div class="field">
-                <label for="pTileSize">Tile size <small>(for example, 60*120)</small></label>
+                <label for="pTileSize"><span data-i18n="stock.tileSize">Tile size</span> <small data-i18n="stock.tileSizeHint">(for example, 60*120)</small></label>
                 <input type="text" id="pTileSize" placeholder="60*120" autocomplete="off">
               </div>
             </div>
             <div class="field">
-              <label for="pDesc">Description</label>
+              <label for="pDesc" data-i18n="stock.description">Description</label>
               <input type="text" id="pDesc" autocomplete="off">
             </div>
             <div class="grid-2 price-row">
               <div class="field">
-                <label for="pPrice">Selling price</label>
+                <label for="pPrice" data-i18n="stock.sellingPrice">Selling price</label>
                 <div class="price-with-unit">
                   <input type="number" id="pPrice" min="0" step="any">
-                  <select id="pPriceUnit" aria-label="Price unit">
-                    <option value="">Per...</option>
-                    <option value="piece" selected>per piece</option>
-                    <option value="box">per box</option>
-                    <option value="m2">per m²</option>
-                    <option value="kg">per kg</option>
-                    <option value="m">per m</option>
+                  <select id="pPriceUnit" aria-label="Price unit" data-i18n-aria-label="stock.priceUnit">
+                    <option value="" data-i18n="stock.per">Per...</option>
+                    <option value="piece" selected data-i18n="price.piece">per piece</option>
+                    <option value="box" data-i18n="price.box">per box</option>
+                    <option value="m2" data-i18n="price.m2">per m²</option>
+                    <option value="kg" data-i18n="price.kg">per kg</option>
+                    <option value="m" data-i18n="price.m">per m</option>
                   </select>
                 </div>
               </div>
               <div class="field">
-                <label for="pCost">Purchase price <small>(optional)</small></label>
+                <label for="pCost"><span data-i18n="stock.purchasePrice">Purchase price</span> <small data-i18n="stock.optional">(optional)</small></label>
                 <input type="number" id="pCost" min="0" step="any">
               </div>
             </div>
             <div class="grid-2">
               <div class="field">
-                <label for="pStock">Stock quantity</label>
+                <label for="pStock" data-i18n="stock.stockQty">Stock quantity</label>
                 <input type="number" id="pStock" min="0" step="1" value="0">
               </div>
               <div class="field">
-                <label for="pSku">SKU <small>(optional)</small></label>
+                <label for="pSku"><span data-i18n="stock.sku">SKU</span> <small data-i18n="stock.optional">(optional)</small></label>
                 <input type="text" id="pSku" autocomplete="off">
               </div>
             </div>
             <div class="field">
-              <label for="pCoveragePerBox">Coverage per box (m²) <small>(optional)</small></label>
-              <input type="number" id="pCoveragePerBox" min="0" step="any" placeholder="For example, 2.88">
+              <label for="pCoveragePerBox"><span data-i18n="stock.coverage">Coverage per box (m²)</span> <small data-i18n="stock.optional">(optional)</small></label>
+              <input type="number" id="pCoveragePerBox" min="0" step="any" placeholder="For example, 2.88" data-i18n-placeholder="stock.coveragePlaceholder">
             </div>
             <div class="field">
-              <label for="pCategory">Category <small>(optional)</small></label>
+              <label for="pCategory"><span data-i18n="stock.category">Category</span> <small data-i18n="stock.optional">(optional)</small></label>
               <input type="text" id="pCategory" list="categoryList" autocomplete="off">
               <datalist id="categoryList"></datalist>
             </div>
             <p class="error" id="productError" role="alert"></p>
             <div class="actions left">
               <button type="submit" class="btn primary" id="productSubmit">Add Product</button>
-              <button type="button" class="btn" id="productCancel" hidden>Cancel</button>
+              <button type="button" class="btn" id="productCancel" data-i18n="common.cancel" hidden>Cancel</button>
             </div>
           </form>
         </div>
 
         <div>
           <div class="panel">
-            <h2>Add stock</h2>
+            <h2 data-i18n="stock.addStockTitle">Add stock</h2>
             <form class="restock" id="restockForm" novalidate>
               <div class="field">
-                <label for="rProduct">Product</label>
+                <label for="rProduct" data-i18n="col.product">Product</label>
                 <select id="rProduct"></select>
               </div>
               <div class="field">
-                <label for="rQty">Quantity to add</label>
+                <label for="rQty" data-i18n="stock.quantityToAdd">Quantity to add</label>
                 <input type="number" id="rQty" min="1" step="1" placeholder="0">
               </div>
-              <button type="submit" class="btn primary">Add Stock</button>
+              <button type="submit" class="btn primary" data-i18n="stock.addStockBtn">Add Stock</button>
             </form>
             <p class="muted" id="restockInfo"></p>
             <p class="error" id="restockError" role="alert"></p>
@@ -250,19 +250,19 @@
 
           <div class="panel">
             <div class="panel-head">
-              <h2>Products</h2>
-              <label class="sr-only" for="stockFilter">Filter products</label>
-              <input type="search" id="stockFilter" placeholder="Filter products..." autocomplete="off">
+              <h2 data-i18n="stock.products">Products</h2>
+              <label class="sr-only" for="stockFilter" data-i18n="stock.filterLabel">Filter products</label>
+              <input type="search" id="stockFilter" placeholder="Filter products..." data-i18n-placeholder="stock.filterPlaceholder" autocomplete="off">
             </div>
             <div class="table-wrap">
               <table class="table" id="stockTable">
                 <thead>
                   <tr>
-                    <th>Product</th>
-                    <th>SKU</th>
-                    <th class="num">Price</th>
-                    <th class="num">Stock</th>
-                    <th class="num">Actions</th>
+                    <th data-i18n="col.product">Product</th>
+                    <th data-i18n="col.sku">SKU</th>
+                    <th class="num" data-i18n="col.price">Price</th>
+                    <th class="num" data-i18n="col.stock">Stock</th>
+                    <th class="num" data-i18n="col.actions">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="stockBody"></tbody>
@@ -277,25 +277,25 @@
 
     <!-- INVOICES -->
     <section class="view" id="view-invoices" hidden>
-      <h1 class="sr-only">Invoices</h1>
+      <h1 class="sr-only" data-i18n="nav.invoices">Invoices</h1>
       <div class="panel">
         <div class="panel-head">
-          <h2>Invoice history</h2>
-          <label class="sr-only" for="invoiceFilter">Search invoices</label>
-          <input type="search" id="invoiceFilter" placeholder="Search invoice, customer or phone..." autocomplete="off">
+          <h2 data-i18n="invoices.history">Invoice history</h2>
+          <label class="sr-only" for="invoiceFilter" data-i18n="invoices.searchLabel">Search invoices</label>
+          <input type="search" id="invoiceFilter" placeholder="Search invoice, customer or phone..." data-i18n-placeholder="invoices.searchPlaceholder" autocomplete="off">
         </div>
         <div class="table-wrap">
           <table class="table" id="invoiceTable">
             <thead>
               <tr>
-                <th>Invoice</th>
-                <th>Date</th>
-                <th>Customer</th>
-                <th class="num">Total</th>
-                <th class="num">Paid</th>
-                <th class="num">Remaining</th>
-                <th>Status</th>
-                <th class="num">Actions</th>
+                <th data-i18n="col.invoice">Invoice</th>
+                <th data-i18n="col.date">Date</th>
+                <th data-i18n="col.customer">Customer</th>
+                <th class="num" data-i18n="col.total">Total</th>
+                <th class="num" data-i18n="col.paid">Paid</th>
+                <th class="num" data-i18n="col.remaining">Remaining</th>
+                <th data-i18n="col.status">Status</th>
+                <th class="num" data-i18n="col.actions">Actions</th>
               </tr>
             </thead>
             <tbody id="invoiceBody"></tbody>
@@ -307,82 +307,89 @@
 
     <!-- SETTINGS -->
     <section class="view" id="view-settings" hidden>
-      <h1 class="sr-only">Settings</h1>
+      <h1 class="sr-only" data-i18n="nav.settings">Settings</h1>
       <div class="panel">
-        <h2>Data storage</h2>
+        <h2 data-i18n="settings.language">Language / Langue</h2>
+        <div class="field">
+          <label for="sLanguage" data-i18n="settings.languageLabel">Language of the app and of printed invoices</label>
+          <select id="sLanguage"></select>
+        </div>
+      </div>
+      <div class="panel">
+        <h2 data-i18n="settings.dataStorage">Data storage</h2>
         <dl class="data-info">
-          <dt>Persistent data</dt><dd id="dataFile"></dd>
-          <dt>Status</dt><dd id="dataState"></dd>
-          <dt>Last saved</dt><dd id="dataSaved"></dd>
+          <dt data-i18n="settings.persistent">Persistent data</dt><dd id="dataFile"></dd>
+          <dt data-i18n="settings.status">Status</dt><dd id="dataState"></dd>
+          <dt data-i18n="settings.lastSaved">Last saved</dt><dd id="dataSaved"></dd>
         </dl>
         <p class="muted small" id="dataNote"></p>
         <div class="actions left wrap">
-          <button type="button" class="btn" id="chooseData">Choose Data File</button>
-          <button type="button" class="btn" id="createData">Create Data File</button>
-          <button type="button" class="btn primary" id="saveNow">Save Data Now</button>
+          <button type="button" class="btn" id="chooseData" data-i18n="settings.chooseData">Choose Data File</button>
+          <button type="button" class="btn" id="createData" data-i18n="settings.createData">Create Data File</button>
+          <button type="button" class="btn primary" id="saveNow" data-i18n="settings.saveNow">Save Data Now</button>
         </div>
         <div class="actions left wrap">
-          <button type="button" class="btn" id="exportBackup">Export Backup</button>
-          <button type="button" class="btn" id="importBackup">Import Backup</button>
+          <button type="button" class="btn" id="exportBackup" data-i18n="settings.export">Export Backup</button>
+          <button type="button" class="btn" id="importBackup" data-i18n="settings.import">Import Backup</button>
           <input type="file" id="importFile" accept=".json,application/json" hidden>
         </div>
         <p class="error" id="dataError" role="alert"></p>
       </div>
       <div class="panel">
-        <h2>Business details</h2>
+        <h2 data-i18n="settings.business">Business details</h2>
         <form id="settingsForm" novalidate>
           <div class="field">
-            <label for="sName">Business name</label>
+            <label for="sName" data-i18n="settings.businessName">Business name</label>
             <input type="text" id="sName" autocomplete="off">
           </div>
           <div class="field">
-            <label for="sAddress">Address</label>
+            <label for="sAddress" data-i18n="sell.address">Address</label>
             <input type="text" id="sAddress" autocomplete="off">
           </div>
           <div class="grid-2">
             <div class="field">
-              <label for="sPhone">Phone</label>
+              <label for="sPhone" data-i18n="sell.phone">Phone</label>
               <input type="text" id="sPhone" autocomplete="off">
             </div>
             <div class="field">
-              <label for="sEmail">Email</label>
+              <label for="sEmail" data-i18n="settings.email">Email</label>
               <input type="text" id="sEmail" autocomplete="off">
             </div>
           </div>
           <div class="field">
-            <label for="sCurrency">Currency</label>
+            <label for="sCurrency" data-i18n="settings.currency">Currency</label>
             <input type="text" id="sCurrency" maxlength="8" autocomplete="off">
           </div>
           <div class="actions left">
-            <button type="submit" class="btn primary">Save Settings</button>
+            <button type="submit" class="btn primary" data-i18n="settings.save">Save Settings</button>
           </div>
         </form>
       </div>
       <div class="panel">
-        <h2>Invoice paper size</h2>
-        <div class="radio-row" role="radiogroup" aria-label="Invoice paper size">
+        <h2 data-i18n="settings.paper">Invoice paper size</h2>
+        <div class="radio-row" role="radiogroup" aria-label="Invoice paper size" data-i18n-aria-label="settings.paper">
           <label><input type="radio" name="paper" id="paperA4" value="A4"> A4</label>
           <label><input type="radio" name="paper" id="paperA5" value="A5"> A5</label>
         </div>
       </div>
       <div class="panel">
-        <h2>Store logo</h2>
+        <h2 data-i18n="settings.logo">Store logo</h2>
         <div class="logo-setting">
           <div id="logoPreview"></div>
           <div class="actions left">
             <input type="file" id="logoFile" accept="image/png" hidden>
-            <button type="button" class="btn" id="chooseLogo">Choose Logo</button>
-            <button type="button" class="btn danger" id="removeLogo">Remove Logo</button>
+            <button type="button" class="btn" id="chooseLogo" data-i18n="settings.chooseLogo">Choose Logo</button>
+            <button type="button" class="btn danger" id="removeLogo" data-i18n="settings.removeLogo">Remove Logo</button>
           </div>
         </div>
-        <p class="muted small">PNG image. It is resized to fit and shown above the business name on invoices.</p>
+        <p class="muted small" data-i18n="settings.logoNote">PNG image. It is resized to fit and shown above the business name on invoices.</p>
         <p class="error" id="logoError" role="alert"></p>
       </div>
       <div class="panel">
-        <h2>Demo data</h2>
-        <p class="muted">Add a few sample products to try the app. Products you already have are kept.</p>
+        <h2 data-i18n="settings.demo">Demo data</h2>
+        <p class="muted" data-i18n="settings.demoNote">Add a few sample products to try the app. Products you already have are kept.</p>
         <div class="actions left">
-          <button type="button" class="btn" id="loadDemo">Load Demo Data</button>
+          <button type="button" class="btn" id="loadDemo" data-i18n="settings.loadDemo">Load Demo Data</button>
         </div>
       </div>
     </section>
@@ -390,26 +397,26 @@
   </main>
 
   <!-- LIVE INVOICE PREVIEW -->
-  <aside class="preview-panel" aria-label="Invoice preview">
+  <aside class="preview-panel" aria-label="Invoice preview" data-i18n-aria-label="preview.aria">
     <div class="preview-bar no-print">
       <span class="muted" id="previewStatus"></span>
       <div class="preview-buttons">
-        <button type="button" class="btn" id="backToSale" hidden>Back to current sale</button>
-        <button type="button" class="btn primary" id="printBtn">Print / PDF</button>
+        <button type="button" class="btn" id="backToSale" data-i18n="preview.back" hidden>Back to current sale</button>
+        <button type="button" class="btn primary" id="printBtn" data-i18n="preview.print">Print / PDF</button>
       </div>
     </div>
     <div class="pay-box no-print" id="payBox" hidden>
       <div class="pay-summary">
-        <div><span>Invoice</span><strong id="payNumber"></strong></div>
-        <div><span>Total</span><span id="payTotal"></span></div>
-        <div><span>Paid</span><span id="payPaid"></span></div>
-        <div class="grand"><span>Remaining</span><span id="payRemaining"></span></div>
+        <div><span data-i18n="pay.invoice">Invoice</span><strong id="payNumber"></strong></div>
+        <div><span data-i18n="pay.total">Total</span><span id="payTotal"></span></div>
+        <div><span data-i18n="pay.paid">Paid</span><span id="payPaid"></span></div>
+        <div class="grand"><span data-i18n="pay.remaining">Remaining</span><span id="payRemaining"></span></div>
       </div>
       <form id="payForm" novalidate>
-        <label for="payAmount">New payment</label>
+        <label for="payAmount" data-i18n="pay.new">New payment</label>
         <div class="pay-row">
           <input type="number" id="payAmount" min="0" step="any">
-          <button type="submit" class="btn primary" id="payBtn">Add Payment</button>
+          <button type="submit" class="btn primary" id="payBtn" data-i18n="pay.add">Add Payment</button>
         </div>
       </form>
       <p class="error" id="payError" role="alert"></p>
@@ -421,6 +428,9 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+<script src="java script/i18n.js"></script>
+<script src="java script/lang/en.js"></script>
+<script src="java script/lang/fr.js"></script>
 <script src="java script/pricing.js"></script>
 <script src="java script/script.js"></script>
 </body>

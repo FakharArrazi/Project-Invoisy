@@ -9,7 +9,10 @@
 /* ---------- Configuration ---------- */
 
 const CURRENCY = "DA";            // default currency (can be changed in Settings)
+// These two names are saved inside invoices exactly as written here, so the data file does not depend on the
+// language. They are translated only when shown (see customerLabel and invoiceItemLabel).
 const WALK_IN = "Walk-in Customer";
+const DELETED_PRODUCT = "(deleted product)";
 const LOW_STOCK = 5;              // stock at or below this shows "Low stock"
 const LOGO_MAX_W = 320;           // stored logo size (shown at 160x100 max, 2x keeps it sharp)
 const LOGO_MAX_H = 200;
@@ -22,6 +25,7 @@ const DEFAULT_SETTINGS = {
   currency: CURRENCY,
   logo: "",                         // store logo, stored as a PNG data URL
   paper: "A4",                      // invoice paper size: "A4" or "A5"
+  language: "en",                   // language of the app and of invoices (a code registered in java script/lang/)
 };
 
 const DEMO_PRODUCTS = [
@@ -36,7 +40,19 @@ const DEMO_PRODUCTS = [
 /* ---------- Helpers ---------- */
 
 const $ = (id) => document.getElementById(id);
-const numberFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
+const t = (key, params) => I18n.t(key, params);                       // text in the current language
+const tn = (key, count, params) => I18n.tn(key, count, params);      // text with a count (singular or plural)
+
+// Numbers follow the language: 1,152.5 in English, 1 152,5 in French. French separates digit groups with a
+// narrow no-break space; it is swapped for a regular no-break space, which more fonts and PDF printers draw correctly.
+const numberFormatters = {};
+const numberFormat = {
+  format(n) {
+    const locale = I18n.locale();
+    const formatter = numberFormatters[locale] || (numberFormatters[locale] = new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }));
+    return formatter.format(n).replace(/\u202f/g, "\u00a0");
+  },
+};
 
 function round2(n) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
@@ -91,6 +107,11 @@ function showError(id, message) {
   $(id).textContent = message || "";
 }
 
+// A customer name as shown: no name, or the stored walk-in name, reads in the current language.
+function customerLabel(name) {
+  return !name || name === WALK_IN ? t("sell.walkIn") : name;
+}
+
 /* ---------- Data model ---------- */
 
 const DATA_VERSION = 1;
@@ -100,10 +121,9 @@ const LEGACY_KEYS = ["products", "invoices", "settings", "invoiceCounter"];
 const DERIVED_INVOICE_FIELDS = ["amountPaid", "remaining", "status"];   // written to the file for readability only
 // Units a line on a sale can be sold in. The unit belongs to the sale line, not to the product.
 const SELLING_UNITS = ["piece", "box", "m2", "kg", "m"];
-const UNIT_LABELS = { piece: "Piece", box: "Box", m2: "m²", kg: "kg", m: "m" };
 // m² can be typed when adding to a sale, but it is converted to boxes and never stored on a sale line.
 const SALE_LINE_UNITS = ["piece", "box", "kg", "m"];
-const unitLabel = (unit) => UNIT_LABELS[unit] || UNIT_LABELS.piece;
+const unitLabel = (unit) => t(SELLING_UNITS.includes(unit) ? "unit." + unit : "unit.piece");
 
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const isStr = (v) => typeof v === "string";
@@ -154,7 +174,7 @@ function productLabel(product) {
 function productDetails(product) {
   if (!product) return "";
   const details = [];
-  if (product.coveragePerBox != null) details.push(`${numberFormat.format(product.coveragePerBox)} m² per box`);
+  if (product.coveragePerBox != null) details.push(t("stock.coverageDetail", { n: numberFormat.format(product.coveragePerBox) }));
   return details.join(", ");
 }
 
@@ -173,7 +193,8 @@ function formatTileSize(size) {
 // Invoice wording: golden era (60 × 120) garnada
 function invoiceItemLabel(item) {
   const size = formatTileSize(item.tileSize);
-  return [item.name, size ? `(${size})` : "", item.manufacturer].filter(Boolean).join(" ");
+  const name = item.name === DELETED_PRODUCT ? t("sell.deletedProduct") : item.name;
+  return [name, size ? `(${size})` : "", item.manufacturer].filter(Boolean).join(" ");
 }
 
 // Invoices saved before payments existed are treated as fully paid at their sale date.
@@ -209,6 +230,8 @@ function normalizeSettings(stored) {
   if (!settings.currency.trim()) settings.currency = CURRENCY;
   if (!settings.logo.startsWith("data:image/")) settings.logo = "";
   if (!["A4", "A5"].includes(settings.paper)) settings.paper = "A4";
+  // An unknown language (for example from a newer data file) falls back to the default instead of blocking the file.
+  if (!I18n.has(settings.language)) settings.language = DEFAULT_SETTINGS.language;
   return settings;
 }
 
@@ -223,41 +246,43 @@ function highestInvoiceNumber(invoices) {
 /* ---------- Validation ---------- */
 
 function productProblem(p) {
-  if (!isObj(p)) return "is not an object";
-  if (!isStr(p.id) || !p.id) return "has no id";
-  if (!isStr(p.name) || !p.name.trim()) return "has no name";
-  if (p.manufacturer !== undefined && !isStr(p.manufacturer)) return "has an invalid manufacturer";
-  if (p.tileSize !== undefined && (!isStr(p.tileSize) || (p.tileSize.trim() && !isTileSize(p.tileSize)))) return "has an invalid tile size";
-  if (p.coveragePerBox !== undefined && p.coveragePerBox !== null && (!isNum(p.coveragePerBox) || p.coveragePerBox <= 0)) return "has an invalid box coverage";
-  if (!isNum(p.sellingPrice) || p.sellingPrice < 0) return "has an invalid selling price";
-  if (p.priceUnit !== undefined && p.priceUnit !== null && !Pricing.isPriceUnit(p.priceUnit)) return "has an invalid price unit";
-  if (p.purchasePrice != null && (!isNum(p.purchasePrice) || p.purchasePrice < 0)) return "has an invalid purchase price";
-  if (!Number.isInteger(p.stock) || p.stock < 0) return "has an invalid stock quantity";
+  if (!isObj(p)) return t("problem.notObject");
+  if (!isStr(p.id) || !p.id) return t("problem.noId");
+  if (!isStr(p.name) || !p.name.trim()) return t("problem.noName");
+  if (p.manufacturer !== undefined && !isStr(p.manufacturer)) return t("problem.badManufacturer");
+  if (p.tileSize !== undefined && (!isStr(p.tileSize) || (p.tileSize.trim() && !isTileSize(p.tileSize)))) return t("problem.badTileSize");
+  if (p.coveragePerBox !== undefined && p.coveragePerBox !== null && (!isNum(p.coveragePerBox) || p.coveragePerBox <= 0)) return t("problem.badCoverage");
+  if (!isNum(p.sellingPrice) || p.sellingPrice < 0) return t("problem.badPrice");
+  if (p.priceUnit !== undefined && p.priceUnit !== null && !Pricing.isPriceUnit(p.priceUnit)) return t("problem.badPriceUnit");
+  if (p.purchasePrice != null && (!isNum(p.purchasePrice) || p.purchasePrice < 0)) return t("problem.badCost");
+  if (!Number.isInteger(p.stock) || p.stock < 0) return t("problem.badStock");
   return "";
 }
 
+const AMOUNT_PROBLEMS = { subtotal: "problem.badSubtotal", discount: "problem.badDiscount", tax: "problem.badTax", total: "problem.badTotal" };
+
 function invoiceProblem(inv) {
-  if (!isObj(inv)) return "is not an object";
-  if (!isStr(inv.id) || !inv.id) return "has no id";
-  if (!isStr(inv.invoiceNumber) || !/^INV-\d+$/.test(inv.invoiceNumber)) return "has an invalid invoice number";
-  if (!isDate(inv.date)) return "has an invalid date";
-  if (!Array.isArray(inv.items)) return "has no item list";
-  if (inv.items.some((i) => !isObj(i) || !isNum(i.qty) || i.qty <= 0 || !isNum(i.unitPrice) || i.unitPrice < 0 || (i.sellingUnit !== undefined && !SELLING_UNITS.includes(i.sellingUnit)))) return "has an invalid item";
-  for (const key of ["subtotal", "discount", "tax", "total"]) {
-    if (!isNum(inv[key]) || inv[key] < 0) return `has an invalid ${key}`;
+  if (!isObj(inv)) return t("problem.notObject");
+  if (!isStr(inv.id) || !inv.id) return t("problem.noId");
+  if (!isStr(inv.invoiceNumber) || !/^INV-\d+$/.test(inv.invoiceNumber)) return t("problem.badNumber");
+  if (!isDate(inv.date)) return t("problem.badDate");
+  if (!Array.isArray(inv.items)) return t("problem.noItems");
+  if (inv.items.some((i) => !isObj(i) || !isNum(i.qty) || i.qty <= 0 || !isNum(i.unitPrice) || i.unitPrice < 0 || (i.sellingUnit !== undefined && !SELLING_UNITS.includes(i.sellingUnit)))) return t("problem.badItem");
+  for (const key of Object.keys(AMOUNT_PROBLEMS)) {
+    if (!isNum(inv[key]) || inv[key] < 0) return t(AMOUNT_PROBLEMS[key]);
   }
-  if (!Array.isArray(inv.payments)) return "has no payment list";
-  if (inv.payments.some((p) => !isObj(p) || !isNum(p.amount) || p.amount <= 0 || !isDate(p.timestamp))) return "has an invalid payment";
-  if (inv.customer != null && !isObj(inv.customer)) return "has invalid customer details";
+  if (!Array.isArray(inv.payments)) return t("problem.noPayments");
+  if (inv.payments.some((p) => !isObj(p) || !isNum(p.amount) || p.amount <= 0 || !isDate(p.timestamp))) return t("problem.badPayment");
+  if (inv.customer != null && !isObj(inv.customer)) return t("problem.badCustomer");
   return "";
 }
 
 function settingsProblem(s) {
   for (const key of Object.keys(DEFAULT_SETTINGS)) {
-    if (s[key] !== undefined && !isStr(s[key])) return `The setting "${key}" is not valid.`;
+    if (s[key] !== undefined && !isStr(s[key])) return t("problem.setting", { key });
   }
-  if (s.paper !== undefined && !["A4", "A5"].includes(s.paper)) return "The paper size must be A4 or A5.";
-  if (s.logo && !s.logo.startsWith("data:image/")) return "The logo is not valid image data.";
+  if (s.paper !== undefined && !["A4", "A5"].includes(s.paper)) return t("problem.paper");
+  if (s.logo && !s.logo.startsWith("data:image/")) return t("problem.logo");
   return "";
 }
 
@@ -265,8 +290,8 @@ function collect(list, label, problemOf, normalize, lenient, problems) {
   const out = [];
   list.forEach((item, i) => {
     const candidate = lenient ? normalize(item) : item;
-    const why = candidate ? problemOf(candidate) : "is not valid";
-    if (why) problems.push(`${label} ${i + 1} ${why}.`);
+    const why = candidate ? problemOf(candidate) : t("problem.notValid");
+    if (why) problems.push(t("problem.entry", { label, n: i + 1, why }));
     else out.push(lenient ? candidate : normalize(item));
   });
   return out;
@@ -284,28 +309,28 @@ function firstDuplicate(values) {
 // Turns raw data (file, backup or old browser storage) into application data.
 // Strict mode reports every bad entry; lenient mode (old browser data) leaves bad entries out and reports them.
 function buildData(raw, lenient) {
-  if (!isObj(raw)) return { error: "The data is not an Invoisy data object." };
-  if (!Array.isArray(raw.products)) return { error: "The products list is missing." };
-  if (!Array.isArray(raw.invoices)) return { error: "The invoices list is missing." };
-  if (!isObj(raw.settings)) return { error: "The settings are missing." };
+  if (!isObj(raw)) return { error: t("data.notObject") };
+  if (!Array.isArray(raw.products)) return { error: t("data.noProducts") };
+  if (!Array.isArray(raw.invoices)) return { error: t("data.noInvoices") };
+  if (!isObj(raw.settings)) return { error: t("data.noSettings") };
   if (!lenient) {
-    if (!Number.isInteger(raw.version) || raw.version < 1) return { error: "The data version is missing." };
-    if (raw.version > DATA_VERSION) return { error: `This data was made by a newer version of Invoisy (data version ${raw.version}).` };
-    if (!Number.isInteger(raw.invoiceCounter) || raw.invoiceCounter < 0) return { error: "The invoice counter is not valid." };
+    if (!Number.isInteger(raw.version) || raw.version < 1) return { error: t("data.noVersion") };
+    if (raw.version > DATA_VERSION) return { error: t("data.newerVersion", { version: raw.version }) };
+    if (!Number.isInteger(raw.invoiceCounter) || raw.invoiceCounter < 0) return { error: t("data.badCounter") };
     const settingsIssue = settingsProblem(raw.settings);
     if (settingsIssue) return { error: settingsIssue };
   }
 
   const problems = [];
-  const products = collect(raw.products, "Product", productProblem, normalizeProduct, lenient, problems);
-  const invoices = collect(raw.invoices, "Invoice", invoiceProblem, normalizeInvoice, lenient, problems);
+  const products = collect(raw.products, t("problem.label.product"), productProblem, normalizeProduct, lenient, problems);
+  const invoices = collect(raw.invoices, t("problem.label.invoice"), invoiceProblem, normalizeInvoice, lenient, problems);
 
   const dupProduct = firstDuplicate(products.map((p) => p.id));
-  if (dupProduct) return { error: `Two products share the id ${dupProduct}.` };
+  if (dupProduct) return { error: t("data.dupProduct", { id: dupProduct }) };
   const dupInvoice = firstDuplicate(invoices.map((i) => i.id));
-  if (dupInvoice) return { error: `Two invoices share the id ${dupInvoice}.` };
+  if (dupInvoice) return { error: t("data.dupInvoice", { id: dupInvoice }) };
   const dupNumber = firstDuplicate(invoices.map((i) => i.invoiceNumber));
-  if (dupNumber) return { error: `Two invoices share the number ${dupNumber}.` };
+  if (dupNumber) return { error: t("data.dupNumber", { number: dupNumber }) };
 
   const stored = Math.max(0, Math.floor(toNumber(raw.invoiceCounter)));
   const highest = highestInvoiceNumber(invoices);
@@ -326,7 +351,7 @@ function validatePersistentData(data) {
   const built = buildData(data, false);
   if (built.error) return [built.error];
   const problems = [...built.problems];
-  if (built.data.counterRecovered) problems.push("The invoice counter is lower than the highest invoice number.");
+  if (built.data.counterRecovered) problems.push(t("data.counterLow"));
   return problems;
 }
 
@@ -335,12 +360,12 @@ function parseDataText(text) {
   try {
     raw = JSON.parse(text);
   } catch {
-    return { error: "The file is not valid JSON." };
+    return { error: t("data.notJson") };
   }
   const built = buildData(raw, false);
   if (built.error) return { error: built.error };
   if (built.problems.length) {
-    const more = built.problems.length > 3 ? ` (and ${built.problems.length - 3} more)` : "";
+    const more = built.problems.length > 3 ? t("data.andMore", { n: built.problems.length - 3 }) : "";
     return { error: built.problems.slice(0, 3).join(" ") + more };
   }
   return { data: built.data };
@@ -378,6 +403,7 @@ function applyData(d) {
   state.settings = d.settings;
   state.counter = d.counter;
   state.lastSaved = d.lastSaved || "";
+  I18n.setLanguage(state.settings.language);
   if (state.previewInvoice) state.previewInvoice = state.invoices.find((i) => i.id === state.previewInvoice.id) || null;
 }
 
@@ -393,8 +419,8 @@ function draftFromState() {
 const FS_SUPPORTED = typeof window.showOpenFilePicker === "function" && typeof window.showSaveFilePicker === "function";
 const FILE_TYPES = [{ description: "Invoisy data", accept: { "application/json": [".json"] } }];
 
-const MSG_PERMISSION = "Invoisy no longer has permission to use the data file.";
-const MSG_MISSING = "The data file could not be found. It may have been moved or deleted.";
+const msgPermission = () => t("storage.permission");
+const msgMissing = () => t("storage.missing");
 
 const storage = {
   supported: FS_SUPPORTED,
@@ -437,10 +463,10 @@ function buildPayload(d, lastSaved) {
   try {
     text = JSON.stringify(serializeState(d, lastSaved), null, 2);
   } catch {
-    return { error: "The data could not be converted to JSON, so nothing was saved." };
+    return { error: t("storage.jsonFailed") };
   }
   const problems = validatePersistentData(JSON.parse(text));
-  if (problems.length) return { error: "The data failed its safety check, so nothing was saved. " + problems[0] };
+  if (problems.length) return { error: t("storage.safetyFailed", { problem: problems[0] }) };
   return { text, lastSaved };
 }
 
@@ -504,7 +530,7 @@ function loadLocalCopy() {
     applyData(mirror.data);
     return notices;
   }
-  if (mirror.error) notices.push("The browser copy of the data could not be read and was ignored.");
+  if (mirror.error) notices.push(t("storage.mirrorUnreadable"));
 
   const legacy = migrateLegacyStorage();
   if (!legacy) {
@@ -514,9 +540,9 @@ function loadLocalCopy() {
   applyData(legacy.data);
   const built = buildPayload(draftFromState(), nextStamp());
   if (!built.error && writeMirror(built.text)) state.lastSaved = built.lastSaved;
-  else notices.push("Your existing data was loaded but could not be copied to the new storage. Export a backup now.");
+  else notices.push(t("storage.migrateFailed"));
   if (legacy.problems.length) {
-    notices.push(`${legacy.problems.length} saved entries could not be read and were left out. Your original browser data was not touched.`);
+    notices.push(t("storage.entriesSkipped", { n: legacy.problems.length }));
   }
   return notices;
 }
@@ -557,32 +583,32 @@ function canWrite() {
 }
 
 function blockedMessage() {
-  const why = storage.mode === "disconnected" ? storage.reason : "The data file is not ready yet.";
-  return why + " Nothing was changed. Reconnect the data file first (Settings, Data storage).";
+  const why = storage.mode === "disconnected" ? storage.reason : t("storage.notReady");
+  return t("storage.blocked", { reason: why });
 }
 
 function describeFileError(e, active) {
   if (e && e.name === "NotFoundError") {
-    if (active) setStorageMode("disconnected", MSG_MISSING);
-    return MSG_MISSING + " Nothing was saved.";
+    if (active) setStorageMode("disconnected", msgMissing());
+    return t("storage.nothingSaved", { reason: msgMissing() });
   }
   if (e && e.name === "NotAllowedError") {
-    if (active) setStorageMode("disconnected", MSG_PERMISSION);
-    return MSG_PERMISSION + " Nothing was saved.";
+    if (active) setStorageMode("disconnected", msgPermission());
+    return t("storage.nothingSaved", { reason: msgPermission() });
   }
-  return "The data file could not be written. " + errorText(e);
+  return t("storage.writeFailed", { error: errorText(e) });
 }
 
 // Before writing, make sure nobody else changed the file since Invoisy last read or wrote it.
 async function checkUnchanged(handle, expectedStamp) {
   const current = await (await handle.getFile()).text();
   if (!current.trim()) {
-    setStorageMode("disconnected", "The data file is empty.");
-    return { error: "The data file is empty, so nothing was saved and the file was not overwritten." };
+    setStorageMode("disconnected", t("storage.empty"));
+    return { error: t("storage.emptyNotOverwritten") };
   }
   const parsed = parseDataText(current);
   if (parsed.error) {
-    const reason = `The Invoisy data file could not be read. Your existing data has not been overwritten. Please check the data file or restore a backup. (${parsed.error})`;
+    const reason = t("storage.unreadable", { error: parsed.error });
     setStorageMode("disconnected", reason);
     return { error: reason };
   }
@@ -590,15 +616,15 @@ async function checkUnchanged(handle, expectedStamp) {
   applyData(parsed.data);
   storage.mirrorOk = writeMirror(current);
   refreshAfterLoad();
-  return { error: "The data file was changed by another window or program. The latest data has been loaded and nothing was saved. Please repeat your last action." };
+  return { error: t("storage.changedElsewhere") };
 }
 
 // expectedStamp: the lastSaved the file must still have (null skips the check, for a brand new file).
 async function writeToDataFile(handle, text, expectedStamp, active) {
   try {
     if ((await handle.queryPermission({ mode: "readwrite" })) !== "granted") {
-      if (active) setStorageMode("disconnected", MSG_PERMISSION);
-      return { error: MSG_PERMISSION + " Nothing was saved." };
+      if (active) setStorageMode("disconnected", msgPermission());
+      return { error: t("storage.nothingSaved", { reason: msgPermission() }) };
     }
     if (expectedStamp !== null) {
       const changed = await checkUnchanged(handle, expectedStamp);
@@ -613,7 +639,7 @@ async function writeToDataFile(handle, text, expectedStamp, active) {
       throw e;
     }
     if ((await (await handle.getFile()).text()) !== text) {
-      return { error: "The data file could not be verified after saving. Please check the file and export a backup." };
+      return { error: t("storage.verifyFailed") };
     }
     return {};
   } catch (e) {
@@ -633,7 +659,7 @@ async function persistData(draft) {
   }
   if (!writeMirror(built.text)) {
     storage.mirrorOk = false;
-    return { error: "Could not save data. Check that browser storage is available." };
+    return { error: t("storage.browserSaveFailed") };
   }
   storage.mirrorOk = true;
   return { lastSaved: built.lastSaved, toFile: false };
@@ -662,7 +688,7 @@ function commit(mutate) {
     try {
       result = mutate(draft) || {};
     } catch (e) {
-      return { error: "Something went wrong, so nothing was saved. " + errorText(e) };
+      return { error: t("app.somethingWrongNotSaved", { error: errorText(e) }) };
     }
     if (result.error || result.skip) return result;
     const saved = await persistData(draft);
@@ -680,21 +706,20 @@ async function guard(task) {
   try {
     await task();
   } catch (e) {
-    notify("Something went wrong. " + errorText(e), "error");
+    notify(t("app.somethingWrong", { error: errorText(e) }), "error");
   } finally {
     busy = false;
   }
 }
 
 function savedNote(result) {
-  return result.toFile ? "" : " Saved in this browser only.";
+  return result.toFile ? "" : t("storage.savedBrowserOnly");
 }
 
 /* -- Connecting a data file -- */
 
 function describeData(d) {
-  const n = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
-  return `${n(d.products.length, "product")}, ${n(d.invoices.length, "invoice")}`;
+  return `${tn("storage.countProducts", d.products.length)}, ${tn("storage.countInvoices", d.invoices.length)}`;
 }
 
 function reportFileProblem(message) {
@@ -718,8 +743,8 @@ async function startNewFile(handle) {
   showError("dataError", "");
   setStorageMode("connected");
   notify(remembered
-    ? `Data saved to ${handle.name}. Changes are now saved to this file automatically.`
-    : `Data saved to ${handle.name}, but this browser cannot remember the file. Choose it again next time.`);
+    ? t("storage.fileSaved", { file: handle.name })
+    : t("storage.fileSavedNoMemory", { file: handle.name }));
   return true;
 }
 
@@ -731,15 +756,15 @@ async function connectHandle(handle, chosen) {
   try {
     text = await (await handle.getFile()).text();
   } catch (e) {
-    return fail(e && e.name === "NotFoundError" ? MSG_MISSING : "The data file could not be opened. " + errorText(e));
+    return fail(e && e.name === "NotFoundError" ? msgMissing() : t("storage.cannotOpen", { error: errorText(e) }));
   }
   if (!text.trim()) {
     if (chosen) return startNewFile(handle);
-    return fail("The data file is empty. Your data has not been overwritten. Use Create Data File or Choose Data File to set it up again.");
+    return fail(t("storage.emptyReconnect"));
   }
   const parsed = parseDataText(text);
   if (parsed.error) {
-    return fail(`The Invoisy data file could not be read. Your existing data has not been overwritten. Please check the data file or restore a backup. (${parsed.error})`);
+    return fail(t("storage.unreadable", { error: parsed.error }));
   }
 
   const incoming = parsed.data;
@@ -748,12 +773,16 @@ async function connectHandle(handle, chosen) {
   const browserNewer = Date.parse(state.lastSaved) > Date.parse(incoming.lastSaved);
   if (hasLocal && !sameVersion && (chosen || browserNewer)) {
     const lead = chosen
-      ? `Load data from ${handle.name}?`
-      : `The data file ${handle.name} is older than the copy stored in this browser. Load the older file anyway?`;
-    const saved = (iso) => formatDateTime(iso) || "unknown";
-    const ok = confirm(`${lead}\n\nFile: ${describeData(incoming)} (saved ${saved(incoming.lastSaved)})\nBrowser: ${describeData(state)} (saved ${saved(state.lastSaved)})\n\nThe data now shown will be replaced by the data in the file. Use Export Backup first if you want to keep a copy.`);
+      ? t("storage.confirmLoadChosen", { file: handle.name })
+      : t("storage.confirmLoadOlder", { file: handle.name });
+    const saved = (iso) => formatDateTime(iso) || t("storage.unknown");
+    const ok = confirm(t("storage.confirmLoadBody", {
+      lead,
+      file: describeData(incoming), fileSaved: saved(incoming.lastSaved),
+      browser: describeData(state), browserSaved: saved(state.lastSaved),
+    }));
     if (!ok) {
-      if (!chosen) setStorageMode("disconnected", "The data file was not loaded because it is older than the copy stored in this browser. Export a backup if you need that copy.");
+      if (!chosen) setStorageMode("disconnected", t("storage.olderNotLoaded"));
       return false;
     }
   }
@@ -770,9 +799,9 @@ async function connectHandle(handle, chosen) {
   setStorageMode("connected");
   refreshAfterLoad();
   const notes = [];
-  if (chosen) notes.push(`Data loaded from ${handle.name}.`);
-  if (!remembered) notes.push("This browser cannot remember the file, so choose it again next time.");
-  if (incoming.counterRecovered) notes.push("The invoice counter was corrected to match the existing invoices.");
+  if (chosen) notes.push(t("storage.loadedFrom", { file: handle.name }));
+  if (!remembered) notes.push(t("storage.cannotRemember"));
+  if (incoming.counterRecovered) notes.push(t("storage.counterFixed"));
   if (notes.length) notify(notes.join(" "), remembered ? undefined : "error");
   return true;
 }
@@ -784,11 +813,11 @@ async function pickDataFile(create) {
     if (create) handle = await window.showSaveFilePicker({ suggestedName: DATA_FILE_NAME, types: FILE_TYPES });
     else [handle] = await window.showOpenFilePicker({ types: FILE_TYPES, multiple: false });
     if ((await handle.requestPermission({ mode: "readwrite" })) !== "granted") {
-      reportFileProblem("Permission to change the data file was not granted.");
+      reportFileProblem(t("storage.notGranted"));
       return;
     }
   } catch (e) {
-    if (!e || e.name !== "AbortError") reportFileProblem("The data file could not be opened. " + errorText(e));
+    if (!e || e.name !== "AbortError") reportFileProblem(t("storage.cannotOpen", { error: errorText(e) }));
     return;
   }
   await enqueue(() => connectHandle(handle, true));
@@ -799,11 +828,11 @@ async function reconnect() {
   if (!handle) return pickDataFile(false);
   try {
     if ((await handle.requestPermission({ mode: "readwrite" })) !== "granted") {
-      notify("Permission to change the data file was not granted.", "error");
+      notify(t("storage.notGranted"), "error");
       return;
     }
   } catch (e) {
-    notify("The data file could not be reopened. " + errorText(e), "error");
+    notify(t("storage.cannotReopen", { error: errorText(e) }), "error");
     return;
   }
   await enqueue(() => connectHandle(handle, false));
@@ -819,7 +848,7 @@ async function initStorage(notices) {
       let granted = false;
       try { granted = (await handle.queryPermission({ mode: "readwrite" })) === "granted"; } catch { granted = false; }
       if (granted) await connectHandle(handle, false);
-      else setStorageMode("disconnected", "Invoisy needs your permission to open the data file again. Click Reconnect.");
+      else setStorageMode("disconnected", t("storage.needPermission"));
     } else {
       setStorageMode("unlinked");
     }
@@ -834,7 +863,7 @@ function saveNow() {
     const r = await commit(() => ({}));
     if (r.error) return reportFileProblem(r.error);
     showError("dataError", "");
-    notify(`Data saved to ${storage.fileName}.`);
+    notify(t("storage.savedTo", { file: storage.fileName }));
   });
 }
 
@@ -853,7 +882,7 @@ function exportBackup() {
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   showError("dataError", "");
-  notify(`Backup exported as ${name}.`);
+  notify(t("storage.backupExported", { name }));
 }
 
 function importBackup(file) {
@@ -864,18 +893,18 @@ function importBackup(file) {
     try {
       text = await file.text();
     } catch {
-      reportFileProblem("That file could not be read.");
+      reportFileProblem(t("storage.fileUnreadable"));
       return;
     }
     const parsed = parseDataText(text);
     if (parsed.error) {
-      reportFileProblem(`That file is not a valid Invoisy backup, so nothing was changed. (${parsed.error})`);
+      reportFileProblem(t("storage.badBackup", { error: parsed.error }));
       return;
     }
     if (!canWrite()) { reportFileProblem(blockedMessage()); return; }
     const incoming = parsed.data;
-    const saved = formatDateTime(incoming.lastSaved) || "unknown";
-    if (!confirm(`Importing this backup will replace the current Invoisy data.\n\nProducts, stock, invoices, payments, and settings will be replaced.\n\nBackup: ${describeData(incoming)} (saved ${saved})\nCurrent: ${describeData(state)}\n\nContinue?`)) return;
+    const saved = formatDateTime(incoming.lastSaved) || t("storage.unknown");
+    if (!confirm(t("storage.confirmImport", { backup: describeData(incoming), saved, current: describeData(state) }))) return;
 
     // The invoice counter never goes backwards, so numbers already issued are not reused.
     const r = await commit((d) => {
@@ -886,7 +915,7 @@ function importBackup(file) {
     });
     if (r.error) { reportFileProblem(r.error); return; }
     refreshAfterLoad();
-    notify("Backup imported." + savedNote(r));
+    notify(t("storage.backupImported") + savedNote(r));
   });
 }
 
@@ -935,39 +964,39 @@ function readProductForm() {
   const fail = (field, error) => ({ field, error });
 
   const name = get("pName");
-  if (!name) return fail("pName", "Product name is required.");
+  if (!name) return fail("pName", t("product.nameRequired"));
   const tileSizeRaw = get("pTileSize");
-  if (tileSizeRaw && !isTileSize(tileSizeRaw)) return fail("pTileSize", "Tile size must look like 60*120.");
+  if (tileSizeRaw && !isTileSize(tileSizeRaw)) return fail("pTileSize", t("product.tileSizeFormat"));
   const tileSize = tileSizeRaw ? normalizeTileSize(tileSizeRaw) : "";
   const coverageRaw = get("pCoveragePerBox");
   const coveragePerBox = Number(coverageRaw);
   if (coverageRaw !== "" && (!Number.isFinite(coveragePerBox) || coveragePerBox <= 0)) {
-    return fail("pCoveragePerBox", "Coverage per box must be greater than 0.");
+    return fail("pCoveragePerBox", t("product.coverageGreater"));
   }
 
   const priceRaw = get("pPrice");
   const price = Number(priceRaw);
-  if (priceRaw === "" || !Number.isFinite(price)) return fail("pPrice", "Selling price is required.");
-  if (price < 0) return fail("pPrice", "Selling price can't be negative.");
+  if (priceRaw === "" || !Number.isFinite(price)) return fail("pPrice", t("product.priceRequired"));
+  if (price < 0) return fail("pPrice", t("product.priceNegative"));
 
   const priceUnit = get("pPriceUnit");
-  if (!Pricing.isPriceUnit(priceUnit)) return fail("pPriceUnit", "Choose what the selling price is per.");
+  if (!Pricing.isPriceUnit(priceUnit)) return fail("pPriceUnit", t("product.chooseUnit"));
   if (priceUnit === "m2" && coverageRaw === "") {
-    return fail("pCoveragePerBox", "Coverage per box is needed when the price is per m².");
+    return fail("pCoveragePerBox", t("product.coverageNeeded"));
   }
 
   const costRaw = get("pCost");
   const cost = Number(costRaw);
-  if (costRaw !== "" && (!Number.isFinite(cost) || cost < 0)) return fail("pCost", "Purchase price can't be negative.");
+  if (costRaw !== "" && (!Number.isFinite(cost) || cost < 0)) return fail("pCost", t("product.costNegative"));
 
   const stockRaw = get("pStock");
   const stock = stockRaw === "" ? 0 : Number(stockRaw);
-  if (!Number.isInteger(stock) || stock < 0) return fail("pStock", "Stock must be a whole number, 0 or more.");
+  if (!Number.isInteger(stock) || stock < 0) return fail("pStock", t("product.stockWhole"));
 
   const sku = get("pSku");
   if (sku) {
     const clash = state.products.find((p) => p.id !== state.editingId && p.sku.toLowerCase() === sku.toLowerCase());
-    if (clash) return fail("pSku", `SKU "${sku}" is already used by ${clash.name}.`);
+    if (clash) return fail("pSku", t("product.skuUsed", { sku, name: clash.name }));
   }
 
   return {
@@ -996,14 +1025,14 @@ async function addProduct(values) {
   }
   resetProductForm();
   renderAll();
-  notify(`${productLabel(values)} added.` + savedNote(r));
+  notify(t("product.added", { label: productLabel(values) }) + savedNote(r));
   $("pName").focus();
 }
 
 async function updateProduct(id, values) {
   const r = await commit((d) => {
     const product = findProduct(id, d);
-    if (!product) return { error: "That product no longer exists." };
+    if (!product) return { error: t("product.gone") };
     Object.assign(product, values);
   });
   if (r.error) {
@@ -1013,20 +1042,20 @@ async function updateProduct(id, values) {
   }
   resetProductForm();
   renderAll();
-  notify(`${productLabel(values)} updated.` + savedNote(r));
+  notify(t("product.updated", { label: productLabel(values) }) + savedNote(r));
 }
 
 async function deleteProduct(id) {
   const product = findProduct(id);
   if (!product) return;
-  if (!confirm(`Delete "${product.name}"? This cannot be undone.`)) return;
+  if (!confirm(t("product.confirmDelete", { name: product.name }))) return;
   const r = await commit((d) => { d.products = d.products.filter((p) => p.id !== id); });
   if (r.error) { notify(r.error, "error"); return; }
   state.sale.items = state.sale.items.filter((i) => i.productId !== id);
   if (state.selectedId === id) state.selectedId = null;
   if (state.editingId === id) resetProductForm();
   renderAll();
-  notify(`${product.name} deleted.` + savedNote(r));
+  notify(t("product.deleted", { name: product.name }) + savedNote(r));
 }
 
 async function adjustStock(id, delta) {
@@ -1042,14 +1071,14 @@ async function adjustStock(id, delta) {
 }
 
 async function addStock(id, rawQty) {
-  if (!findProduct(id)) return { error: "Select a product first." };
+  if (!findProduct(id)) return { error: t("product.selectFirst") };
   const qty = Number(rawQty);
   if (rawQty === "" || !Number.isInteger(qty) || qty < 1) {
-    return { error: "Quantity to add must be a whole number of at least 1." };
+    return { error: t("restock.qtyWhole") };
   }
   return commit((d) => {
     const product = findProduct(id, d);
-    if (!product) return { error: "That product no longer exists." };
+    if (!product) return { error: t("product.gone") };
     const before = product.stock;
     product.stock = before + qty;
     return { message: `${product.name}: ${before} + ${qty} = ${product.stock}` };
@@ -1071,9 +1100,7 @@ function startEditProduct(id) {
   $("pStock").value = p.stock;
   $("pSku").value = p.sku;
   $("pCategory").value = p.category;
-  $("productFormTitle").textContent = "Edit product";
-  $("productSubmit").textContent = "Save Changes";
-  $("productCancel").hidden = false;
+  renderProductFormMode();
   clearProductErrors();
   $("pName").focus();
 }
@@ -1082,15 +1109,36 @@ function resetProductForm() {
   state.editingId = null;
   $("productForm").reset();
   $("pStock").value = 0;
-  $("productFormTitle").textContent = "Add product";
-  $("productSubmit").textContent = "Add Product";
-  $("productCancel").hidden = true;
+  renderProductFormMode();
   clearProductErrors();
+}
+
+// The Stock form's title and buttons depend on whether a product is being edited.
+function renderProductFormMode() {
+  const editing = Boolean(state.editingId);
+  $("productFormTitle").textContent = t(editing ? "stock.editProduct" : "stock.addProduct");
+  $("productSubmit").textContent = t(editing ? "stock.saveChanges" : "stock.addProductBtn");
+  $("productCancel").hidden = !editing;
 }
 
 function clearProductErrors() {
   showError("productError", "");
   $("productForm").querySelectorAll("[aria-invalid]").forEach((el) => el.removeAttribute("aria-invalid"));
+}
+
+// Demo products are saved in the language that is active when they are loaded.
+function localizedDemo(demo) {
+  const pick = (key, fallback) => {
+    const text = t(key);
+    return text === key ? fallback : text;
+  };
+  const id = "demo." + demo.sku;
+  return {
+    ...demo,
+    name: pick(id + ".name", demo.name),
+    ...(demo.description ? { description: pick(id + ".description", demo.description) } : {}),
+    category: pick("demo.cat." + demo.category.toLowerCase(), demo.category),
+  };
 }
 
 function loadDemoData() {
@@ -1100,15 +1148,15 @@ function loadDemoData() {
       let added = 0;
       for (const demo of DEMO_PRODUCTS) {
         if (have.has(demo.sku.toLowerCase())) continue;
-        d.products.push(normalizeProduct({ id: uid(), ...demo }));
+        d.products.push(normalizeProduct({ id: uid(), ...localizedDemo(demo) }));
         added++;
       }
       return added ? { added } : { skip: true };
     });
     if (r.error) { notify(r.error, "error"); return; }
-    if (r.skip) { notify("The demo products are already in your stock."); return; }
+    if (r.skip) { notify(t("demo.already")); return; }
     renderAll();
-    notify(`${r.added} demo products added.` + savedNote(r));
+    notify(tn("demo.added", r.added) + savedNote(r));
   });
 }
 
@@ -1135,25 +1183,25 @@ function totalsByProduct(items) {
 }
 
 function stockMessage(available, inSale) {
-  return `Not enough stock. Available quantity: ${available}.` + (inSale ? ` ${inSale} already in this sale.` : "");
+  return t("sale.stockLow", { available }) + (inSale ? t("sale.stockInSale", { n: inSale }) : "");
 }
 
 function addToSale(productId, rawQty, rawUnit) {
   const product = findProduct(productId);
-  if (!product) return { error: "Select a product first." };
+  if (!product) return { error: t("product.selectFirst") };
   let qty = Number(rawQty);
   let sellingUnit = SALE_LINE_UNITS.includes(rawUnit) ? rawUnit : "piece";
   let converted = null;
   if (rawUnit === "m2") {
     // Typed in m²: work out how many whole boxes cover that area (rounded up).
-    if (rawQty === "" || !Number.isFinite(qty) || qty <= 0) return { error: "Enter the area in m², greater than 0." };
-    if (!product.coveragePerBox) return { error: `${product.name} has no coverage per box. Edit the product and set it to sell by m².` };
+    if (rawQty === "" || !Number.isFinite(qty) || qty <= 0) return { error: t("sale.enterArea") };
+    if (!product.coveragePerBox) return { error: t("sale.noCoverage", { name: product.name }) };
     const boxes = Math.max(1, Math.ceil(round2(qty / product.coveragePerBox * 1e4) / 1e4));
     converted = { area: qty, boxes, coverage: product.coveragePerBox };
     qty = boxes;
     sellingUnit = "box";
   } else if (rawQty === "" || !Number.isInteger(qty) || qty < 1) {
-    return { error: "Quantity must be a whole number of at least 1." };
+    return { error: t("sale.qtyWhole") };
   }
   const item = state.sale.items.find((i) => i.productId === productId && i.sellingUnit === sellingUnit);
   const inSale = qtyInSale(productId);
@@ -1171,8 +1219,8 @@ function addToSale(productId, rawQty, rawUnit) {
 // Returns { merged: true } when the line joined an existing line of the same product and unit.
 function updateSaleUnit(lineId, rawUnit) {
   const item = findSaleItem(lineId);
-  if (!item) return { error: "This product is no longer in the sale." };
-  if (!SALE_LINE_UNITS.includes(rawUnit)) return { error: "Choose a valid unit." };
+  if (!item) return { error: t("sale.lineGone") };
+  if (!SALE_LINE_UNITS.includes(rawUnit)) return { error: t("sale.chooseUnit") };
   const product = findProduct(item.productId);
   const priced = product ? Pricing.priceForUnit(product, rawUnit) : { price: item.unitPrice };
   if (priced.error) return { error: priced.error, revert: true };   // the line keeps its old unit
@@ -1195,10 +1243,10 @@ function removeFromSale(lineId) {
 function updateSaleQuantity(lineId, rawQty) {
   const item = findSaleItem(lineId);
   const product = item && findProduct(item.productId);
-  if (!item || !product) return { error: "This product is no longer available." };
+  if (!item || !product) return { error: t("sale.productUnavailable") };
   const qty = Number(rawQty);
   if (rawQty === "" || !Number.isInteger(qty) || qty < 1) {
-    return { error: "Quantity must be a whole number of at least 1." };
+    return { error: t("sale.qtyWhole") };
   }
   const others = qtyInSale(item.productId, lineId);
   if (qty + others > product.stock) {
@@ -1211,10 +1259,10 @@ function updateSaleQuantity(lineId, rawQty) {
 
 function updateSalePrice(lineId, rawPrice) {
   const item = findSaleItem(lineId);
-  if (!item) return { error: "This product is no longer in the sale." };
+  if (!item) return { error: t("sale.lineGone") };
   const price = Number(rawPrice);
-  if (rawPrice === "" || !Number.isFinite(price)) return { error: "Enter a price." };
-  if (price < 0) return { error: "Price can't be negative." };
+  if (rawPrice === "" || !Number.isFinite(price)) return { error: t("sale.enterPrice") };
+  if (price < 0) return { error: t("sale.priceNegative") };
   item.unitPrice = price;
   return {};
 }
@@ -1246,7 +1294,7 @@ function paymentInfo(inv) {
   const paid = round2(payments.reduce((sum, p) => sum + toNumber(p.amount), 0));
   const remaining = Math.max(0, round2(toNumber(inv.total) - paid));
   const cls = remaining <= 0 ? "paid" : paid > 0 ? "partial" : "unpaid";
-  const status = { paid: "PAID", partial: "PARTIALLY PAID", unpaid: "UNPAID" }[cls];
+  const status = t({ paid: "inv.status.paid", partial: "inv.status.partial", unpaid: "inv.status.unpaid" }[cls]);
   return { payments, paid, remaining, status, cls };
 }
 
@@ -1254,38 +1302,42 @@ function paidError() {
   const raw = String(state.sale.paidValue).trim();
   if (raw === "") return "";
   const v = Number(raw);
-  if (!Number.isFinite(v) || v < 0) return "Amount paid can't be negative.";
-  if (round2(v) > calculateTotals(state.sale).total) return "Amount paid can't be more than the invoice total.";
+  if (!Number.isFinite(v) || v < 0) return t("sale.paidNegative");
+  if (round2(v) > calculateTotals(state.sale).total) return t("sale.paidTooMuch");
   return "";
 }
 
 function adjustmentError() {
   const s = state.sale;
-  for (const [label, type, value] of [["Discount", s.discountType, s.discountValue], ["Tax", s.taxType, s.taxValue]]) {
+  const checks = [
+    [s.discountType, s.discountValue, "sale.discountNegative", "sale.discountPercent"],
+    [s.taxType, s.taxValue, "sale.taxNegative", "sale.taxPercent"],
+  ];
+  for (const [type, value, negativeKey, percentKey] of checks) {
     if (value === "") continue;
     const v = Number(value);
-    if (!Number.isFinite(v) || v < 0) return `${label} can't be negative.`;
-    if (type === "percent" && v > 100) return `${label} percentage can't be more than 100.`;
+    if (!Number.isFinite(v) || v < 0) return t(negativeKey);
+    if (type === "percent" && v > 100) return t(percentKey);
   }
   return "";
 }
 
 function validateSale() {
   const errors = [];
-  if (state.sale.items.length === 0) errors.push("Add at least one product to the sale.");
+  if (state.sale.items.length === 0) errors.push(t("sale.addOne"));
   for (const item of state.sale.items) {
     const p = findProduct(item.productId);
-    if (!p) { errors.push("A product in this sale no longer exists."); continue; }
-    if (!Number.isInteger(item.qty) || item.qty < 1) errors.push(`${p.name}: quantity must be at least 1.`);
-    if (!Number.isFinite(item.unitPrice) || item.unitPrice < 0) errors.push(`${p.name}: price can't be negative.`);
+    if (!p) { errors.push(t("sale.productMissing")); continue; }
+    if (!Number.isInteger(item.qty) || item.qty < 1) errors.push(t("sale.lineQty", { name: p.name }));
+    if (!Number.isFinite(item.unitPrice) || item.unitPrice < 0) errors.push(t("sale.linePrice", { name: p.name }));
   }
   for (const [productId, total] of totalsByProduct(state.sale.items)) {
     const p = findProduct(productId);
-    if (p && total > p.stock) errors.push(`${p.name}: ${stockMessage(p.stock)}`);
+    if (p && total > p.stock) errors.push(t("sale.nameMessage", { name: p.name, message: stockMessage(p.stock) }));
   }
   const adj = adjustmentError() || paidError();
   if (adj) errors.push(adj);
-  if (!Number.isFinite(calculateTotals(state.sale).total)) errors.push("The invoice total is not valid.");
+  if (!Number.isFinite(calculateTotals(state.sale).total)) errors.push(t("sale.totalInvalid"));
   return errors;
 }
 
@@ -1295,10 +1347,10 @@ function syncSaleWithProducts() {
   const used = new Map();   // stock already given to earlier lines of the same product
   state.sale.items = state.sale.items.filter((item) => {
     const p = findProduct(item.productId);
-    if (!p) { notes.push("A product was removed from the sale because it no longer exists."); return false; }
+    if (!p) { notes.push(t("sale.removedGone")); return false; }
     const left = p.stock - (used.get(p.id) || 0);
-    if (left < 1) { notes.push(`${p.name} was removed from the sale: out of stock.`); return false; }
-    if (item.qty > left) { item.qty = left; notes.push(`${p.name} was reduced to the available stock (${p.stock}).`); }
+    if (left < 1) { notes.push(t("sale.removedOut", { name: p.name })); return false; }
+    if (item.qty > left) { item.qty = left; notes.push(t("sale.reduced", { name: p.name, stock: p.stock })); }
     used.set(p.id, (used.get(p.id) || 0) + item.qty);
     return true;
   });
@@ -1333,7 +1385,7 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
     const p = findProduct(item.productId, data);
     return {
       productId: item.productId,
-      name: p ? p.name : "(deleted product)",
+      name: p ? p.name : DELETED_PRODUCT,
       manufacturer: p ? p.manufacturer : "",
       tileSize: p ? p.tileSize : "",
       coveragePerBox: p ? p.coveragePerBox : null,
@@ -1387,8 +1439,8 @@ function completeSale() {
     const r = await commit((d) => {
       for (const [productId, total] of totalsByProduct(sale.items)) {
         const p = findProduct(productId, d);
-        if (!p) return { error: "A product in this sale no longer exists." };
-        if (total > p.stock) return { error: `${p.name}: ${stockMessage(p.stock)}` };
+        if (!p) return { error: t("sale.productMissing") };
+        if (total > p.stock) return { error: t("sale.nameMessage", { name: p.name, message: stockMessage(p.stock) }) };
       }
       const invoice = { id: uid(), ...buildInvoiceData(sale, formatInvoiceNumber(d.counter + 1), new Date().toISOString(), d) };
       for (const item of invoice.items) findProduct(item.productId, d).stock -= item.qty;
@@ -1407,34 +1459,34 @@ function completeSale() {
     state.selectedId = null;
     $("search").value = "";
     renderAll();
-    notify(`Sale completed. ${r.invoice.invoiceNumber} saved.` + savedNote(r));
+    notify(t("sell.completed", { number: r.invoice.invoiceNumber }) + savedNote(r));
   });
 }
 
 async function deleteInvoice(id) {
   const inv = state.invoices.find((i) => i.id === id);
   if (!inv) return;
-  if (!confirm(`Delete ${inv.invoiceNumber}? Stock is not changed.`)) return;
+  if (!confirm(t("invoice.confirmDelete", { number: inv.invoiceNumber }))) return;
   const r = await commit((d) => { d.invoices = d.invoices.filter((i) => i.id !== id); });
   if (r.error) { notify(r.error, "error"); return; }
   renderAll();
-  notify(`${inv.invoiceNumber} deleted.` + savedNote(r));
+  notify(t("invoice.deleted", { number: inv.invoiceNumber }) + savedNote(r));
 }
 
 // Adds a cash payment (current date/time) to a saved invoice. Items and stock are never touched.
 async function addPayment(id, rawAmount) {
   const inv = state.invoices.find((i) => i.id === id);
-  if (!inv) return { error: "Invoice not found." };
+  if (!inv) return { error: t("pay.notFound") };
   const { remaining } = paymentInfo(inv);
-  if (remaining <= 0) return { error: "This invoice is already fully paid." };
+  if (remaining <= 0) return { error: t("pay.alreadyPaid") };
   const amount = Number(rawAmount);
-  if (rawAmount === "" || !Number.isFinite(amount) || amount <= 0) return { error: "Enter a payment amount greater than 0." };
-  if (round2(amount) > remaining) return { error: "Payment cannot be greater than the remaining balance." };
+  if (rawAmount === "" || !Number.isFinite(amount) || amount <= 0) return { error: t("pay.enterAmount") };
+  if (round2(amount) > remaining) return { error: t("pay.tooMuch") };
 
   return commit((d) => {
     const target = d.invoices.find((i) => i.id === id);
-    if (!target) return { error: "Invoice not found." };
-    if (round2(amount) > paymentInfo(target).remaining) return { error: "Payment cannot be greater than the remaining balance." };
+    if (!target) return { error: t("pay.notFound") };
+    if (round2(amount) > paymentInfo(target).remaining) return { error: t("pay.tooMuch") };
     target.payments.push({ amount: round2(amount), timestamp: new Date().toISOString() });
   });
 }
@@ -1470,7 +1522,7 @@ function printInvoice(invoice) {
 
 function renderLogoSetting() {
   const logo = state.settings.logo;
-  $("logoPreview").innerHTML = logo ? `<img src="${esc(logo)}" alt="Store logo">` : '<span class="muted small">No logo</span>';
+  $("logoPreview").innerHTML = logo ? `<img src="${esc(logo)}" alt="${esc(t("logo.alt"))}">` : `<span class="muted small">${esc(t("logo.none"))}</span>`;
   $("removeLogo").disabled = !logo;
 }
 
@@ -1483,19 +1535,19 @@ async function saveLogo(dataUrl) {
   }
   renderLogoSetting();
   renderInvoice();
-  notify((dataUrl ? "Logo saved." : "Logo removed.") + savedNote(r));
+  notify(t(dataUrl ? "logo.saved" : "logo.removed") + savedNote(r));
 }
 
 // Reads a PNG, shrinks it to fit LOGO_MAX_W x LOGO_MAX_H (never enlarges, keeps transparency) and saves it.
 function chooseLogo(file) {
   showError("logoError", "");
   if (!file) return;
-  if (file.type !== "image/png" && !/\.png$/i.test(file.name)) { showError("logoError", "Please choose a PNG image."); return; }
+  if (file.type !== "image/png" && !/\.png$/i.test(file.name)) { showError("logoError", t("logo.pickPng")); return; }
   const reader = new FileReader();
-  reader.onerror = () => showError("logoError", "That file could not be read.");
+  reader.onerror = () => showError("logoError", t("storage.fileUnreadable"));
   reader.onload = () => {
     const img = new Image();
-    img.onerror = () => showError("logoError", "That file is not a valid PNG image.");
+    img.onerror = () => showError("logoError", t("logo.badPng"));
     img.onload = () => {
       const scale = Math.min(1, LOGO_MAX_W / img.naturalWidth, LOGO_MAX_H / img.naturalHeight);
       const canvas = document.createElement("canvas");
@@ -1510,8 +1562,8 @@ function chooseLogo(file) {
 }
 
 function stockBadge(stock) {
-  if (stock <= 0) return ' <span class="badge out">Out of stock</span>';
-  if (stock <= LOW_STOCK) return ' <span class="badge low">Low stock</span>';
+  if (stock <= 0) return ` <span class="badge out">${esc(t("stock.out"))}</span>`;
+  if (stock <= LOW_STOCK) return ` <span class="badge low">${esc(t("stock.low"))}</span>`;
   return "";
 }
 
@@ -1522,23 +1574,23 @@ function renderResults() {
   if (state.products.length === 0) {
     state.results = [];
     box.innerHTML =
-      '<div class="empty"><p><strong>No products yet.</strong></p>' +
-      '<p class="muted">Add your first product to start selling.</p>' +
-      '<div class="actions"><button type="button" class="btn primary" data-action="goto-add">Add Product</button>' +
-      '<button type="button" class="btn" data-action="demo">Load Demo Data</button></div></div>';
+      `<div class="empty"><p><strong>${esc(t("results.none"))}</strong></p>` +
+      `<p class="muted">${esc(t("results.addFirst"))}</p>` +
+      `<div class="actions"><button type="button" class="btn primary" data-action="goto-add">${esc(t("stock.addProductBtn"))}</button>` +
+      `<button type="button" class="btn" data-action="demo">${esc(t("settings.loadDemo"))}</button></div></div>`;
     return;
   }
 
   state.results = findMatches(query);
   if (!query.trim()) { box.innerHTML = ""; return; }   // nothing typed: no list
   if (state.results.length === 0) {
-    box.innerHTML = `<div class="empty"><p class="muted">No products match "${esc(query)}".</p></div>`;
+    box.innerHTML = `<div class="empty"><p class="muted">${esc(t("results.noMatch", { query }))}</p></div>`;
     return;
   }
 
   box.innerHTML = state.results.map((p) => {
     const meta = [productDetails(p), p.sku, p.category].filter(Boolean).join(", ");
-    const stock = p.stock <= 0 ? "Out of stock" : p.stock <= LOW_STOCK ? `Low stock: ${p.stock}` : `Stock: ${p.stock}`;
+    const stock = esc(p.stock <= 0 ? t("stock.out") : p.stock <= LOW_STOCK ? t("stock.lowN", { n: p.stock }) : t("stock.n", { n: p.stock }));
     return `<div class="result" role="option" data-id="${esc(p.id)}" aria-selected="${p.id === state.selectedId}">` +
       `<div><div>${esc(productLabel(p))}</div>${meta ? `<div class="meta">${esc(meta)}</div>` : ""}</div>` +
       `<div class="price">${esc(priceLabel(p))}</div>` +
@@ -1554,18 +1606,18 @@ function renderSelected() {
   $("selectedInfo").innerHTML = p
     ? `<strong>${esc(productLabel(p))}</strong>` +
       (productDetails(p) ? `<span>${esc(productDetails(p))}</span>` : "") +
-      (p.stock > 0 ? `<span>Stock: ${p.stock}</span>` : '<span class="out">Out of stock</span>') +
-      (p.stock > 0 && p.stock <= LOW_STOCK ? '<span class="low">Low stock</span>' : "") +
-      `<span>Price: ${esc(priceLabel(p))}</span>` +
+      (p.stock > 0 ? `<span>${esc(t("stock.n", { n: p.stock }))}</span>` : `<span class="out">${esc(t("stock.out"))}</span>`) +
+      (p.stock > 0 && p.stock <= LOW_STOCK ? `<span class="low">${esc(t("stock.low"))}</span>` : "") +
+      `<span>${esc(t("selected.price", { price: priceLabel(p) }))}</span>` +
       boxPriceNote(p)
-    : '<span class="none">Search for a product to add it.</span>';
+    : `<span class="none">${esc(t("selected.none"))}</span>`;
 }
 
 // "Box: 1,152 DA" for a tile priced per m², so the cashier sees what one box costs.
 function boxPriceNote(p) {
   if (!p.priceUnit || p.priceUnit === "box" || !p.coveragePerBox) return "";
   const box = Pricing.priceForUnit(p, "box");
-  return box.error ? "" : `<span>Box: ${esc(money(box.price))}</span>`;
+  return box.error ? "" : `<span>${esc(t("selected.box", { price: money(box.price) }))}</span>`;
 }
 
 function unitOptions(selected) {
@@ -1575,18 +1627,18 @@ function unitOptions(selected) {
 function renderSale() {
   const body = $("saleBody");
   if (state.sale.items.length === 0) {
-    body.innerHTML = '<tr class="empty-row"><td colspan="5">No items yet. Search for a product above and add it to the sale.</td></tr>';
+    body.innerHTML = `<tr class="empty-row"><td colspan="5">${esc(t("sell.empty"))}</td></tr>`;
   } else {
     body.innerHTML = state.sale.items.map((item) => {
       const p = findProduct(item.productId);
-      const name = p ? productLabel(p) : "(deleted product)";
+      const name = p ? productLabel(p) : t("sell.deletedProduct");
       return `<tr data-id="${esc(item.lineId)}">` +
-        `<td><div>${esc(name)}</div><div class="muted small">Available: ${p ? p.stock : 0}</div><div class="error small" data-row-error></div></td>` +
-        `<td class="num"><div class="qty-cell"><input class="qty-input" type="number" min="1" step="1" value="${item.qty}" data-field="qty" aria-label="Quantity of ${esc(name)}">` +
-        `<select class="unit-select" data-field="unit" aria-label="Unit of ${esc(name)}">${unitOptions(item.sellingUnit)}</select></div></td>` +
-        `<td class="num"><input class="price-input" type="number" min="0" step="any" value="${item.unitPrice}" data-field="price" aria-label="Unit price of ${esc(name)}"></td>` +
+        `<td><div>${esc(name)}</div><div class="muted small">${esc(t("sell.available", { n: p ? p.stock : 0 }))}</div><div class="error small" data-row-error></div></td>` +
+        `<td class="num"><div class="qty-cell"><input class="qty-input" type="number" min="1" step="1" value="${item.qty}" data-field="qty" aria-label="${esc(t("sell.qtyAria", { name }))}">` +
+        `<select class="unit-select" data-field="unit" aria-label="${esc(t("sell.unitAria", { name }))}">${unitOptions(item.sellingUnit)}</select></div></td>` +
+        `<td class="num"><input class="price-input" type="number" min="0" step="any" value="${item.unitPrice}" data-field="price" aria-label="${esc(t("sell.priceAria", { name }))}"></td>` +
         `<td class="num" data-line-total>${esc(money(item.qty * item.unitPrice))}</td>` +
-        `<td class="num"><button type="button" class="btn small danger" data-action="remove" aria-label="Remove ${esc(name)} from sale">Remove</button></td>` +
+        `<td class="num"><button type="button" class="btn small danger" data-action="remove" aria-label="${esc(t("sell.removeAria", { name }))}">${esc(t("common.remove"))}</button></td>` +
         `</tr>`;
     }).join("");
   }
@@ -1624,49 +1676,49 @@ function invoiceHtml(inv) {
   const num = (n) => numberFormat.format(toNumber(n));
   const pct = (p) => (p ? ` (${numberFormat.format(p)}%)` : "");
   const line = (text) => (text ? `<div>${esc(text)}</div>` : "");
-  const logo = state.settings.logo ? `<img class="inv-logo" src="${esc(state.settings.logo)}" alt="Store logo">` : "";
+  const logo = state.settings.logo ? `<img class="inv-logo" src="${esc(state.settings.logo)}" alt="${esc(t("logo.alt"))}">` : "";
 
   const rows = inv.items.length
     ? inv.items.map((i) =>
         `<tr><td>${esc(invoiceItemLabel(i))}</td><td class="num">${num(i.qty)} ${esc(unitLabel(i.sellingUnit))}</td><td class="num">${num(i.unitPrice)}${i.sellingUnit ? ` <span class="inv-unit">/ ${esc(unitLabel(i.sellingUnit))}</span>` : ""}</td><td class="num">${num(i.total != null ? i.total : toNumber(i.qty) * toNumber(i.unitPrice))}</td></tr>`
       ).join("")
-    : '<tr><td colspan="4" class="none">No items yet</td></tr>';
+    : `<tr><td colspan="4" class="none">${esc(t("inv.noItems"))}</td></tr>`;
 
   const pay = paymentInfo(inv);
   const hasItems = inv.items.length > 0;
   const paidRows = hasItems
-    ? `<tr><td>Total Paid</td><td>${esc(money(pay.paid, cur))}</td></tr><tr class="due"><td>Remaining</td><td>${esc(money(pay.remaining, cur))}</td></tr>`
+    ? `<tr><td>${esc(t("inv.totalPaid"))}</td><td>${esc(money(pay.paid, cur))}</td></tr><tr class="due"><td>${esc(t("inv.remaining"))}</td><td>${esc(money(pay.remaining, cur))}</td></tr>`
     : "";
   const history = hasItems
-    ? `<div class="inv-status"><span class="${pay.cls}">STATUS: ${pay.status}</span></div>
-    <section class="inv-payments"><h3>PAYMENT HISTORY</h3>${
+    ? `<div class="inv-status"><span class="${pay.cls}">${esc(t("inv.status"))} ${esc(pay.status)}</span></div>
+    <section class="inv-payments"><h3>${esc(t("inv.history"))}</h3>${
       pay.payments.length
-        ? pay.payments.map((p) => `<div class="inv-pay"><span class="when">${esc(formatDateTime(p.timestamp))}</span><span>Paid: ${esc(money(p.amount, cur))}</span></div>`).join("")
-        : '<div class="inv-pay"><span class="when">No payments yet.</span></div>'
+        ? pay.payments.map((p) => `<div class="inv-pay"><span class="when">${esc(formatDateTime(p.timestamp))}</span><span>${esc(t("inv.paidLine", { amount: money(p.amount, cur) }))}</span></div>`).join("")
+        : `<div class="inv-pay"><span class="when">${esc(t("inv.noPayments"))}</span></div>`
     }</section>`
     : "";
 
   return `<header class="inv-head">
       <div>${logo}<div class="inv-biz-name">${esc(biz.name)}</div>${line(biz.address)}${line(biz.phone)}${line(biz.email)}</div>
-      <div class="inv-title">INVOICE</div>
+      <div class="inv-title">${esc(t("inv.title"))}</div>
     </header>
     <div class="inv-meta">
-      <div><div class="label">Customer</div><div class="inv-customer">${esc(cust.name || WALK_IN)}${cust.phone ? "\n" + esc(cust.phone) : ""}${cust.address ? "\n" + esc(cust.address) : ""}</div></div>
-      <div class="right"><div><span class="label">Invoice:</span> ${esc(inv.invoiceNumber)}</div><div><span class="label">Date:</span> ${esc(formatDateTime(inv.date))}</div></div>
+      <div><div class="label">${esc(t("inv.customer"))}</div><div class="inv-customer">${esc(customerLabel(cust.name))}${cust.phone ? "\n" + esc(cust.phone) : ""}${cust.address ? "\n" + esc(cust.address) : ""}</div></div>
+      <div class="right"><div><span class="label">${esc(t("inv.number"))}</span> ${esc(inv.invoiceNumber)}</div><div><span class="label">${esc(t("inv.date"))}</span> ${esc(formatDateTime(inv.date))}</div></div>
     </div>
     <table class="inv-table">
-      <thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Price (${esc(cur)})</th><th class="num">Total (${esc(cur)})</th></tr></thead>
+      <thead><tr><th>${esc(t("inv.product"))}</th><th class="num">${esc(t("inv.qty"))}</th><th class="num">${esc(t("inv.price", { currency: cur }))}</th><th class="num">${esc(t("inv.lineTotal", { currency: cur }))}</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <table class="inv-totals">
-      <tr><td>Subtotal</td><td>${esc(money(toNumber(inv.subtotal), cur))}</td></tr>
-      <tr><td>Discount${pct(inv.discountPercent)}</td><td>${esc(money(toNumber(inv.discount), cur))}</td></tr>
-      <tr><td>Tax${pct(inv.taxPercent)}</td><td>${esc(money(toNumber(inv.tax), cur))}</td></tr>
-      <tr class="grand"><td>TOTAL</td><td>${esc(money(toNumber(inv.total), cur))}</td></tr>
+      <tr><td>${esc(t("inv.subtotal"))}</td><td>${esc(money(toNumber(inv.subtotal), cur))}</td></tr>
+      <tr><td>${esc(t("inv.discount"))}${pct(inv.discountPercent)}</td><td>${esc(money(toNumber(inv.discount), cur))}</td></tr>
+      <tr><td>${esc(t("inv.tax"))}${pct(inv.taxPercent)}</td><td>${esc(money(toNumber(inv.tax), cur))}</td></tr>
+      <tr class="grand"><td>${esc(t("inv.grandTotal"))}</td><td>${esc(money(toNumber(inv.total), cur))}</td></tr>
       ${paidRows}
     </table>
     ${history}
-    <p class="inv-thanks">Thank you for your purchase.</p>`;
+    <p class="inv-thanks">${esc(t("inv.thanks"))}</p>`;
 }
 
 // Payment box above a saved invoice: totals plus the "Add Payment" control.
@@ -1683,13 +1735,13 @@ function renderPayBox() {
   $("payRemaining").textContent = money(info.remaining, cur);
   $("payAmount").disabled = full;
   $("payBtn").disabled = full;
-  $("payAmount").placeholder = full ? "Fully paid" : "Max " + numberFormat.format(info.remaining);
+  $("payAmount").placeholder = full ? t("pay.fullyPaid") : t("pay.max", { n: numberFormat.format(info.remaining) });
 }
 
 function renderInvoice() {
   const saved = state.previewInvoice;
   $("invoice").innerHTML = invoiceHtml(saved || draftInvoice());
-  $("previewStatus").textContent = saved ? "Saved invoice" : "Live preview";
+  $("previewStatus").textContent = t(saved ? "preview.saved" : "preview.live");
   $("backToSale").hidden = !saved;
   renderPayBox();
 }
@@ -1705,11 +1757,11 @@ function renderStock() {
 
   if (!hasProducts) {
     empty.innerHTML =
-      '<p><strong>No products yet.</strong></p><p class="muted">Add your first product to start selling.</p>' +
-      '<div class="actions"><button type="button" class="btn primary" data-action="goto-add">Add Product</button>' +
-      '<button type="button" class="btn" data-action="demo">Load Demo Data</button></div>';
+      `<p><strong>${esc(t("results.none"))}</strong></p><p class="muted">${esc(t("results.addFirst"))}</p>` +
+      `<div class="actions"><button type="button" class="btn primary" data-action="goto-add">${esc(t("stock.addProductBtn"))}</button>` +
+      `<button type="button" class="btn" data-action="demo">${esc(t("settings.loadDemo"))}</button></div>`;
   } else if (list.length === 0) {
-    empty.innerHTML = `<p class="muted">No products match "${esc($("stockFilter").value)}".</p>`;
+    empty.innerHTML = `<p class="muted">${esc(t("results.noMatch", { query: $("stockFilter").value }))}</p>`;
   }
 
   $("stockBody").innerHTML = list.map((p) =>
@@ -1719,10 +1771,10 @@ function renderStock() {
     `<td class="num">${esc(priceLabel(p))}</td>` +
     `<td class="num">${p.stock}${stockBadge(p.stock)}</td>` +
     `<td class="num"><div class="row-actions">` +
-    `<button type="button" class="btn small" data-action="dec" aria-label="Decrease stock of ${esc(p.name)} by 1"${p.stock < 1 ? " disabled" : ""}>-</button>` +
-    `<button type="button" class="btn small" data-action="inc" aria-label="Increase stock of ${esc(p.name)} by 1">+</button>` +
-    `<button type="button" class="btn small" data-action="edit">Edit</button>` +
-    `<button type="button" class="btn small danger" data-action="delete">Delete</button>` +
+    `<button type="button" class="btn small" data-action="dec" aria-label="${esc(t("stock.decAria", { name: p.name }))}"${p.stock < 1 ? " disabled" : ""}>-</button>` +
+    `<button type="button" class="btn small" data-action="inc" aria-label="${esc(t("stock.incAria", { name: p.name }))}">+</button>` +
+    `<button type="button" class="btn small" data-action="edit">${esc(t("common.edit"))}</button>` +
+    `<button type="button" class="btn small danger" data-action="delete">${esc(t("common.delete"))}</button>` +
     `</div></td></tr>`
   ).join("");
 
@@ -1740,11 +1792,11 @@ function renderStock() {
 
 function renderRestockInfo() {
   const p = findProduct($("rProduct").value);
-  if (!p) { $("restockInfo").textContent = "Add a product first."; return; }
+  if (!p) { $("restockInfo").textContent = t("restock.addFirst"); return; }
   const raw = $("rQty").value;
   const qty = Number(raw);
-  $("restockInfo").textContent = `Current stock: ${p.stock}.` +
-    (raw !== "" && Number.isInteger(qty) && qty > 0 ? ` After adding: ${p.stock + qty}.` : "");
+  $("restockInfo").textContent = t("restock.current", { n: p.stock }) +
+    (raw !== "" && Number.isInteger(qty) && qty > 0 ? t("restock.after", { n: p.stock + qty }) : "");
 }
 
 function searchInvoices(query) {
@@ -1752,7 +1804,8 @@ function searchInvoices(query) {
   return [...state.invoices].reverse().filter((inv) => {
     const c = inv.customer || {};
     const phone = String(c.phone || "");
-    const haystack = (inv.invoiceNumber + " " + (c.name || WALK_IN) + " " + phone + " " + phone.replace(/\s+/g, "")).toLowerCase();
+    // The stored walk-in name and its translation are both searchable.
+    const haystack = (inv.invoiceNumber + " " + (c.name || WALK_IN) + " " + customerLabel(c.name) + " " + phone + " " + phone.replace(/\s+/g, "")).toLowerCase();
     return terms.every((t) => haystack.includes(t));
   });
 }
@@ -1764,24 +1817,24 @@ function renderInvoices() {
   $("invoiceTable").hidden = list.length === 0;
   $("invoiceEmpty").hidden = list.length > 0;
   $("invoiceEmpty").innerHTML = hasInvoices
-    ? `<p class="muted">No invoices match "${esc($("invoiceFilter").value)}".</p>`
-    : '<p><strong>No invoices yet.</strong></p><p class="muted">Completed sales will appear here.</p>';
+    ? `<p class="muted">${esc(t("invoices.noMatch", { query: $("invoiceFilter").value }))}</p>`
+    : `<p><strong>${esc(t("invoices.none"))}</strong></p><p class="muted">${esc(t("invoices.noneHint"))}</p>`;
   $("invoiceBody").innerHTML = list.map((inv) => {
     const pay = paymentInfo(inv);
-    const label = { paid: "Paid", partial: "Partial", unpaid: "Unpaid" }[pay.cls];
+    const label = t({ paid: "badge.paid", partial: "badge.partial", unpaid: "badge.unpaid" }[pay.cls]);
     return `<tr data-id="${esc(inv.id)}">` +
       `<td>${esc(inv.invoiceNumber)}</td>` +
       `<td>${esc(formatDate(inv.date))}</td>` +
-      `<td>${esc((inv.customer && inv.customer.name) || WALK_IN)}</td>` +
+      `<td>${esc(customerLabel(inv.customer && inv.customer.name))}</td>` +
       `<td class="num">${esc(money(toNumber(inv.total), inv.currency))}</td>` +
       `<td class="num">${esc(money(pay.paid, inv.currency))}</td>` +
       `<td class="num">${esc(money(pay.remaining, inv.currency))}</td>` +
-      `<td><span class="badge ${pay.cls}">${label}</span></td>` +
+      `<td><span class="badge ${pay.cls}">${esc(label)}</span></td>` +
       `<td class="num"><div class="row-actions">` +
-      `<button type="button" class="btn small" data-action="view">View</button>` +
-      `<button type="button" class="btn small" data-action="pay"${pay.remaining <= 0 ? " disabled" : ""}>Add Payment</button>` +
-      `<button type="button" class="btn small" data-action="print">Print</button>` +
-      `<button type="button" class="btn small danger" data-action="delete">Delete</button>` +
+      `<button type="button" class="btn small" data-action="view">${esc(t("invoices.view"))}</button>` +
+      `<button type="button" class="btn small" data-action="pay"${pay.remaining <= 0 ? " disabled" : ""}>${esc(t("invoices.addPayment"))}</button>` +
+      `<button type="button" class="btn small" data-action="print">${esc(t("invoices.print"))}</button>` +
+      `<button type="button" class="btn small danger" data-action="delete">${esc(t("common.delete"))}</button>` +
       `</div></td></tr>`;
   }).join("");
 }
@@ -1798,6 +1851,45 @@ function fillSettingsForm() {
   $("sEmail").value = s.email;
   $("sCurrency").value = s.currency;
   renderLogoSetting();
+  renderLanguageSetting();
+}
+
+// The picker lists every registered language by its own name.
+function renderLanguageSetting() {
+  $("sLanguage").innerHTML = I18n.languages().map((l) => `<option value="${esc(l.code)}">${esc(l.name)}</option>`).join("");
+  $("sLanguage").value = state.settings.language;
+}
+
+// Static text is marked in index.html with data-i18n (text), data-i18n-placeholder, data-i18n-title and
+// data-i18n-aria-label. It is rewritten only when the language changes.
+let appliedLanguage = null;
+function applyLanguage() {
+  const language = I18n.language();
+  if (language === appliedLanguage) return;
+  appliedLanguage = language;
+  document.documentElement.lang = language;
+  document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => { el.placeholder = t(el.dataset.i18nPlaceholder); });
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => { el.title = t(el.dataset.i18nTitle); });
+  document.querySelectorAll("[data-i18n-aria-label]").forEach((el) => { el.setAttribute("aria-label", t(el.dataset.i18nAriaLabel)); });
+}
+
+// Saves the chosen language with the other settings. If it can't be saved the picker goes back to the saved one.
+function saveLanguage(code) {
+  return guard(async () => {
+    if (!I18n.has(code) || code === state.settings.language) { renderLanguageSetting(); return; }
+    const r = await commit((d) => { d.settings.language = code; });
+    if (r.error) {
+      notify(r.error, "error");
+      renderLanguageSetting();
+      return;
+    }
+    // commit() has switched the language; redraw everything in it.
+    renderAll();
+    renderStorage();
+    fillSettingsForm();
+    notify(t("settings.languageChanged") + savedNote(r));
+  });
 }
 
 function applyPaperSize() {
@@ -1810,7 +1902,7 @@ function applyPaperSize() {
 async function savePaper(paper) {
   const r = await commit((d) => { d.settings.paper = paper; });
   if (r.error) notify(r.error, "error");
-  else notify("Paper size set to " + paper + "." + savedNote(r));
+  else notify(t("settings.paperSet", { paper }) + savedNote(r));
   applyPaperSize();
 }
 
@@ -1826,14 +1918,12 @@ function renderStorage() {
   let action = "";
   let label = "";
   if (m === "unlinked") {
-    text = storage.supported
-      ? "The data file is not connected, so changes are saved in this browser only."
-      : "This browser cannot save to a data file, so changes are saved in this browser only. Use Chrome or Edge, and use Export Backup regularly.";
-    if (storage.supported) { action = "settings"; label = "Set up data file"; }
+    text = t(storage.supported ? "banner.unlinked" : "banner.unsupported");
+    if (storage.supported) { action = "settings"; label = t("banner.setup"); }
   } else if (m === "disconnected") {
-    text = storage.reason + " Changes are blocked until the data file is reconnected.";
+    text = t("banner.blocked", { reason: storage.reason });
     action = storage.handle ? "reconnect" : "choose";
-    label = storage.handle ? "Reconnect" : "Choose Data File";
+    label = t(storage.handle ? "banner.reconnect" : "settings.chooseData");
   }
   const banner = $("storageBanner");
   banner.hidden = !text;
@@ -1844,21 +1934,21 @@ function renderStorage() {
   $("bannerAction").dataset.action = action;
   updateBannerHeight();
 
-  const stateText = {
-    connecting: "Checking...",
-    connected: "Connected",
-    unlinked: storage.supported ? "Not connected" : "Not available in this browser",
-    disconnected: "Disconnected",
-  }[m];
-  $("dataFile").textContent = (storage.fileName || DATA_FILE_NAME) + (connected ? "" : " (not connected)");
+  const stateText = t({
+    connecting: "state.checking",
+    connected: "state.connected",
+    unlinked: storage.supported ? "state.unlinked" : "state.unsupported",
+    disconnected: "state.disconnected",
+  }[m]);
+  $("dataFile").textContent = (storage.fileName || DATA_FILE_NAME) + (connected ? "" : t("state.notConnectedSuffix"));
   $("dataState").textContent = stateText;
   $("dataState").className = "state-" + m;
-  $("dataSaved").textContent = state.lastSaved ? formatDateTime(state.lastSaved) + (connected ? "" : " (browser copy)") : "Never";
+  $("dataSaved").textContent = state.lastSaved ? formatDateTime(state.lastSaved) + (connected ? "" : t("state.browserCopySuffix")) : t("state.never");
   $("dataNote").textContent = (connected
-    ? "Every change is saved to this file automatically. Keep it with the Invoisy folder and back it up regularly."
+    ? t("note.connected")
     : m === "disconnected" ? storage.reason
-    : "Changes are saved in this browser only. Use Export Backup regularly.") +
-    (storage.mirrorOk ? "" : " The browser recovery copy could not be updated.");
+    : t("note.unlinked")) +
+    (storage.mirrorOk ? "" : t("note.mirrorFailed"));
   $("saveNow").disabled = !connected;
   $("chooseData").disabled = !storage.supported;
   $("createData").disabled = !storage.supported;
@@ -1877,6 +1967,8 @@ function refreshAfterLoad() {
 }
 
 function renderAll() {
+  applyLanguage();
+  renderProductFormMode();
   applyPaperSize();
   applyCurrency();
   renderResults();
@@ -1980,7 +2072,7 @@ function bindEvents() {
     showError("saleError", "");
     if (result.converted) {
       const c = result.converted;
-      notify(`${numberFormat.format(c.area)} m² = ${c.boxes} box${c.boxes === 1 ? "" : "es"} (${numberFormat.format(c.coverage)} m² per box).`);
+      notify(tn("sell.converted", c.boxes, { area: numberFormat.format(c.area), coverage: numberFormat.format(c.coverage) }));
     }
     state.selectedId = null;
     state.previewInvoice = null;
@@ -2159,7 +2251,7 @@ function bindEvents() {
       $("payAmount").value = "";
       renderInvoices();
       renderInvoice();
-      notify("Payment added." + savedNote(result));
+      notify(t("pay.added") + savedNote(result));
     });
   });
   $("payAmount").addEventListener("input", () => showError("payError", ""));
@@ -2186,11 +2278,14 @@ function bindEvents() {
         };
       });
       if (r.error) { notify(r.error, "error"); return; }
-      notify("Settings saved." + savedNote(r));
+      notify(t("settings.saved") + savedNote(r));
       fillSettingsForm();
       renderAll();
     });
   });
+
+  // Language
+  $("sLanguage").addEventListener("change", () => saveLanguage($("sLanguage").value));
 
   // Data storage
   $("chooseData").addEventListener("click", () => pickDataFile(false));
@@ -2251,6 +2346,15 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     commit,
     readMirror,
     DEFAULT_SETTINGS,
+    DEMO_PRODUCTS,
+    localizedDemo,
+    invoiceHtml,
+    paymentInfo,
+    money,
+    customerLabel,
+    describeData,
+    normalizeSettings,
+    settingsProblem,
   });
 } else {
   const startupNotices = loadLocalCopy();
@@ -2259,6 +2363,6 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
   showView("sell");
   renderStorage();
   storage.ready = initStorage(startupNotices).catch((e) => {
-    setStorageMode("disconnected", "The data file could not be opened. " + errorText(e));
+    setStorageMode("disconnected", t("storage.cannotOpen", { error: errorText(e) }));
   });
 }

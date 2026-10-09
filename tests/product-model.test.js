@@ -6,6 +6,9 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
+// Loaded before pricing.js and script.js, in the same order as index.html.
+const LANGUAGE_FILES = ["i18n.js", "lang/en.js", "lang/fr.js"];
+
 function loadProductApi() {
   const fields = new Map();
   const element = (id) => {
@@ -48,7 +51,7 @@ function loadProductApi() {
     structuredClone,
   };
   vm.createContext(context);
-  for (const file of ["pricing.js", "script.js"]) {
+  for (const file of LANGUAGE_FILES.concat(["pricing.js", "script.js"])) {
     const source = fs.readFileSync(path.join(__dirname, "..", "java script", file), "utf8");
     vm.runInContext(source, context, { filename: file });
   }

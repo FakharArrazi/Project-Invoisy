@@ -5,7 +5,8 @@
    into a price for the unit being sold.
 
    Plain script (no modules, so index.html still works when opened directly).
-   It only does arithmetic: no DOM, no storage. Loaded before script.js.
+   It only does arithmetic and wording: no DOM, no storage. Loaded after i18n.js (for the
+   unit names and messages) and before script.js.
 
    Example: 800 DA per m², tile 60*60 cm, coverage per box 1.44 m²
      price per box   = 800 x 1.44        = 1,152 DA
@@ -17,10 +18,12 @@
   // Units a price can be "per". piece, box and m² are linked through the tile size and
   // the box coverage. kg and m (meter) only match themselves.
   const PRICE_UNITS = ["piece", "box", "m2", "kg", "m"];
-  const PRICE_UNIT_LABELS = { piece: "Piece", box: "Box", m2: "m²", kg: "kg", m: "m" };
 
-  const priceUnitLabel = (unit) => PRICE_UNIT_LABELS[unit] || "";
   const isPriceUnit = (unit) => PRICE_UNITS.includes(unit);
+  // Display name of a unit in the current language ("Piece", "Box", "m²"...). "" for an unknown unit.
+  const priceUnitLabel = (unit) => (isPriceUnit(unit) ? I18n.t("unit." + unit) : "");
+  // The same, lower case, for use inside a sentence.
+  const unitWord = (unit) => priceUnitLabel(unit).toLowerCase();
 
   const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -51,10 +54,10 @@
   const AREA_UNITS = ["piece", "box", "m2"];
 
   function missingMessage(product, unit) {
-    const name = product.name || "This product";
-    if (unit === "box") return `${name} has no coverage per box. Edit the product and set it to convert prices to boxes.`;
-    if (unit === "piece") return `${name} has no tile size (like 60*60). Edit the product and set it to convert prices to pieces.`;
-    return `${name} can't be converted to ${priceUnitLabel(unit)}.`;
+    const name = product.name || I18n.t("pricing.thisProduct");
+    if (unit === "box") return I18n.t("pricing.noCoverage", { name });
+    if (unit === "piece") return I18n.t("pricing.noTileSize", { name });
+    return I18n.t("pricing.cannotConvert", { name, unit: unitWord(unit) });
   }
 
   // Price of ONE `sellUnit` of the product: { price } or { error }.
@@ -73,7 +76,11 @@
       return { price: round2((base * to) / from) };
     }
     return {
-      error: `${product.name || "This product"} is priced per ${priceUnitLabel(priceUnit)}, so it can't be sold by ${priceUnitLabel(sellUnit)}.`,
+      error: I18n.t("pricing.cannotSell", {
+        name: product.name || I18n.t("pricing.thisProduct"),
+        from: unitWord(priceUnit),
+        to: unitWord(sellUnit),
+      }),
     };
   }
 
@@ -83,7 +90,7 @@
   }
 
   globalThis.Pricing = {
-    PRICE_UNITS, PRICE_UNIT_LABELS, priceUnitLabel, isPriceUnit,
+    PRICE_UNITS, priceUnitLabel, isPriceUnit,
     parseTileSize, pieceArea, areaOf, priceForUnit, lineTotal,
   };
 })();
