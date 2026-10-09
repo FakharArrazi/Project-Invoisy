@@ -171,11 +171,11 @@
             </div>
             <div class="grid-2">
               <div class="field">
-                <label for="pManufacturer"><span data-i18n="stock.manufacturer">Manufacturer / brand</span> <small data-i18n="stock.manufacturerHint">(optional for existing products)</small></label>
+                <label for="pManufacturer"><span data-i18n="stock.manufacturer">Manufacturer / brand</span> <small data-i18n="stock.manufacturerHint"></small></label>
                 <input type="text" id="pManufacturer" autocomplete="off">
               </div>
               <div class="field">
-                <label for="pTileSize"><span data-i18n="stock.tileSize">Tile size</span> <small data-i18n="stock.tileSizeHint">(for example, 60*120)</small></label>
+                <label for="pTileSize"><span data-i18n="stock.tileSize">Tile size</span> <small data-i18n="stock.tileSizeHint"></small></label>
                 <input type="text" id="pTileSize" placeholder="60*120" autocomplete="off">
               </div>
             </div>
@@ -206,7 +206,17 @@
             <div class="grid-2">
               <div class="field">
                 <label for="pStock" data-i18n="stock.stockQty">Stock quantity</label>
-                <input type="number" id="pStock" min="0" step="1" value="0">
+                <div class="price-with-unit">
+                  <input type="number" id="pStock" min="0" step="any" value="0">
+                  <select id="pStockUnit" aria-label="Stock unit" data-i18n-aria-label="stock.stockUnit">
+                    <option value="" data-i18n="stock.countedIn">Counted in...</option>
+                    <option value="piece" selected data-i18n="stockunit.piece">pieces</option>
+                    <option value="box" data-i18n="stockunit.box">boxes</option>
+                    <option value="m2" data-i18n="stockunit.m2">m²</option>
+                    <option value="kg" data-i18n="stockunit.kg">kg</option>
+                    <option value="m" data-i18n="stockunit.m">m</option>
+                  </select>
+                </div>
               </div>
               <div class="field">
                 <label for="pSku"><span data-i18n="stock.sku">SKU</span> <small data-i18n="stock.optional">(optional)</small></label>
@@ -240,7 +250,7 @@
               </div>
               <div class="field">
                 <label for="rQty" data-i18n="stock.quantityToAdd">Quantity to add</label>
-                <input type="number" id="rQty" min="1" step="1" placeholder="0">
+                <input type="number" id="rQty" min="0" step="any" placeholder="0">
               </div>
               <button type="submit" class="btn primary" data-i18n="stock.addStockBtn">Add Stock</button>
             </form>
@@ -431,7 +441,7 @@
 <script src="java script/i18n.js"></script>
 <script src="java script/lang/en.js"></script>
 <script src="java script/lang/fr.js"></script>
-<script src="java script/pricing.js"></script>
+<script src="java script/calc.js"></script>
 <script src="java script/script.js"></script>
 </body>
 </html>

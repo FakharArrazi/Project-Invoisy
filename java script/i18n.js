@@ -3,12 +3,12 @@
 /* ==========================================================================
    I18n - the language layer. Plain script (no modules, so index.html still
    works when opened directly). No DOM, no storage: it only looks up text.
-   Loaded first, then one file per language (lang/*.js), then pricing.js and script.js.
+   Loaded first, then one file per language (lang/*.js), then calc.js and script.js.
 
    Adding a language:
      1. Copy lang/en.js to lang/<code>.js and translate the values (keep the keys and the {placeholders}).
      2. Add <script src="java script/lang/<code>.js"></script> to index.html, after lang/en.js.
-     3. Add the file to LANGUAGE_FILES in tests/product-model.test.js. tests/i18n.test.js then checks
+     3. Add the file to LANGUAGE_FILES in tests/helpers.js and tests/i18n.test.js. tests/i18n.test.js then checks
         that no key or placeholder is missing.
    The language picker in Settings lists every registered language automatically.
 

@@ -29,12 +29,12 @@ const DEFAULT_SETTINGS = {
 };
 
 const DEMO_PRODUCTS = [
-  { name: "Coca Cola 33cl", description: "330ml Coca Cola bottle", sku: "COCA33",   category: "Drinks", sellingPrice: 80,  priceUnit: "piece", purchasePrice: 60, stock: 50 },
-  { name: "Chips",          description: "Salted potato chips",    sku: "CHIPS01",  category: "Snacks", sellingPrice: 120, priceUnit: "piece", purchasePrice: 90, stock: 24 },
-  { name: "Water 1.5L",     description: "Bottled water 1.5L",     sku: "WATER15",  category: "Drinks", sellingPrice: 50,  priceUnit: "piece", purchasePrice: 35, stock: 40 },
-  { name: "Coffee",         description: "Ground coffee, 250g",    sku: "COFFEE01", category: "Drinks", sellingPrice: 350, priceUnit: "piece", purchasePrice: 280, stock: 15 },
-  { name: "Chocolate",      description: "Milk chocolate bar",     sku: "CHOC01",   category: "Snacks", sellingPrice: 100, priceUnit: "piece", purchasePrice: 70, stock: 30 },
-  { name: "Demo Floor Tile", tileSize: "60*60", coveragePerBox: 1.44, sku: "TILE6060", category: "Tiles", sellingPrice: 800, priceUnit: "m2", purchasePrice: 600, stock: 20 },
+  { name: "Coca Cola 33cl", description: "330ml Coca Cola bottle", sku: "COCA33",   category: "Drinks", sellingPrice: 80,  priceUnit: "piece", stockUnit: "piece", purchasePrice: 60, stock: 50 },
+  { name: "Chips",          description: "Salted potato chips",    sku: "CHIPS01",  category: "Snacks", sellingPrice: 120, priceUnit: "piece", stockUnit: "piece", purchasePrice: 90, stock: 24 },
+  { name: "Water 1.5L",     description: "Bottled water 1.5L",     sku: "WATER15",  category: "Drinks", sellingPrice: 50,  priceUnit: "piece", stockUnit: "piece", purchasePrice: 35, stock: 40 },
+  { name: "Coffee",         description: "Ground coffee, 250g",    sku: "COFFEE01", category: "Drinks", sellingPrice: 350, priceUnit: "piece", stockUnit: "piece", purchasePrice: 280, stock: 15 },
+  { name: "Chocolate",      description: "Milk chocolate bar",     sku: "CHOC01",   category: "Snacks", sellingPrice: 100, priceUnit: "piece", stockUnit: "piece", purchasePrice: 70, stock: 30 },
+  { name: "Demo Floor Tile", tileSize: "60*60", coveragePerBox: 1.44, sku: "TILE6060", category: "Tiles", sellingPrice: 800, priceUnit: "m2", stockUnit: "box", purchasePrice: 600, stock: 20 },
 ];
 
 /* ---------- Helpers ---------- */
@@ -54,14 +54,9 @@ const numberFormat = {
   },
 };
 
-function round2(n) {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
-}
-
-function toNumber(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
-}
+// Money rounding and number cleaning live in calc.js, the one place for unit and price maths.
+const round2 = Calc.roundMoney;
+const toNumber = Calc.toNumber;
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -120,10 +115,11 @@ const MIRROR_KEY = "invoisy-data";            // browser copy of the data file (
 const LEGACY_KEYS = ["products", "invoices", "settings", "invoiceCounter"];
 const DERIVED_INVOICE_FIELDS = ["amountPaid", "remaining", "status"];   // written to the file for readability only
 // Units a line on a sale can be sold in. The unit belongs to the sale line, not to the product.
-const SELLING_UNITS = ["piece", "box", "m2", "kg", "m"];
+const SELLING_UNITS = Calc.UNITS;
 // m² can be typed when adding to a sale, but it is converted to boxes and never stored on a sale line.
 const SALE_LINE_UNITS = ["piece", "box", "kg", "m"];
-const unitLabel = (unit) => t(SELLING_UNITS.includes(unit) ? "unit." + unit : "unit.piece");
+// "Box", or "Boxes" when given a quantity other than 1, in the current language; "" for no/unknown unit.
+const unitLabel = Calc.unitLabel;
 
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const isStr = (v) => typeof v === "string";
@@ -133,7 +129,12 @@ const isDate = (v) => isStr(v) && !isNaN(new Date(v));
 function normalizeProduct(raw) {
   if (!raw || typeof raw !== "object" || !raw.name) return null;
   const price = Number(raw.sellingPrice);
-  const stock = Math.floor(Number(raw.stock));
+  const priceUnit = Calc.normalizeUnit(raw.priceUnit);
+  // What the stock quantity is counted in. null = an old product whose unit was never recorded:
+  // its stock keeps being reduced one-for-one, as before.
+  const stockUnit = Calc.inferStockUnit({ stockUnit: raw.stockUnit, priceUnit });
+  // Stock may be fractional (3 pieces sold from a box-counted product), but only when the unit is known.
+  const stock = stockUnit ? Number(raw.stock) : Math.floor(Number(raw.stock));
   const hasCost = raw.purchasePrice !== "" && raw.purchasePrice != null && Number.isFinite(Number(raw.purchasePrice)) && Number(raw.purchasePrice) >= 0;
   const coverage = Number(raw.coveragePerBox);
   return {
@@ -148,22 +149,17 @@ function normalizeProduct(raw) {
     category: String(raw.category || ""),
     sellingPrice: Number.isFinite(price) && price >= 0 ? price : 0,
     // What the selling price is per (piece, box, m2, kg, m). null = saved before this field existed.
-    priceUnit: Pricing.isPriceUnit(raw.priceUnit) ? raw.priceUnit : null,
+    priceUnit,
+    stockUnit,
     purchasePrice: hasCost ? Number(raw.purchasePrice) : null,
-    stock: Number.isFinite(stock) && stock >= 0 ? stock : 0,
+    stock: Number.isFinite(stock) && stock >= 0 ? Calc.cleanNumber(stock) : 0,
   };
 }
 
 // Accepts 60*120, 12*15, 60x120 or 60 × 120 (an old "cm" suffix is still accepted so saved data keeps loading).
-function isTileSize(value) {
-  return /^\d+(?:[.,]\d+)?\s*[*×x]\s*\d+(?:[.,]\d+)?\s*(?:mm|cm|m)?$/i.test(String(value).trim());
-}
-
-// Stores whatever was typed in one format: "60*120".
-function normalizeTileSize(value) {
-  const m = String(value).trim().match(/^(\d+(?:[.,]\d+)?)\s*[*×x]\s*(\d+(?:[.,]\d+)?)/i);
-  return m ? `${m[1].replace(",", ".")}*${m[2].replace(",", ".")}` : String(value).trim();
-}
+// Stored in one format, in cm: "60*120". The parsing itself lives in calc.js.
+const isTileSize = Calc.isTileSize;
+const normalizeTileSize = Calc.normalizeTileSize;
 
 // A display label is derived at render time; it is never the persisted product value.
 function productLabel(product) {
@@ -180,8 +176,22 @@ function productDetails(product) {
 
 // "800 DA / m²". A product saved without a price unit shows just the amount.
 function priceLabel(product) {
-  const unit = Pricing.priceUnitLabel(product.priceUnit);
+  const unit = Calc.unitLabel(product.priceUnit);
   return money(product.sellingPrice) + (unit ? ` / ${unit}` : "");
+}
+
+// "20 Boxes" (stock counted in boxes), or just "20" for an old product with no stock unit.
+function stockText(product, amount = product.stock) {
+  const unit = Calc.unitLabel(product.stockUnit, amount);
+  return numberFormat.format(amount) + (unit ? ` ${unit}` : "");
+}
+
+// "20 Boxes (80 Pieces)": the stock also shown in pieces when it is counted in boxes.
+function stockLabel(product) {
+  const text = stockText(product);
+  if (product.stockUnit !== "box") return text;
+  const pieces = Calc.stockIn(product, "piece");
+  return pieces.error ? text : `${text} (${stockText({ stockUnit: "piece" }, pieces.value)})`;
 }
 
 // "60*120" or "60 × 120 cm" -> "60 × 120"
@@ -253,9 +263,10 @@ function productProblem(p) {
   if (p.tileSize !== undefined && (!isStr(p.tileSize) || (p.tileSize.trim() && !isTileSize(p.tileSize)))) return t("problem.badTileSize");
   if (p.coveragePerBox !== undefined && p.coveragePerBox !== null && (!isNum(p.coveragePerBox) || p.coveragePerBox <= 0)) return t("problem.badCoverage");
   if (!isNum(p.sellingPrice) || p.sellingPrice < 0) return t("problem.badPrice");
-  if (p.priceUnit !== undefined && p.priceUnit !== null && !Pricing.isPriceUnit(p.priceUnit)) return t("problem.badPriceUnit");
+  if (p.priceUnit !== undefined && p.priceUnit !== null && !Calc.isUnit(p.priceUnit)) return t("problem.badPriceUnit");
+  if (p.stockUnit !== undefined && p.stockUnit !== null && !Calc.isUnit(p.stockUnit)) return t("problem.badStockUnit");
   if (p.purchasePrice != null && (!isNum(p.purchasePrice) || p.purchasePrice < 0)) return t("problem.badCost");
-  if (!Number.isInteger(p.stock) || p.stock < 0) return t("problem.badStock");
+  if (!isNum(p.stock) || p.stock < 0) return t("problem.badStock");
   return "";
 }
 
@@ -395,6 +406,7 @@ const state = {
   selectedId: null,       // product selected in the picker
   previewInvoice: null,   // saved invoice shown in the preview (null = live sale)
   editingId: null,        // product being edited in the Stock form
+  addUnitFor: null,       // product the Sell page unit list was last set up for
 };
 
 function applyData(d) {
@@ -980,7 +992,7 @@ function readProductForm() {
   if (price < 0) return fail("pPrice", t("product.priceNegative"));
 
   const priceUnit = get("pPriceUnit");
-  if (!Pricing.isPriceUnit(priceUnit)) return fail("pPriceUnit", t("product.chooseUnit"));
+  if (!Calc.isUnit(priceUnit)) return fail("pPriceUnit", t("product.chooseUnit"));
   if (priceUnit === "m2" && coverageRaw === "") {
     return fail("pCoveragePerBox", t("product.coverageNeeded"));
   }
@@ -989,9 +1001,17 @@ function readProductForm() {
   const cost = Number(costRaw);
   if (costRaw !== "" && (!Number.isFinite(cost) || cost < 0)) return fail("pCost", t("product.costNegative"));
 
+  const stockUnit = get("pStockUnit");
+  if (!Calc.isUnit(stockUnit)) return fail("pStockUnit", t("product.chooseStockUnit"));
+  if (Calc.unitFamily(stockUnit) !== Calc.unitFamily(Calc.defaultStockUnit(priceUnit))) {
+    return fail("pStockUnit", t("product.stockUnitMismatch", { stock: t("stockunit." + stockUnit), price: t("price." + priceUnit) }));
+  }
+
   const stockRaw = get("pStock");
   const stock = stockRaw === "" ? 0 : Number(stockRaw);
-  if (!Number.isInteger(stock) || stock < 0) return fail("pStock", t("product.stockWhole"));
+  if (!Number.isFinite(stock) || stock < 0 || (Calc.isWholeUnit(stockUnit) && !Number.isInteger(stock))) {
+    return fail("pStock", t(Calc.isWholeUnit(stockUnit) ? "product.stockWhole" : "product.stockNumber"));
+  }
 
   const sku = get("pSku");
   if (sku) {
@@ -1010,6 +1030,7 @@ function readProductForm() {
       category: get("pCategory"),
       sellingPrice: price,
       priceUnit,
+      stockUnit,
       purchasePrice: costRaw === "" ? null : cost,
       stock,
     },
@@ -1062,7 +1083,7 @@ async function adjustStock(id, delta) {
   const r = await commit((d) => {
     const product = findProduct(id, d);
     if (!product) return { skip: true };
-    product.stock = Math.max(0, product.stock + delta);
+    product.stock = Math.max(0, Calc.cleanNumber(product.stock + delta));
   });
   if (r.error) { notify(r.error, "error"); return; }
   renderStock();
@@ -1072,16 +1093,16 @@ async function adjustStock(id, delta) {
 
 async function addStock(id, rawQty) {
   if (!findProduct(id)) return { error: t("product.selectFirst") };
-  const qty = Number(rawQty);
-  if (rawQty === "" || !Number.isInteger(qty) || qty < 1) {
-    return { error: t("restock.qtyWhole") };
-  }
+  const stockUnit = findProduct(id).stockUnit;
+  const checked = Calc.validateQuantity(rawQty, stockUnit);
+  if (checked.error) return { error: t(Calc.isWholeUnit(stockUnit) ? "restock.qtyWhole" : "restock.qtyPositive") };
+  const qty = checked.value;
   return commit((d) => {
     const product = findProduct(id, d);
     if (!product) return { error: t("product.gone") };
     const before = product.stock;
-    product.stock = before + qty;
-    return { message: `${product.name}: ${before} + ${qty} = ${product.stock}` };
+    product.stock = Calc.cleanNumber(before + qty);
+    return { message: `${product.name}: ${numberFormat.format(before)} + ${numberFormat.format(qty)} = ${stockText(product)}` };
   });
 }
 
@@ -1098,6 +1119,8 @@ function startEditProduct(id) {
   $("pPriceUnit").value = p.priceUnit || "";   // empty for products saved before price units
   $("pCost").value = p.purchasePrice == null ? "" : p.purchasePrice;
   $("pStock").value = p.stock;
+  $("pStockUnit").value = p.stockUnit || "";   // empty for products saved before stock units
+  $("pStockUnit").dataset.touched = "1";       // an edit never changes the unit on its own
   $("pSku").value = p.sku;
   $("pCategory").value = p.category;
   renderProductFormMode();
@@ -1109,6 +1132,7 @@ function resetProductForm() {
   state.editingId = null;
   $("productForm").reset();
   $("pStock").value = 0;
+  delete $("pStockUnit").dataset.touched;
   renderProductFormMode();
   clearProductErrors();
 }
@@ -1170,68 +1194,114 @@ function findSaleItem(lineId) {
   return state.sale.items.find((i) => i.lineId === lineId);
 }
 
-// Quantity of a product already on the sale across all its lines, optionally ignoring one line.
-function qtyInSale(productId, exceptLineId, sale = state.sale) {
-  return sale.items.reduce((sum, i) => (i.productId === productId && i.lineId !== exceptLineId ? sum + toNumber(i.qty) : sum), 0);
+// Stock a product's lines take, in the product's own stock unit (2 boxes = 8 pieces of a piece-counted product).
+// Lines in `exceptLineIds` are left out, so one line can be checked against all the others.
+function stockUsedInSale(productId, exceptLineIds = [], sale = state.sale, data = state) {
+  const product = findProduct(productId, data);
+  if (!product) return 0;
+  let used = 0;
+  for (const i of sale.items) {
+    if (i.productId !== productId || exceptLineIds.includes(i.lineId)) continue;
+    const d = Calc.stockDeduction(product, i.qty, i.sellingUnit);
+    if (!d.error) used += d.value;
+  }
+  return Calc.cleanNumber(used);
 }
 
-// Total quantity per product across all lines, for stock checks.
-function totalsByProduct(items) {
+// Stock needed per product for these sale lines, in each product's stock unit.
+// errors lists lines that can't be converted (for example a tile size removed after the line was added).
+function stockNeeds(items, data = state) {
   const totals = new Map();
-  for (const i of items) totals.set(i.productId, (totals.get(i.productId) || 0) + toNumber(i.qty));
-  return totals;
+  const errors = [];
+  for (const item of items) {
+    const p = findProduct(item.productId, data);
+    if (!p) continue;
+    const d = Calc.stockDeduction(p, item.qty, item.sellingUnit);
+    if (d.error) errors.push(d.error);
+    else totals.set(p.id, Calc.cleanNumber((totals.get(p.id) || 0) + d.value));
+  }
+  return { totals, errors: [...new Set(errors)] };
 }
 
-function stockMessage(available, inSale) {
-  return t("sale.stockLow", { available }) + (inSale ? t("sale.stockInSale", { n: inSale }) : "");
+function stockMessage(product, inSale) {
+  return t("sale.stockLow", { available: stockText(product) }) + (inSale ? t("sale.stockInSale", { n: stockText(product, inSale) }) : "");
+}
+
+// Largest quantity of `unit` that fits in `remaining` stock (in the product's stock unit).
+// Whole units round down (at least 1, so the line stays visible and checkout reports the shortage).
+function fitQuantity(product, unit, remaining) {
+  const whole = Calc.isWholeUnit(unit);
+  const c = Calc.isUnit(product.stockUnit) ? Calc.convertQuantity(remaining, product.stockUnit, unit, product) : { value: remaining };
+  if (c.error) return whole ? 1 : 0.001;
+  const fit = whole ? Math.floor(c.value + 1e-9) : Math.floor(c.value * 1000 + 1e-9) / 1000;
+  return Math.max(fit, whole ? 1 : 0.001);
 }
 
 function addToSale(productId, rawQty, rawUnit) {
   const product = findProduct(productId);
   if (!product) return { error: t("product.selectFirst") };
-  let qty = Number(rawQty);
+  let qty;
   let sellingUnit = SALE_LINE_UNITS.includes(rawUnit) ? rawUnit : "piece";
   let converted = null;
   if (rawUnit === "m2") {
     // Typed in m²: work out how many whole boxes cover that area (rounded up).
-    if (rawQty === "" || !Number.isFinite(qty) || qty <= 0) return { error: t("sale.enterArea") };
-    if (!product.coveragePerBox) return { error: t("sale.noCoverage", { name: product.name }) };
-    const boxes = Math.max(1, Math.ceil(round2(qty / product.coveragePerBox * 1e4) / 1e4));
-    converted = { area: qty, boxes, coverage: product.coveragePerBox };
-    qty = boxes;
+    const area = Calc.boxesForArea(product, rawQty);
+    if (area.error) return { error: area.error };
+    converted = { area: area.area, boxes: area.boxes, coverage: area.coverage };
+    qty = area.boxes;
     sellingUnit = "box";
-  } else if (rawQty === "" || !Number.isInteger(qty) || qty < 1) {
-    return { error: t("sale.qtyWhole") };
+  } else {
+    const checked = Calc.validateQuantity(rawQty, sellingUnit);
+    if (checked.error) return { error: checked.error };
+    qty = checked.value;
   }
-  const item = state.sale.items.find((i) => i.productId === productId && i.sellingUnit === sellingUnit);
-  const inSale = qtyInSale(productId);
-  if (inSale + qty > product.stock) return { error: stockMessage(product.stock, inSale) };
 
-  // The price of one unit comes from the selling price and its price unit (800 DA per m² -> 1,152 DA per box).
-  const priced = Pricing.priceForUnit(product, sellingUnit);
+  // The price of one unit comes from the selling price and its price unit (1,500 DA per m² -> 2,160 DA per box).
+  const priced = Calc.getUnitPrice(product, sellingUnit);
   if (priced.error) return { error: priced.error };
+  // Stock is checked in the product's own stock unit, so 1 box is not the same as 1 piece.
+  const taken = Calc.stockDeduction(product, qty, sellingUnit);
+  if (taken.error) return { error: taken.error };
+  const inSale = stockUsedInSale(productId);
+  if (!Calc.hasEnoughStock(product.stock, inSale + taken.value)) return { error: stockMessage(product, inSale) };
 
-  if (item) item.qty += qty;
-  else state.sale.items.push({ lineId: uid(), productId, qty, sellingUnit, unitPrice: priced.price });
+  const item = state.sale.items.find((i) => i.productId === productId && i.sellingUnit === sellingUnit);
+  if (item) item.qty = Calc.cleanNumber(item.qty + qty);
+  else state.sale.items.push({ lineId: uid(), productId, qty, sellingUnit, unitPrice: priced.value, listPrice: priced.value, priceOverridden: false });
   return { ok: true, converted };
 }
 
-// Returns { merged: true } when the line joined an existing line of the same product and unit.
+// Changing the unit keeps the quantity typed and works out the price (and stock use) for the new unit.
+// Returns { merged: true } when the line joined an existing line of the same product and unit;
+// { error, revert: true } when the unit can't be used (the line keeps its old unit).
 function updateSaleUnit(lineId, rawUnit) {
   const item = findSaleItem(lineId);
   if (!item) return { error: t("sale.lineGone") };
   if (!SALE_LINE_UNITS.includes(rawUnit)) return { error: t("sale.chooseUnit") };
   const product = findProduct(item.productId);
-  const priced = product ? Pricing.priceForUnit(product, rawUnit) : { price: item.unitPrice };
-  if (priced.error) return { error: priced.error, revert: true };   // the line keeps its old unit
-  item.sellingUnit = rawUnit;
   const twin = state.sale.items.find((i) => i !== item && i.productId === item.productId && i.sellingUnit === rawUnit);
+  const newQty = twin ? Calc.cleanNumber(twin.qty + item.qty) : item.qty;
+  let priced = { value: item.unitPrice };
+  if (product) {
+    priced = Calc.getUnitPrice(product, rawUnit);
+    if (priced.error) return { error: priced.error, revert: true };
+    const checked = Calc.validateQuantity(newQty, rawUnit);
+    if (checked.error) return { error: `${checked.error} (${Calc.unitLabel(rawUnit)})`, revert: true };
+    const taken = Calc.stockDeduction(product, newQty, rawUnit);
+    if (taken.error) return { error: taken.error, revert: true };
+    const others = stockUsedInSale(item.productId, [item.lineId, twin && twin.lineId]);
+    if (!Calc.hasEnoughStock(product.stock, others + taken.value)) return { error: stockMessage(product, others), revert: true };
+  }
+  item.sellingUnit = rawUnit;
   if (twin) {
-    twin.qty += item.qty;
+    twin.qty = newQty;
     state.sale.items = state.sale.items.filter((i) => i !== item);
     return { merged: true };
   }
-  item.unitPrice = priced.price;   // a price typed by hand on this line is replaced by the unit's price
+  // A price typed by hand on this line is replaced by the new unit's calculated price.
+  item.unitPrice = priced.value;
+  item.listPrice = priced.value;
+  item.priceOverridden = false;
   return {};
 }
 
@@ -1244,14 +1314,15 @@ function updateSaleQuantity(lineId, rawQty) {
   const item = findSaleItem(lineId);
   const product = item && findProduct(item.productId);
   if (!item || !product) return { error: t("sale.productUnavailable") };
-  const qty = Number(rawQty);
-  if (rawQty === "" || !Number.isInteger(qty) || qty < 1) {
-    return { error: t("sale.qtyWhole") };
-  }
-  const others = qtyInSale(item.productId, lineId);
-  if (qty + others > product.stock) {
-    item.qty = Math.max(1, product.stock - others);
-    return { error: stockMessage(product.stock, others), clamped: true };
+  const checked = Calc.validateQuantity(rawQty, item.sellingUnit);
+  if (checked.error) return { error: checked.error };
+  const qty = checked.value;
+  const taken = Calc.stockDeduction(product, qty, item.sellingUnit);
+  if (taken.error) return { error: taken.error };
+  const others = stockUsedInSale(item.productId, [lineId]);
+  if (!Calc.hasEnoughStock(product.stock, others + taken.value)) {
+    item.qty = fitQuantity(product, item.sellingUnit, Calc.cleanNumber(product.stock - others));
+    return { error: stockMessage(product, others), clamped: true };
   }
   item.qty = qty;
   return {};
@@ -1263,7 +1334,10 @@ function updateSalePrice(lineId, rawPrice) {
   const price = Number(rawPrice);
   if (rawPrice === "" || !Number.isFinite(price)) return { error: t("sale.enterPrice") };
   if (price < 0) return { error: t("sale.priceNegative") };
+  // A hand-typed price belongs to this sale line only. The product's own price is never touched,
+  // and changing the unit later goes back to the calculated price.
   item.unitPrice = price;
+  item.priceOverridden = round2(price) !== round2(toNumber(item.listPrice));
   return {};
 }
 
@@ -1274,7 +1348,7 @@ function amountFrom(type, value, base) {
 }
 
 function calculateTotals(sale) {
-  const subtotal = round2(sale.items.reduce((sum, i) => sum + toNumber(i.qty) * toNumber(i.unitPrice), 0));
+  const subtotal = Calc.calculateSubtotal(sale.items);
   const discount = Math.min(amountFrom(sale.discountType, sale.discountValue, subtotal), subtotal);
   const tax = amountFrom(sale.taxType, sale.taxValue, subtotal - discount);
   const total = Math.max(0, round2(subtotal - discount + tax));
@@ -1328,12 +1402,16 @@ function validateSale() {
   for (const item of state.sale.items) {
     const p = findProduct(item.productId);
     if (!p) { errors.push(t("sale.productMissing")); continue; }
-    if (!Number.isInteger(item.qty) || item.qty < 1) errors.push(t("sale.lineQty", { name: p.name }));
+    if (Calc.validateQuantity(item.qty, item.sellingUnit).error) {
+      errors.push(t(Calc.isWholeUnit(item.sellingUnit) ? "sale.lineQty" : "sale.lineQtyPositive", { name: p.name }));
+    }
     if (!Number.isFinite(item.unitPrice) || item.unitPrice < 0) errors.push(t("sale.linePrice", { name: p.name }));
   }
-  for (const [productId, total] of totalsByProduct(state.sale.items)) {
+  const needs = stockNeeds(state.sale.items);
+  errors.push(...needs.errors);
+  for (const [productId, total] of needs.totals) {
     const p = findProduct(productId);
-    if (p && total > p.stock) errors.push(t("sale.nameMessage", { name: p.name, message: stockMessage(p.stock) }));
+    if (p && !Calc.hasEnoughStock(p.stock, total)) errors.push(t("sale.nameMessage", { name: p.name, message: stockMessage(p) }));
   }
   const adj = adjustmentError() || paidError();
   if (adj) errors.push(adj);
@@ -1344,14 +1422,22 @@ function validateSale() {
 // Keeps the sale in line with the inventory (deleted products, stock lowered elsewhere).
 function syncSaleWithProducts() {
   const notes = [];
-  const used = new Map();   // stock already given to earlier lines of the same product
+  const used = new Map();   // stock (in the product's stock unit) already given to earlier lines of the same product
   state.sale.items = state.sale.items.filter((item) => {
     const p = findProduct(item.productId);
     if (!p) { notes.push(t("sale.removedGone")); return false; }
-    const left = p.stock - (used.get(p.id) || 0);
-    if (left < 1) { notes.push(t("sale.removedOut", { name: p.name })); return false; }
-    if (item.qty > left) { item.qty = left; notes.push(t("sale.reduced", { name: p.name, stock: p.stock })); }
-    used.set(p.id, (used.get(p.id) || 0) + item.qty);
+    const left = Calc.cleanNumber(p.stock - (used.get(p.id) || 0));
+    let need = Calc.stockDeduction(p, item.qty, item.sellingUnit);
+    if (need.error) { notes.push(t("sale.removedError", { error: need.error })); return false; }
+    if (!Calc.hasEnoughStock(left, need.value)) {
+      const fit = fitQuantity(p, item.sellingUnit, left);
+      const fitNeed = Calc.stockDeduction(p, fit, item.sellingUnit);
+      if (fitNeed.error || !Calc.hasEnoughStock(left, fitNeed.value)) { notes.push(t("sale.removedOut", { name: p.name })); return false; }
+      item.qty = fit;
+      need = fitNeed;
+      notes.push(t("sale.reduced", { name: p.name, stock: stockText(p) }));
+    }
+    used.set(p.id, Calc.cleanNumber((used.get(p.id) || 0) + need.value));
     return true;
   });
   return notes;
@@ -1383,6 +1469,7 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
   const paid = salePaid(sale, totals.total);
   const items = sale.items.map((item) => {
     const p = findProduct(item.productId, data);
+    const taken = p ? Calc.stockDeduction(p, item.qty, item.sellingUnit) : { error: true };
     return {
       productId: item.productId,
       name: p ? p.name : DELETED_PRODUCT,
@@ -1393,9 +1480,15 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
       sku: p ? p.sku : "",
       qty: item.qty,
       unitPrice: item.unitPrice,
-      total: Pricing.lineTotal(item.qty, item.unitPrice),
+      total: Calc.calculateLineTotal(item.qty, item.unitPrice),
+      // What the price was worked out from, kept so the line can be audited later. A saved invoice
+      // is never recalculated from the product's current price, size or coverage.
       priceUnit: p ? p.priceUnit : null,
       productPrice: p ? p.sellingPrice : item.unitPrice,
+      calculatedUnitPrice: item.listPrice != null ? item.listPrice : item.unitPrice,
+      priceOverridden: Boolean(item.priceOverridden),
+      stockUnit: p ? p.stockUnit : null,
+      stockDeducted: taken.error ? null : taken.value,
     };
   });
   const s = data.settings;
@@ -1424,6 +1517,27 @@ function draftInvoice() {
   return buildInvoiceData(state.sale, formatInvoiceNumber(state.counter + 1), new Date().toISOString());
 }
 
+// Turns a sale into a saved invoice on the data draft `d`: checks the stock again, takes the stock out
+// (converted to each product's stock unit) and moves the invoice counter on. { invoice } or { error }.
+function applySale(d, sale) {
+  if (sale.items.some((i) => !findProduct(i.productId, d))) return { error: t("sale.productMissing") };
+  const needs = stockNeeds(sale.items, d);
+  if (needs.errors.length) return { error: needs.errors[0] };
+  for (const [productId, total] of needs.totals) {
+    const p = findProduct(productId, d);
+    if (!Calc.hasEnoughStock(p.stock, total)) return { error: t("sale.nameMessage", { name: p.name, message: stockMessage(p) }) };
+  }
+  const invoice = { id: uid(), ...buildInvoiceData(sale, formatInvoiceNumber(d.counter + 1), new Date().toISOString(), d) };
+  // Stock goes down by what was sold converted to each product's stock unit (never by the typed quantity).
+  for (const [productId, total] of needs.totals) {
+    const p = findProduct(productId, d);
+    p.stock = Math.max(0, Calc.cleanNumber(p.stock - total));
+  }
+  d.invoices.push(invoice);
+  d.counter = Math.max(d.counter, invoiceSequence(invoice.invoiceNumber));
+  return { invoice };
+}
+
 function completeSale() {
   return guard(async () => {
     // Validate the sale and check the stock one final time.
@@ -1436,18 +1550,8 @@ function completeSale() {
 
     // One transaction: invoice added + stock decreased + counter increased, saved together or not at all.
     const sale = state.sale;
-    const r = await commit((d) => {
-      for (const [productId, total] of totalsByProduct(sale.items)) {
-        const p = findProduct(productId, d);
-        if (!p) return { error: t("sale.productMissing") };
-        if (total > p.stock) return { error: t("sale.nameMessage", { name: p.name, message: stockMessage(p.stock) }) };
-      }
-      const invoice = { id: uid(), ...buildInvoiceData(sale, formatInvoiceNumber(d.counter + 1), new Date().toISOString(), d) };
-      for (const item of invoice.items) findProduct(item.productId, d).stock -= item.qty;
-      d.invoices.push(invoice);
-      d.counter = Math.max(d.counter, invoiceSequence(invoice.invoiceNumber));
-      return { invoice };
-    });
+    const r = await commit((d) => applySale(d, sale));
+
     if (r.error) {
       showError("saleError", r.error);
       notify(r.error, "error");
@@ -1590,7 +1694,7 @@ function renderResults() {
 
   box.innerHTML = state.results.map((p) => {
     const meta = [productDetails(p), p.sku, p.category].filter(Boolean).join(", ");
-    const stock = esc(p.stock <= 0 ? t("stock.out") : p.stock <= LOW_STOCK ? t("stock.lowN", { n: p.stock }) : t("stock.n", { n: p.stock }));
+    const stock = esc(p.stock <= 0 ? t("stock.out") : p.stock <= LOW_STOCK ? t("stock.lowN", { n: stockLabel(p) }) : t("stock.n", { n: stockLabel(p) }));
     return `<div class="result" role="option" data-id="${esc(p.id)}" aria-selected="${p.id === state.selectedId}">` +
       `<div><div>${esc(productLabel(p))}</div>${meta ? `<div class="meta">${esc(meta)}</div>` : ""}</div>` +
       `<div class="price">${esc(priceLabel(p))}</div>` +
@@ -1606,22 +1710,60 @@ function renderSelected() {
   $("selectedInfo").innerHTML = p
     ? `<strong>${esc(productLabel(p))}</strong>` +
       (productDetails(p) ? `<span>${esc(productDetails(p))}</span>` : "") +
-      (p.stock > 0 ? `<span>${esc(t("stock.n", { n: p.stock }))}</span>` : `<span class="out">${esc(t("stock.out"))}</span>`) +
+      (p.stock > 0 ? `<span>${esc(t("stock.n", { n: stockLabel(p) }))}</span>` : `<span class="out">${esc(t("stock.out"))}</span>`) +
       (p.stock > 0 && p.stock <= LOW_STOCK ? `<span class="low">${esc(t("stock.low"))}</span>` : "") +
       `<span>${esc(t("selected.price", { price: priceLabel(p) }))}</span>` +
       boxPriceNote(p)
     : `<span class="none">${esc(t("selected.none"))}</span>`;
+  syncAddUnit(p);
+}
+
+// Can this product be added to a sale in this unit? ("m²" is typed as an area and turned into boxes.)
+function unitProblem(product, unit) {
+  if (unit === "m2") return Calc.getBoxCoverage(product).error || unitProblem(product, "box");
+  return Calc.checkSellable(product, unit).error || "";
+}
+
+// The unit list on the Sell page: units this product can't be sold in are greyed out (with the reason),
+// and a newly selected product starts on the unit its price is per (boxes for a per-m² price).
+function syncAddUnit(p) {
+  const select = $("addUnit");
+  const options = Array.from(select.options || []);
+  for (const opt of options) {
+    const problem = p ? unitProblem(p, opt.value) : "";
+    opt.disabled = Boolean(problem);
+    opt.title = problem;
+  }
+  if (p && (state.addUnitFor !== p.id || options.some((o) => o.value === select.value && o.disabled))) {
+    const wanted = Calc.defaultSellingUnit(p);
+    const pick = options.find((o) => o.value === wanted && !o.disabled) || options.find((o) => !o.disabled);
+    if (pick) select.value = pick.value;
+  }
+  state.addUnitFor = p ? p.id : null;
 }
 
 // "Box: 1,152 DA" for a tile priced per m², so the cashier sees what one box costs.
 function boxPriceNote(p) {
   if (!p.priceUnit || p.priceUnit === "box" || !p.coveragePerBox) return "";
-  const box = Pricing.priceForUnit(p, "box");
-  return box.error ? "" : `<span>${esc(t("selected.box", { price: money(box.price) }))}</span>`;
+  const box = Calc.getUnitPrice(p, "box");
+  return box.error ? "" : `<span>${esc(t("selected.box", { price: money(box.value) }))}</span>`;
 }
 
-function unitOptions(selected) {
-  return SALE_LINE_UNITS.map((u) => `<option value="${u}"${u === selected ? " selected" : ""}>${esc(unitLabel(u))}</option>`).join("");
+function unitOptions(selected, product) {
+  return SALE_LINE_UNITS.map((u) => {
+    const problem = product && u !== selected ? unitProblem(product, u) : "";
+    return `<option value="${u}"${u === selected ? " selected" : ""}${problem ? ` disabled title="${esc(problem)}"` : ""}>${esc(unitLabel(u))}</option>`;
+  }).join("");
+}
+
+// Shows how the line's price was worked out: "1,500 DA / m² x 1.44 m² = 2,160 DA per Box".
+function priceNote(item) {
+  const p = findProduct(item.productId);
+  const priced = p ? Calc.getUnitPrice(p, item.sellingUnit) : null;
+  if (!priced || priced.error) return "";
+  if (item.priceOverridden) return t("sell.customPrice", { price: money(item.listPrice) });
+  if (priced.legacy || priced.factor === 1) return "";
+  return `${money(priced.basePrice)} / ${unitLabel(priced.priceUnit)} × ${numberFormat.format(priced.factor)} ${unitLabel(priced.priceUnit)}`;
 }
 
 function renderSale() {
@@ -1632,12 +1774,14 @@ function renderSale() {
     body.innerHTML = state.sale.items.map((item) => {
       const p = findProduct(item.productId);
       const name = p ? productLabel(p) : t("sell.deletedProduct");
+      const whole = Calc.isWholeUnit(item.sellingUnit);
       return `<tr data-id="${esc(item.lineId)}">` +
-        `<td><div>${esc(name)}</div><div class="muted small">${esc(t("sell.available", { n: p ? p.stock : 0 }))}</div><div class="error small" data-row-error></div></td>` +
-        `<td class="num"><div class="qty-cell"><input class="qty-input" type="number" min="1" step="1" value="${item.qty}" data-field="qty" aria-label="${esc(t("sell.qtyAria", { name }))}">` +
-        `<select class="unit-select" data-field="unit" aria-label="${esc(t("sell.unitAria", { name }))}">${unitOptions(item.sellingUnit)}</select></div></td>` +
-        `<td class="num"><input class="price-input" type="number" min="0" step="any" value="${item.unitPrice}" data-field="price" aria-label="${esc(t("sell.priceAria", { name }))}"></td>` +
-        `<td class="num" data-line-total>${esc(money(item.qty * item.unitPrice))}</td>` +
+        `<td><div>${esc(name)}</div><div class="muted small">${esc(t("sell.available", { n: p ? stockLabel(p) : 0 }))}</div><div class="error small" data-row-error></div></td>` +
+        `<td class="num"><div class="qty-cell"><input class="qty-input" type="number" min="${whole ? 1 : 0}" step="${whole ? 1 : "any"}" value="${item.qty}" data-field="qty" aria-label="${esc(t("sell.qtyAria", { name }))}">` +
+        `<select class="unit-select" data-field="unit" aria-label="${esc(t("sell.unitAria", { name }))}">${unitOptions(item.sellingUnit, p)}</select></div></td>` +
+        `<td class="num"><input class="price-input" type="number" min="0" step="any" value="${item.unitPrice}" data-field="price" aria-label="${esc(t("sell.priceAria", { name }))}">` +
+        `<div class="muted small price-note" data-price-note>${esc(priceNote(item))}</div></td>` +
+        `<td class="num" data-line-total>${esc(money(Calc.calculateLineTotal(item.qty, item.unitPrice)))}</td>` +
         `<td class="num"><button type="button" class="btn small danger" data-action="remove" aria-label="${esc(t("sell.removeAria", { name }))}">${esc(t("common.remove"))}</button></td>` +
         `</tr>`;
     }).join("");
@@ -1660,7 +1804,9 @@ function refreshLive() {
   state.previewInvoice = null;
   $("saleBody").querySelectorAll("tr[data-id]").forEach((row) => {
     const item = findSaleItem(row.dataset.id);
-    if (item) row.querySelector("[data-line-total]").textContent = money(item.qty * item.unitPrice);
+    if (!item) return;
+    row.querySelector("[data-line-total]").textContent = money(Calc.calculateLineTotal(item.qty, item.unitPrice));
+    row.querySelector("[data-price-note]").textContent = priceNote(item);
   });
   renderTotals();
   renderInvoice();
@@ -1680,7 +1826,7 @@ function invoiceHtml(inv) {
 
   const rows = inv.items.length
     ? inv.items.map((i) =>
-        `<tr><td>${esc(invoiceItemLabel(i))}</td><td class="num">${num(i.qty)} ${esc(unitLabel(i.sellingUnit))}</td><td class="num">${num(i.unitPrice)}${i.sellingUnit ? ` <span class="inv-unit">/ ${esc(unitLabel(i.sellingUnit))}</span>` : ""}</td><td class="num">${num(i.total != null ? i.total : toNumber(i.qty) * toNumber(i.unitPrice))}</td></tr>`
+        `<tr><td>${esc(invoiceItemLabel(i))}</td><td class="num">${num(i.qty)}${i.sellingUnit ? ` ${esc(unitLabel(i.sellingUnit, i.qty))}` : ""}</td><td class="num">${num(i.unitPrice)}${i.sellingUnit ? ` <span class="inv-unit">/ ${esc(unitLabel(i.sellingUnit))}</span>` : ""}</td><td class="num">${num(i.total != null ? i.total : Calc.calculateLineTotal(i.qty, i.unitPrice))}</td></tr>`
       ).join("")
     : `<tr><td colspan="4" class="none">${esc(t("inv.noItems"))}</td></tr>`;
 
@@ -1769,7 +1915,7 @@ function renderStock() {
     `<td><div>${esc(productLabel(p))}</div>${[productDetails(p), p.category].filter(Boolean).length ? `<div class="muted small">${esc([productDetails(p), p.category].filter(Boolean).join(", "))}</div>` : ""}</td>` +
     `<td>${p.sku ? esc(p.sku) : '<span class="muted">-</span>'}</td>` +
     `<td class="num">${esc(priceLabel(p))}</td>` +
-    `<td class="num">${p.stock}${stockBadge(p.stock)}</td>` +
+    `<td class="num">${esc(stockLabel(p))}${stockBadge(p.stock)}</td>` +
     `<td class="num"><div class="row-actions">` +
     `<button type="button" class="btn small" data-action="dec" aria-label="${esc(t("stock.decAria", { name: p.name }))}"${p.stock < 1 ? " disabled" : ""}>-</button>` +
     `<button type="button" class="btn small" data-action="inc" aria-label="${esc(t("stock.incAria", { name: p.name }))}">+</button>` +
@@ -1794,9 +1940,9 @@ function renderRestockInfo() {
   const p = findProduct($("rProduct").value);
   if (!p) { $("restockInfo").textContent = t("restock.addFirst"); return; }
   const raw = $("rQty").value;
-  const qty = Number(raw);
-  $("restockInfo").textContent = t("restock.current", { n: p.stock }) +
-    (raw !== "" && Number.isInteger(qty) && qty > 0 ? t("restock.after", { n: p.stock + qty }) : "");
+  const checked = Calc.validateQuantity(raw, p.stockUnit);
+  $("restockInfo").textContent = t("restock.current", { n: stockLabel(p) }) +
+    (!checked.error ? t("restock.after", { n: stockText(p, Calc.cleanNumber(p.stock + checked.value)) }) : "");
 }
 
 function searchInvoices(query) {
@@ -2078,7 +2224,6 @@ function bindEvents() {
     state.previewInvoice = null;
     search.value = "";
     $("addQty").value = 1;
-    $("addUnit").value = "piece";
     renderResults();
     renderSelected();
     renderSale();
@@ -2116,7 +2261,13 @@ function bindEvents() {
         renderInvoice();
         return;
       }
-      unitSelect.closest("tr").querySelector("[data-row-error]").textContent = result.error || "";
+      const row = unitSelect.closest("tr");
+      const line = findSaleItem(rowId);
+      const whole = Calc.isWholeUnit(line.sellingUnit);
+      row.querySelector("[data-row-error]").textContent = result.error || "";
+      row.querySelector(".price-input").value = line.unitPrice;   // show the price calculated for the new unit
+      row.querySelector(".qty-input").min = whole ? 1 : 0;
+      row.querySelector(".qty-input").step = whole ? 1 : "any";
       state.previewInvoice = null;
       refreshLive();
       return;
@@ -2183,6 +2334,11 @@ function bindEvents() {
       else await addProduct(result.values);
     });
   });
+  $("pPriceUnit").addEventListener("change", () => {
+    const stockUnit = $("pStockUnit");
+    if (!stockUnit.dataset.touched) stockUnit.value = Calc.defaultStockUnit($("pPriceUnit").value) || "";
+  });
+  $("pStockUnit").addEventListener("change", () => { $("pStockUnit").dataset.touched = "1"; });
   productForm.addEventListener("input", (e) => {
     e.target.removeAttribute("aria-invalid");
     showError("productError", "");
@@ -2328,6 +2484,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     addToSale,
     updateSaleQuantity,
     updateSaleUnit,
+    updateSalePrice,
     validateSale,
     syncSaleWithProducts,
     getSale: () => state.sale,
@@ -2337,6 +2494,16 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     priceLabel,
     buildInvoiceData,
     calculateTotals,
+    applySale,
+    invoiceHtml,
+    getProducts: () => state.products,
+    getInvoices: () => state.invoices,
+    paymentInfo,
+    addPayment,
+    stockLabel,
+    stockText,
+    unitProblem,
+    priceNote,
     invoiceItemLabel,
     readProductForm,
     buildData,

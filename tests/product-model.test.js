@@ -1,79 +1,8 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const test = require("node:test");
-const vm = require("node:vm");
-
-// Loaded before pricing.js and script.js, in the same order as index.html.
-const LANGUAGE_FILES = ["i18n.js", "lang/en.js", "lang/fr.js"];
-
-function loadProductApi() {
-  const fields = new Map();
-  const element = (id) => {
-    if (!fields.has(id)) fields.set(id, {
-      id,
-      value: "",
-      textContent: "",
-      className: "",
-      hidden: false,
-      dataset: {},
-      style: {},
-      offsetHeight: 0,
-      classList: { toggle() {} },
-      reset() {},
-      focus() {},
-      querySelectorAll() { return []; },
-      setAttribute() {},
-      removeAttribute() {},
-    });
-    return fields.get(id);
-  };
-  const values = new Map();
-  const localStorage = {
-    getItem: (key) => values.has(key) ? values.get(key) : null,
-    setItem: (key, value) => values.set(key, String(value)),
-  };
-  const exports = {};
-  const context = {
-    __INVOISY_TEST_EXPORTS__: exports,
-    console,
-    document: {
-      getElementById: element,
-      querySelectorAll: () => [],
-      documentElement: { style: { setProperty() {} } },
-    },
-    window: {},
-    localStorage,
-    setTimeout,
-    clearTimeout,
-    structuredClone,
-  };
-  vm.createContext(context);
-  for (const file of LANGUAGE_FILES.concat(["pricing.js", "script.js"])) {
-    const source = fs.readFileSync(path.join(__dirname, "..", "java script", file), "utf8");
-    vm.runInContext(source, context, { filename: file });
-  }
-  return { api: exports, field: element };
-}
-
-function ceramic(overrides = {}) {
-  return {
-    id: "product-" + Math.random().toString(36).slice(2),
-    name: "Everton Grey",
-    manufacturer: "Timgad Ceramic",
-    tileSize: "60 × 120 cm",
-    coveragePerBox: 2.88,
-    description: "",
-    sku: "",
-    category: "Tiles",
-    sellingPrice: 1000,
-    purchasePrice: 800,
-    stock: 12,
-    ...overrides,
-  };
-}
+const { loadProductApi, ceramic } = require("./helpers");
 
 test("keeps same-name products from different manufacturers as distinct records", () => {
   const { api } = loadProductApi();
@@ -130,7 +59,7 @@ test("validates ceramic form fields and persists a product creation and edit", a
   const values = {
     pName: "Everton Grey", pManufacturer: "Timgad Ceramic", pTileSize: "60*120",
     pCoveragePerBox: "2.88", pDesc: "", pPrice: "1000", pCost: "800",
-    pStock: "12", pSku: "EV-GREY", pCategory: "Tiles", pPriceUnit: "box",
+    pStock: "12", pStockUnit: "box", pSku: "EV-GREY", pCategory: "Tiles", pPriceUnit: "box",
   };
   for (const [id, value] of Object.entries(values)) field(id).value = value;
   const created = api.readProductForm();
@@ -319,7 +248,7 @@ test("products saved without a price unit keep the old behavior", () => {
 test("the product form requires a price unit and a coverage for per-m² prices", () => {
   const { api, field } = loadProductApi();
   const fill = (extra) => {
-    const base = { pName: "Tile", pManufacturer: "", pTileSize: "60*60", pCoveragePerBox: "1.44", pDesc: "", pPrice: "800", pPriceUnit: "m2", pCost: "", pStock: "5", pSku: "", pCategory: "" };
+    const base = { pName: "Tile", pManufacturer: "", pTileSize: "60*60", pCoveragePerBox: "1.44", pDesc: "", pPrice: "800", pPriceUnit: "m2", pCost: "", pStock: "5", pStockUnit: "box", pSku: "", pCategory: "" };
     for (const [id, value] of Object.entries({ ...base, ...extra })) field(id).value = value;
     return api.readProductForm();
   };

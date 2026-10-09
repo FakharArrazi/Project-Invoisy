@@ -6,3 +6,6 @@
 .field .price-with-unit select { flex: 0 0 auto; width: 110px; }
 
 .inv-unit { font-size: 0.85em; color: var(--muted); white-space: nowrap; }
+
+/* How a sale line's price was worked out ("1,500 DA / m² x 1.44 m²"). */
+.price-note { margin-top: 2px; text-align: right; }

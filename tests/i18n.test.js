@@ -7,7 +7,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const SCRIPT_DIR = path.join(__dirname, "..", "java script");
-// Add a new language's file here (and in index.html).
+// Add a new language's file here (and in index.html and tests/helpers.js).
 const LANGUAGE_FILES = ["i18n.js", "lang/en.js", "lang/fr.js"];
 const read = (file) => fs.readFileSync(path.join(SCRIPT_DIR, file), "utf8");
 
@@ -41,12 +41,12 @@ function loadApp() {
     setTimeout, clearTimeout, structuredClone,
   };
   vm.createContext(context);
-  for (const file of LANGUAGE_FILES.concat(["pricing.js", "script.js"])) vm.runInContext(read(file), context, { filename: file });
+  for (const file of LANGUAGE_FILES.concat(["calc.js", "script.js"])) vm.runInContext(read(file), context, { filename: file });
   const api = exports;
   const useLanguage = (language) => api.applyData({
     products: [], invoices: [], settings: { ...api.DEFAULT_SETTINGS, language }, counter: 0, lastSaved: "",
   });
-  return { api, I18n: context.I18n, useLanguage, field: element };
+  return { api, I18n: context.I18n, Calc: context.Calc, useLanguage, field: element };
 }
 
 const placeholders = (text) => [...text.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort().join(",");
@@ -109,7 +109,7 @@ test("every text key used in the code or in index.html exists in English", () =>
   const literal = new RegExp(`"((?:${namespaces.join("|")})\\.[A-Za-z0-9.]+)"`, "g");
 
   const used = new Map();   // key -> where
-  for (const file of ["script.js", "pricing.js"]) {
+  for (const file of ["script.js", "calc.js"]) {
     for (const m of read(file).matchAll(literal)) used.set(m[1], file);
   }
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
@@ -175,7 +175,7 @@ test("sale errors and form checks speak French", () => {
     products: [api.normalizeProduct({ id: "t1", name: "Tile", sellingPrice: 800, priceUnit: "m2", stock: 3, tileSize: "60*60", coveragePerBox: 1.44 })],
     invoices: [], settings: { ...api.DEFAULT_SETTINGS, language: "fr" }, counter: 0, lastSaved: "",
   });
-  assert.equal(api.addToSale("t1", "9", "box").error, "Stock insuffisant. Quantité disponible\u00a0: 3.");
+  assert.equal(api.addToSale("t1", "9", "box").error, "Stock insuffisant. Quantité disponible\u00a0: 3 Cartons.");   // the stock is shown with its unit
   assert.equal(api.addToSale("t1", "0", "box").error, "La quantité doit être un nombre entier d’au moins 1.");
   assert.equal(api.productProblem({ ...api.normalizeProduct({ id: "x", name: "A", sellingPrice: 1 }), priceUnit: "bogus" }), "unité de prix non valide");
   field("pName").value = "";
@@ -190,6 +190,54 @@ test("price conversion messages use the unit names of the language", () => {
   assert.equal(api.addToSale("c1", "1", "piece").error, "Ciment is priced per kg, so it can't be sold by piece.");
   api.applyData({ products: [api.normalizeProduct(cement)], invoices: [], settings: { ...api.DEFAULT_SETTINGS, language: "fr" }, counter: 0, lastSaved: "" });
   assert.equal(api.addToSale("c1", "1", "piece").error, "Ciment est tarifé par kg\u00a0: il ne peut pas être vendu par pièce.");
+});
+
+test("unit names, plurals and conversion messages of calc.js follow the language", () => {
+  const { Calc, useLanguage } = loadApp();
+  const tile = { id: "t1", name: "Carrelage", tileSize: "60*60", coveragePerBox: 1.44, sellingPrice: 1500, priceUnit: "m2", stockUnit: "box", stock: 20 };
+
+  assert.equal(Calc.unitLabel("box", 2), "Boxes");
+  assert.equal(Calc.unitLabel("piece", 1), "Piece");
+  useLanguage("fr");
+  assert.equal(Calc.unitLabel("box", 2), "Cartons");
+  assert.equal(Calc.unitLabel("box", 1), "Carton");
+  assert.equal(Calc.unitLabel("box", 0.75), "Carton");      // French: anything below 2 is singular
+  assert.equal(Calc.unitLabel("m2", 3), "m²");              // units that never change with the count
+  assert.equal(Calc.unitLabel("piece"), "Pièce");
+
+  assert.equal(Calc.getUnitPrice({ ...tile, coveragePerBox: undefined }, "box").error,
+    "Carrelage n’a pas de couverture par carton. Modifiez le produit pour pouvoir convertir vers ou depuis les cartons.");
+  assert.equal(Calc.getUnitPrice({ ...tile, priceUnit: "kg", stockUnit: "kg" }, "box").error,
+    "Carrelage est tarifé par kg\u00a0: il ne peut pas être vendu par carton.");
+  assert.equal(Calc.getPiecesPerBox({ ...tile, coveragePerBox: 1.5 }).error,
+    "Carrelage\u00a0: la couverture par carton (1.5 m²) n’est pas un nombre entier de pièces de 0.36 m². Vérifiez les dimensions du carreau et la couverture par carton.");
+  assert.equal(Calc.validateQuantity("1.5", "box").error, "La quantité doit être un nombre entier d’au moins 1.");
+  assert.equal(Calc.validateQuantity("0", "kg").error, "La quantité doit être supérieure à 0.");
+  assert.equal(Calc.boxesForArea(tile, 0).error, "Saisissez la surface en m², supérieure à 0.");
+});
+
+test("stock is shown with its unit in French, and the new product-form checks speak French", () => {
+  const { api, useLanguage, field } = loadApp();
+  useLanguage("fr");
+  const tile = api.normalizeProduct({ id: "t1", name: "Carrelage", tileSize: "60*60", coveragePerBox: 1.44, sellingPrice: 1500, priceUnit: "m2", stockUnit: "box", stock: 20 });
+  assert.equal(api.stockLabel(tile), "20 Cartons (80 Pièces)");
+  assert.equal(api.priceNote({ productId: "none" }), "");
+
+  api.applyData({ products: [tile], invoices: [], settings: { ...api.DEFAULT_SETTINGS, language: "fr" }, counter: 0, lastSaved: "" });
+  assert.equal(api.addToSale("t1", "1", "piece").ok, true);
+  const line = api.getSale().items[0];
+  assert.equal(api.updateSalePrice(line.lineId, "500").error, undefined);
+  assert.equal(api.priceNote(line), "Prix personnalisé (calculé\u00a0: 540 DA)");
+
+  const fill = (extra) => {
+    const base = { pName: "Tile", pManufacturer: "", pTileSize: "60*60", pCoveragePerBox: "1.44", pDesc: "", pPrice: "800", pPriceUnit: "m2", pCost: "", pStock: "5", pStockUnit: "box", pSku: "", pCategory: "" };
+    for (const [id, value] of Object.entries({ ...base, ...extra })) field(id).value = value;
+    return api.readProductForm();
+  };
+  assert.equal(fill({ pStockUnit: "" }).error, "Choisissez l’unité dans laquelle le stock est compté.");
+  assert.equal(fill({ pStockUnit: "kg" }).error, "Un stock compté en kg ne correspond pas à un prix par m².");
+  assert.equal(fill({ pStock: "2.5" }).error, "Le stock doit être un nombre entier, 0 ou plus.");
+  assert.equal(api.productProblem({ ...tile, stockUnit: "bogus" }), "unité de stock non valide");
 });
 
 test("the printed invoice is in French but the saved invoice data stays language-neutral", () => {
