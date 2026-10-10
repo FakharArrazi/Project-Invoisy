@@ -1,0 +1,11 @@
+{
+  "name": "invoisy",
+  "private": true,
+  "description": "Invoisy runs straight from index.html. This file exists only to run the tests; the app itself has no dependencies.",
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\""
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5"
+  }
+}

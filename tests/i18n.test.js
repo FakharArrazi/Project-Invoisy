@@ -6,6 +6,9 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
+let fakeIndexedDB = null;
+try { fakeIndexedDB = require("fake-indexeddb"); } catch { /* only needed by tests that save data */ }
+
 const SCRIPT_DIR = path.join(__dirname, "..", "java script");
 // Add a new language's file here (and in index.html and tests/helpers.js).
 const LANGUAGE_FILES = ["i18n.js", "lang/en.js", "lang/fr.js"];
@@ -35,13 +38,15 @@ function loadApp() {
     __INVOISY_TEST_EXPORTS__: exports,
     console,
     Intl,
-    document: { getElementById: element, querySelectorAll: () => [], documentElement: { style: { setProperty() {} } } },
+    document: { getElementById: element, querySelectorAll: () => [], documentElement: { style: { setProperty() {} }, dataset: {} } },
     window: {},
-    localStorage: { getItem: (k) => (values.has(k) ? values.get(k) : null), setItem: (k, v) => values.set(k, String(v)) },
+    localStorage: { getItem: (k) => (values.has(k) ? values.get(k) : null), setItem: (k, v) => values.set(k, String(v)), removeItem: (k) => values.delete(k) },
+    navigator: {},
+    indexedDB: fakeIndexedDB ? new fakeIndexedDB.IDBFactory() : undefined,
     setTimeout, clearTimeout, structuredClone,
   };
   vm.createContext(context);
-  for (const file of LANGUAGE_FILES.concat(["calc.js", "script.js"])) vm.runInContext(read(file), context, { filename: file });
+  for (const file of LANGUAGE_FILES.concat(["calc.js", "validation.js", "database.js", "script.js"])) vm.runInContext(read(file), context, { filename: file });
   const api = exports;
   const useLanguage = (language) => api.applyData({
     products: [], invoices: [], settings: { ...api.DEFAULT_SETTINGS, language }, counter: 0, lastSaved: "",
@@ -109,7 +114,7 @@ test("every text key used in the code or in index.html exists in English", () =>
   const literal = new RegExp(`"((?:${namespaces.join("|")})\\.[A-Za-z0-9.]+)"`, "g");
 
   const used = new Map();   // key -> where
-  for (const file of ["script.js", "calc.js"]) {
+  for (const file of ["script.js", "calc.js", "validation.js", "database.js"]) {
     for (const m of read(file).matchAll(literal)) used.set(m[1], file);
   }
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
@@ -282,19 +287,19 @@ test("the language is a saved setting; old files without it and unknown codes st
 
   // An existing data file from before this setting: loads, as English.
   const old = { version: 1, lastSaved: "2026-01-01T00:00:00.000Z", products: [], invoices: [], invoiceCounter: 0, settings: { businessName: "Shop", currency: "DA", paper: "A4" } };
-  const parsed = api.parseDataText(JSON.stringify(old));
+  const parsed = api.Validation.parseBackup(JSON.stringify(old));
   assert.equal(parsed.error, undefined);
   assert.equal(parsed.data.settings.language, "en");
 
   // A code this version doesn't know (for example from a newer version) falls back instead of blocking the file.
   const future = { ...old, settings: { ...old.settings, language: "xx" } };
-  assert.equal(api.parseDataText(JSON.stringify(future)).data.settings.language, "en");
+  assert.equal(api.Validation.parseBackup(JSON.stringify(future)).data.settings.language, "en");
 
-  // A French setting is written to the file and read back.
+  // A French setting is written to a backup file and read back.
   const draft = { products: [], invoices: [], settings: { ...api.DEFAULT_SETTINGS, language: "fr" }, counter: 0 };
-  const built = api.buildPayload(draft, "2026-02-02T00:00:00.000Z");
+  const built = api.Validation.prepareBackupFile(draft, new Date("2026-02-02T00:00:00.000Z"));
   assert.equal(built.error, undefined);
-  const back = api.parseDataText(built.text);
+  const back = api.Validation.parseBackup(built.text);
   assert.equal(back.data.settings.language, "fr");
   api.applyData(back.data);
   assert.equal(I18n.language(), "fr");
@@ -319,5 +324,5 @@ test("data-check messages speak French and describeData counts correctly", () =>
   const built = api.buildData({ products: [{ id: "a", name: "", sellingPrice: 1, stock: 1 }], invoices: [], settings: {}, invoiceCounter: 0, version: 1 }, false);
   assert.equal(built.problems[0], "Produit 1\u00a0: nom manquant.");
   assert.equal(api.describeData({ products: [], invoices: [{}] }), "0 produit, 1 facture");
-  assert.equal(api.parseDataText("not json").error, "Le fichier n’est pas un JSON valide.");
+  assert.equal(api.Validation.parseBackup("not json").error, "Le fichier n’est pas un JSON valide.");
 });

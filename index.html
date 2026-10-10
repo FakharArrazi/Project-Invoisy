@@ -16,6 +16,7 @@
     </span>
     <span class="brand-name">Invoisy</span>
   </button>
+  <button type="button" class="backup-reminder no-print" id="backupReminder" title="Invoisy can not check where the backup file is kept. Click to export a backup now." data-i18n-title="backup.reminderTitle" hidden></button>
   <span class="account" role="img" aria-label="Account (coming soon)" title="Account (coming soon)" data-i18n-aria-label="account.soon" data-i18n-title="account.soon">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
   </span>
@@ -328,22 +329,36 @@
       <div class="panel">
         <h2 data-i18n="settings.dataStorage">Data storage</h2>
         <dl class="data-info">
-          <dt data-i18n="settings.persistent">Persistent data</dt><dd id="dataFile"></dd>
+          <dt data-i18n="settings.database">Database</dt><dd id="dataFile"></dd>
           <dt data-i18n="settings.status">Status</dt><dd id="dataState"></dd>
+          <dt data-i18n="settings.savedData">Saved data</dt><dd id="dataSummary"></dd>
           <dt data-i18n="settings.lastSaved">Last saved</dt><dd id="dataSaved"></dd>
+          <dt data-i18n="settings.lastBackup">Last backup</dt><dd id="dataBackup"></dd>
+          <dt data-i18n="settings.browserStorage">Browser storage</dt><dd id="dataQuota"></dd>
         </dl>
         <p class="muted small" id="dataNote"></p>
         <div class="actions left wrap">
-          <button type="button" class="btn" id="chooseData" data-i18n="settings.chooseData">Choose Data File</button>
-          <button type="button" class="btn" id="createData" data-i18n="settings.createData">Create Data File</button>
-          <button type="button" class="btn primary" id="saveNow" data-i18n="settings.saveNow">Save Data Now</button>
-        </div>
-        <div class="actions left wrap">
-          <button type="button" class="btn" id="exportBackup" data-i18n="settings.export">Export Backup</button>
-          <button type="button" class="btn" id="importBackup" data-i18n="settings.import">Import Backup</button>
+          <button type="button" class="btn primary" id="exportBackup" data-i18n="settings.export">Export Backup</button>
+          <button type="button" class="btn" id="importBackup" data-i18n="settings.import">Import / Restore Backup</button>
+          <button type="button" class="btn" id="persistBtn" data-i18n="settings.persist" hidden>Ask the browser to keep my data</button>
           <input type="file" id="importFile" accept=".json,application/json" hidden>
         </div>
+        <form class="backup-interval" id="backupForm" novalidate>
+          <label for="backupDays" data-i18n="settings.backupRemind">Remind me to back up after</label>
+          <input type="number" id="backupDays" min="1" max="365" step="1" value="7">
+          <span data-i18n="settings.backupDays">days</span>
+          <button type="submit" class="btn small" id="backupDaysSave" data-i18n="settings.backupSave">Save</button>
+        </form>
         <p class="error" id="dataError" role="alert"></p>
+        <div class="legacy-box" id="legacyBox" hidden>
+          <h3 data-i18n="legacy.title">Data from the older version</h3>
+          <p class="muted small" id="legacyText"></p>
+          <div class="actions left wrap">
+            <button type="button" class="btn small" id="legacyDownload" data-i18n="legacy.download" hidden>Download a copy of the old data</button>
+            <button type="button" class="btn small danger" id="legacyRemove" data-i18n="legacy.remove" hidden>Remove old browser copy</button>
+            <button type="button" class="btn small" id="legacySkip" data-i18n="legacy.skip" hidden>Start with empty data</button>
+          </div>
+        </div>
       </div>
       <div class="panel">
         <h2 data-i18n="settings.business">Business details</h2>
@@ -442,6 +457,8 @@
 <script src="java script/lang/en.js"></script>
 <script src="java script/lang/fr.js"></script>
 <script src="java script/calc.js"></script>
+<script src="java script/validation.js"></script>
+<script src="java script/database.js"></script>
 <script src="java script/script.js"></script>
 </body>
 </html>

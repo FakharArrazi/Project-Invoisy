@@ -69,18 +69,21 @@ test("validates ceramic form fields and persists a product creation and edit", a
   assert.equal(created.values.coveragePerBox, 2.88);
   assert.equal(created.values.sellingUnit, undefined);
 
-  api.applyData({ products: [], invoices: [], settings: { ...api.DEFAULT_SETTINGS }, counter: 0, lastSaved: "" });
+  // The page starts against a brand new in-memory IndexedDB; every change is saved there first.
+  await api.startStorage();
+  assert.equal(api.getStorage().mode, "ready", api.getStorage().reason);
   const create = await api.commit((draft) => {
     draft.products.push(api.normalizeProduct({ id: "everton", ...created.values }));
   });
   assert.equal(create.error, undefined);
-  const loaded = api.readMirror().data;
+  assert.equal((await api.db.loadAll()).products[0].name, "Everton Grey");
 
   const edit = await api.commit((draft) => {
     Object.assign(draft.products[0], { manufacturer: "Timgad Ceramic Updated", coveragePerBox: 3.12 });
   });
   assert.equal(edit.error, undefined);
-  const reloaded = api.readMirror().data.products[0];
+  // read back from the database itself, not from the copy the page holds in memory
+  const reloaded = (await api.db.loadAll()).products[0];
 
   assert.equal(reloaded.manufacturer, "Timgad Ceramic Updated");
   assert.equal(reloaded.tileSize, "60*120");

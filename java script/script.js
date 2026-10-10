@@ -2,13 +2,14 @@
 
 /* ==========================================================================
    Simple Invoice - products, stock, sales and invoices in the browser.
-   Data lives in a local invoisy-data.json file (with a browser copy as fallback).
+   Data is saved in the browser's IndexedDB database (database.js); backups are JSON files.
    No backend, no dependencies.
    ========================================================================== */
 
 /* ---------- Configuration ---------- */
 
-const CURRENCY = "DA";            // default currency (can be changed in Settings)
+// The data rules (setting defaults, units, ids, invoice numbers) live in validation.js; unit and price maths in calc.js.
+const { CURRENCY, DEFAULT_SETTINGS, SELLING_UNITS, round2, toNumber, uid, formatInvoiceNumber, invoiceSequence } = Validation;
 // These two names are saved inside invoices exactly as written here, so the data file does not depend on the
 // language. They are translated only when shown (see customerLabel and invoiceItemLabel).
 const WALK_IN = "Walk-in Customer";
@@ -16,17 +17,6 @@ const DELETED_PRODUCT = "(deleted product)";
 const LOW_STOCK = 5;              // stock at or below this shows "Low stock"
 const LOGO_MAX_W = 320;           // stored logo size (shown at 160x100 max, 2x keeps it sharp)
 const LOGO_MAX_H = 200;
-
-const DEFAULT_SETTINGS = {
-  businessName: "My Store",
-  address: "",
-  phone: "",
-  email: "",
-  currency: CURRENCY,
-  logo: "",                         // store logo, stored as a PNG data URL
-  paper: "A4",                      // invoice paper size: "A4" or "A5"
-  language: "en",                   // language of the app and of invoices (a code registered in java script/lang/)
-};
 
 const DEMO_PRODUCTS = [
   { name: "Coca Cola 33cl", description: "330ml Coca Cola bottle", sku: "COCA33",   category: "Drinks", sellingPrice: 80,  priceUnit: "piece", stockUnit: "piece", purchasePrice: 60, stock: 50 },
@@ -54,14 +44,6 @@ const numberFormat = {
   },
 };
 
-// Money rounding and number cleaning live in calc.js, the one place for unit and price maths.
-const round2 = Calc.roundMoney;
-const toNumber = Calc.toNumber;
-
-function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
 function esc(value) {
   const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
   return String(value == null ? "" : value).replace(/[&<>"']/g, (c) => map[c]);
@@ -85,10 +67,6 @@ function formatDateTime(iso) {
   return formatDate(iso) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
 }
 
-function formatInvoiceNumber(n) {
-  return "INV-" + String(n).padStart(6, "0");
-}
-
 let toastTimer = null;
 function notify(message, type) {
   const toast = $("toast");
@@ -109,57 +87,14 @@ function customerLabel(name) {
 
 /* ---------- Data model ---------- */
 
-const DATA_VERSION = 1;
-const DATA_FILE_NAME = "invoisy-data.json";
-const MIRROR_KEY = "invoisy-data";            // browser copy of the data file (fallback and recovery)
-const LEGACY_KEYS = ["products", "invoices", "settings", "invoiceCounter"];
-const DERIVED_INVOICE_FIELDS = ["amountPaid", "remaining", "status"];   // written to the file for readability only
 // Units a line on a sale can be sold in. The unit belongs to the sale line, not to the product.
-const SELLING_UNITS = Calc.UNITS;
 // m² can be typed when adding to a sale, but it is converted to boxes and never stored on a sale line.
 const SALE_LINE_UNITS = ["piece", "box", "kg", "m"];
 // "Box", or "Boxes" when given a quantity other than 1, in the current language; "" for no/unknown unit.
 const unitLabel = Calc.unitLabel;
 
-const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
-const isStr = (v) => typeof v === "string";
-const isNum = (v) => typeof v === "number" && Number.isFinite(v);
-const isDate = (v) => isStr(v) && !isNaN(new Date(v));
-
-function normalizeProduct(raw) {
-  if (!raw || typeof raw !== "object" || !raw.name) return null;
-  const price = Number(raw.sellingPrice);
-  const priceUnit = Calc.normalizeUnit(raw.priceUnit);
-  // What the stock quantity is counted in. null = an old product whose unit was never recorded:
-  // its stock keeps being reduced one-for-one, as before.
-  const stockUnit = Calc.inferStockUnit({ stockUnit: raw.stockUnit, priceUnit });
-  // Stock may be fractional (3 pieces sold from a box-counted product), but only when the unit is known.
-  const stock = stockUnit ? Number(raw.stock) : Math.floor(Number(raw.stock));
-  const hasCost = raw.purchasePrice !== "" && raw.purchasePrice != null && Number.isFinite(Number(raw.purchasePrice)) && Number(raw.purchasePrice) >= 0;
-  const coverage = Number(raw.coveragePerBox);
-  return {
-    id: String(raw.id || uid()),
-    name: String(raw.name),
-    manufacturer: String(raw.manufacturer || ""),
-    // tileSize is the physical size of one tile. It is deliberately separate from box coverage.
-    tileSize: String(raw.tileSize != null ? raw.tileSize : raw.dimensions || ""),
-    coveragePerBox: Number.isFinite(coverage) && coverage > 0 ? coverage : null,
-    description: String(raw.description || ""),
-    sku: String(raw.sku || ""),
-    category: String(raw.category || ""),
-    sellingPrice: Number.isFinite(price) && price >= 0 ? price : 0,
-    // What the selling price is per (piece, box, m2, kg, m). null = saved before this field existed.
-    priceUnit,
-    stockUnit,
-    purchasePrice: hasCost ? Number(raw.purchasePrice) : null,
-    stock: Number.isFinite(stock) && stock >= 0 ? Calc.cleanNumber(stock) : 0,
-  };
-}
-
-// Accepts 60*120, 12*15, 60x120 or 60 × 120 (an old "cm" suffix is still accepted so saved data keeps loading).
-// Stored in one format, in cm: "60*120". The parsing itself lives in calc.js.
-const isTileSize = Calc.isTileSize;
-const normalizeTileSize = Calc.normalizeTileSize;
+// What a product, an invoice, the settings and a backup file may contain is defined in validation.js.
+const { normalizeProduct, normalizeTileSize, isTileSize, productProblem, buildData } = Validation;
 
 // A display label is derived at render time; it is never the persisted product value.
 function productLabel(product) {
@@ -207,181 +142,6 @@ function invoiceItemLabel(item) {
   return [name, size ? `(${size})` : "", item.manufacturer].filter(Boolean).join(" ");
 }
 
-// Invoices saved before payments existed are treated as fully paid at their sale date.
-function normalizeInvoice(inv) {
-  if (!inv || typeof inv !== "object" || !inv.invoiceNumber || !Array.isArray(inv.items)) return null;
-  const clean = { ...inv };
-  for (const key of DERIVED_INVOICE_FIELDS) delete clean[key];
-  const amount = (value, fallback) => (value !== "" && value != null && Number.isFinite(Number(value)) ? Number(value) : fallback);
-  const itemsTotal = round2(inv.items.reduce((sum, i) => sum + toNumber(i && i.qty) * toNumber(i && i.unitPrice), 0));
-  clean.subtotal = amount(inv.subtotal, itemsTotal);
-  clean.discount = amount(inv.discount, 0);
-  clean.tax = amount(inv.tax, 0);
-  clean.total = amount(inv.total, Math.max(0, round2(clean.subtotal - clean.discount + clean.tax)));
-
-  let payments;
-  if (Array.isArray(inv.payments)) {
-    payments = inv.payments
-      .filter((p) => p && Number.isFinite(Number(p.amount)) && Number(p.amount) > 0)
-      .map((p) => ({ amount: round2(Number(p.amount)), timestamp: p.timestamp || inv.date }));
-  } else {
-    payments = clean.total > 0 ? [{ amount: clean.total, timestamp: inv.date }] : [];
-  }
-  return { ...clean, id: String(inv.id || uid()), payments };
-}
-
-function normalizeSettings(stored) {
-  const settings = { ...DEFAULT_SETTINGS };
-  if (stored && typeof stored === "object") {
-    for (const key of Object.keys(DEFAULT_SETTINGS)) {
-      if (typeof stored[key] === "string") settings[key] = stored[key];
-    }
-  }
-  if (!settings.currency.trim()) settings.currency = CURRENCY;
-  if (!settings.logo.startsWith("data:image/")) settings.logo = "";
-  if (!["A4", "A5"].includes(settings.paper)) settings.paper = "A4";
-  // An unknown language (for example from a newer data file) falls back to the default instead of blocking the file.
-  if (!I18n.has(settings.language)) settings.language = DEFAULT_SETTINGS.language;
-  return settings;
-}
-
-function invoiceSequence(invoiceNumber) {
-  return parseInt(String(invoiceNumber).replace(/\D/g, ""), 10) || 0;
-}
-
-function highestInvoiceNumber(invoices) {
-  return invoices.reduce((max, inv) => Math.max(max, invoiceSequence(inv.invoiceNumber)), 0);
-}
-
-/* ---------- Validation ---------- */
-
-function productProblem(p) {
-  if (!isObj(p)) return t("problem.notObject");
-  if (!isStr(p.id) || !p.id) return t("problem.noId");
-  if (!isStr(p.name) || !p.name.trim()) return t("problem.noName");
-  if (p.manufacturer !== undefined && !isStr(p.manufacturer)) return t("problem.badManufacturer");
-  if (p.tileSize !== undefined && (!isStr(p.tileSize) || (p.tileSize.trim() && !isTileSize(p.tileSize)))) return t("problem.badTileSize");
-  if (p.coveragePerBox !== undefined && p.coveragePerBox !== null && (!isNum(p.coveragePerBox) || p.coveragePerBox <= 0)) return t("problem.badCoverage");
-  if (!isNum(p.sellingPrice) || p.sellingPrice < 0) return t("problem.badPrice");
-  if (p.priceUnit !== undefined && p.priceUnit !== null && !Calc.isUnit(p.priceUnit)) return t("problem.badPriceUnit");
-  if (p.stockUnit !== undefined && p.stockUnit !== null && !Calc.isUnit(p.stockUnit)) return t("problem.badStockUnit");
-  if (p.purchasePrice != null && (!isNum(p.purchasePrice) || p.purchasePrice < 0)) return t("problem.badCost");
-  if (!isNum(p.stock) || p.stock < 0) return t("problem.badStock");
-  return "";
-}
-
-const AMOUNT_PROBLEMS = { subtotal: "problem.badSubtotal", discount: "problem.badDiscount", tax: "problem.badTax", total: "problem.badTotal" };
-
-function invoiceProblem(inv) {
-  if (!isObj(inv)) return t("problem.notObject");
-  if (!isStr(inv.id) || !inv.id) return t("problem.noId");
-  if (!isStr(inv.invoiceNumber) || !/^INV-\d+$/.test(inv.invoiceNumber)) return t("problem.badNumber");
-  if (!isDate(inv.date)) return t("problem.badDate");
-  if (!Array.isArray(inv.items)) return t("problem.noItems");
-  if (inv.items.some((i) => !isObj(i) || !isNum(i.qty) || i.qty <= 0 || !isNum(i.unitPrice) || i.unitPrice < 0 || (i.sellingUnit !== undefined && !SELLING_UNITS.includes(i.sellingUnit)))) return t("problem.badItem");
-  for (const key of Object.keys(AMOUNT_PROBLEMS)) {
-    if (!isNum(inv[key]) || inv[key] < 0) return t(AMOUNT_PROBLEMS[key]);
-  }
-  if (!Array.isArray(inv.payments)) return t("problem.noPayments");
-  if (inv.payments.some((p) => !isObj(p) || !isNum(p.amount) || p.amount <= 0 || !isDate(p.timestamp))) return t("problem.badPayment");
-  if (inv.customer != null && !isObj(inv.customer)) return t("problem.badCustomer");
-  return "";
-}
-
-function settingsProblem(s) {
-  for (const key of Object.keys(DEFAULT_SETTINGS)) {
-    if (s[key] !== undefined && !isStr(s[key])) return t("problem.setting", { key });
-  }
-  if (s.paper !== undefined && !["A4", "A5"].includes(s.paper)) return t("problem.paper");
-  if (s.logo && !s.logo.startsWith("data:image/")) return t("problem.logo");
-  return "";
-}
-
-function collect(list, label, problemOf, normalize, lenient, problems) {
-  const out = [];
-  list.forEach((item, i) => {
-    const candidate = lenient ? normalize(item) : item;
-    const why = candidate ? problemOf(candidate) : t("problem.notValid");
-    if (why) problems.push(t("problem.entry", { label, n: i + 1, why }));
-    else out.push(lenient ? candidate : normalize(item));
-  });
-  return out;
-}
-
-function firstDuplicate(values) {
-  const seen = new Set();
-  for (const v of values) {
-    if (seen.has(v)) return v;
-    seen.add(v);
-  }
-  return null;
-}
-
-// Turns raw data (file, backup or old browser storage) into application data.
-// Strict mode reports every bad entry; lenient mode (old browser data) leaves bad entries out and reports them.
-function buildData(raw, lenient) {
-  if (!isObj(raw)) return { error: t("data.notObject") };
-  if (!Array.isArray(raw.products)) return { error: t("data.noProducts") };
-  if (!Array.isArray(raw.invoices)) return { error: t("data.noInvoices") };
-  if (!isObj(raw.settings)) return { error: t("data.noSettings") };
-  if (!lenient) {
-    if (!Number.isInteger(raw.version) || raw.version < 1) return { error: t("data.noVersion") };
-    if (raw.version > DATA_VERSION) return { error: t("data.newerVersion", { version: raw.version }) };
-    if (!Number.isInteger(raw.invoiceCounter) || raw.invoiceCounter < 0) return { error: t("data.badCounter") };
-    const settingsIssue = settingsProblem(raw.settings);
-    if (settingsIssue) return { error: settingsIssue };
-  }
-
-  const problems = [];
-  const products = collect(raw.products, t("problem.label.product"), productProblem, normalizeProduct, lenient, problems);
-  const invoices = collect(raw.invoices, t("problem.label.invoice"), invoiceProblem, normalizeInvoice, lenient, problems);
-
-  const dupProduct = firstDuplicate(products.map((p) => p.id));
-  if (dupProduct) return { error: t("data.dupProduct", { id: dupProduct }) };
-  const dupInvoice = firstDuplicate(invoices.map((i) => i.id));
-  if (dupInvoice) return { error: t("data.dupInvoice", { id: dupInvoice }) };
-  const dupNumber = firstDuplicate(invoices.map((i) => i.invoiceNumber));
-  if (dupNumber) return { error: t("data.dupNumber", { number: dupNumber }) };
-
-  const stored = Math.max(0, Math.floor(toNumber(raw.invoiceCounter)));
-  const highest = highestInvoiceNumber(invoices);
-  return {
-    problems,
-    data: {
-      products,
-      invoices,
-      settings: normalizeSettings(raw.settings),
-      counter: Math.max(stored, highest),
-      counterRecovered: highest > stored,
-      lastSaved: isStr(raw.lastSaved) ? raw.lastSaved : "",
-    },
-  };
-}
-
-function validatePersistentData(data) {
-  const built = buildData(data, false);
-  if (built.error) return [built.error];
-  const problems = [...built.problems];
-  if (built.data.counterRecovered) problems.push(t("data.counterLow"));
-  return problems;
-}
-
-function parseDataText(text) {
-  let raw;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    return { error: t("data.notJson") };
-  }
-  const built = buildData(raw, false);
-  if (built.error) return { error: built.error };
-  if (built.problems.length) {
-    const more = built.problems.length > 3 ? t("data.andMore", { n: built.problems.length - 3 }) : "";
-    return { error: built.problems.slice(0, 3).join(" ") + more };
-  }
-  return { data: built.data };
-}
-
 /* ---------- State ---------- */
 
 function newSale() {
@@ -399,7 +159,8 @@ const state = {
   invoices: [],
   settings: { ...DEFAULT_SETTINGS },
   counter: 0,
-  lastSaved: "",          // time stamp of the data in memory (matches the data file when connected)
+  lastSaved: "",          // when the data in the database was last changed
+  revision: 0,            // the database revision this page has loaded; every save has to start from it
   view: "sell",
   sale: newSale(),
   results: [],            // products currently listed in the picker
@@ -415,6 +176,7 @@ function applyData(d) {
   state.settings = d.settings;
   state.counter = d.counter;
   state.lastSaved = d.lastSaved || "";
+  if (d.revision !== undefined) state.revision = d.revision;
   I18n.setLanguage(state.settings.language);
   if (state.previewInvoice) state.previewInvoice = state.invoices.find((i) => i.id === state.previewInvoice.id) || null;
 }
@@ -423,162 +185,26 @@ function draftFromState() {
   return structuredClone({ products: state.products, invoices: state.invoices, settings: state.settings, counter: state.counter });
 }
 
-/* ---------- Persistence: one master data file ----------
-   invoisy-data.json is the source of truth. Every change is built on a copy of the data (a draft),
-   validated, written to the file and read back. Only then does the draft become the live state.
-   A copy is also kept in localStorage (MIRROR_KEY) as a fallback and recovery copy. */
+/* ---------- Persistence: the browser database ----------
+   The browser's IndexedDB database (database.js) is the only place Invoisy saves data. Every change is built
+   on a copy of the data (a draft), then only the records that changed are saved in ONE transaction. The draft
+   becomes the live state only after that transaction has committed. Nothing is kept in localStorage or in a
+   file any more; if the database can not be used, changes are refused rather than saved somewhere else. */
 
-const FS_SUPPORTED = typeof window.showOpenFilePicker === "function" && typeof window.showSaveFilePicker === "function";
-const FILE_TYPES = [{ description: "Invoisy data", accept: { "application/json": [".json"] } }];
-
-const msgPermission = () => t("storage.permission");
-const msgMissing = () => t("storage.missing");
+const db = InvoisyDB.create();
 
 const storage = {
-  supported: FS_SUPPORTED,
-  mode: FS_SUPPORTED ? "connecting" : "unlinked",   // connecting | connected | unlinked | disconnected
-  reason: "",                                       // why the file is disconnected
-  handle: null,
-  fileName: "",
-  mirrorOk: true,
+  mode: "connecting",     // connecting | ready | unavailable | failed | outdated
+  reason: "",             // why the database can not be used (shown to the person)
+  migrationFailed: false,
+  migrationUnreadable: false,   // the older data exists but none of it could be read
+  migration: null,        // record of the move from the storage older versions used
+  backup: { lastBackupAt: null, lastBackupFile: "", lastBackupCounts: null, intervalDays: Validation.DEFAULT_BACKUP_DAYS },
+  persisted: null,        // true / false once the browser says whether it will keep the data; null = unknown
+  usage: null,
+  quota: null,
   ready: Promise.resolve(),
 };
-
-function defaultData() {
-  return { products: [], invoices: [], settings: { ...DEFAULT_SETTINGS }, counter: 0, lastSaved: "" };
-}
-
-function nextStamp() {
-  let t = Date.now();
-  const previous = Date.parse(state.lastSaved);
-  if (previous >= t) t = previous + 1;
-  return new Date(t).toISOString();
-}
-
-function serializeState(d, lastSaved) {
-  return {
-    version: DATA_VERSION,
-    lastSaved,
-    products: d.products,
-    invoices: d.invoices.map((inv) => {
-      const pay = paymentInfo(inv);
-      return { ...inv, amountPaid: pay.paid, remaining: pay.remaining, status: pay.cls };
-    }),
-    settings: d.settings,
-    invoiceCounter: d.counter,
-  };
-}
-
-// Serializes and validates the data. Nothing that fails here is ever written.
-function buildPayload(d, lastSaved) {
-  let text;
-  try {
-    text = JSON.stringify(serializeState(d, lastSaved), null, 2);
-  } catch {
-    return { error: t("storage.jsonFailed") };
-  }
-  const problems = validatePersistentData(JSON.parse(text));
-  if (problems.length) return { error: t("storage.safetyFailed", { problem: problems[0] }) };
-  return { text, lastSaved };
-}
-
-function writeMirror(text) {
-  try {
-    localStorage.setItem(MIRROR_KEY, text);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function readMirror() {
-  let text;
-  try {
-    text = localStorage.getItem(MIRROR_KEY);
-  } catch {
-    return {};
-  }
-  if (text === null) return {};
-  const parsed = parseDataText(text);
-  return parsed.error ? { error: parsed.error } : { data: parsed.data };
-}
-
-// Reads the pre-update localStorage keys. They are never modified or deleted.
-function migrateLegacyStorage() {
-  const parts = {};
-  const problems = [];
-  let found = false;
-  for (const key of LEGACY_KEYS) {
-    let raw;
-    try {
-      raw = localStorage.getItem(key);
-    } catch {
-      raw = null;
-    }
-    if (raw === null) continue;
-    found = true;
-    try {
-      parts[key] = JSON.parse(raw);
-    } catch {
-      problems.push(`Saved ${key} could not be read.`);
-    }
-  }
-  if (!found) return null;
-  const built = buildData({
-    products: Array.isArray(parts.products) ? parts.products : [],
-    invoices: Array.isArray(parts.invoices) ? parts.invoices : [],
-    settings: isObj(parts.settings) ? parts.settings : {},
-    invoiceCounter: parts.invoiceCounter,
-  }, true);
-  if (built.error) return { data: defaultData(), problems: [built.error] };
-  return { data: built.data, problems: [...problems, ...built.problems] };
-}
-
-// Starts from the browser copy, or migrates the old localStorage data, or starts empty.
-function loadLocalCopy() {
-  const notices = [];
-  const mirror = readMirror();
-  if (mirror.data) {
-    applyData(mirror.data);
-    return notices;
-  }
-  if (mirror.error) notices.push(t("storage.mirrorUnreadable"));
-
-  const legacy = migrateLegacyStorage();
-  if (!legacy) {
-    applyData(defaultData());
-    return notices;
-  }
-  applyData(legacy.data);
-  const built = buildPayload(draftFromState(), nextStamp());
-  if (!built.error && writeMirror(built.text)) state.lastSaved = built.lastSaved;
-  else notices.push(t("storage.migrateFailed"));
-  if (legacy.problems.length) {
-    notices.push(t("storage.entriesSkipped", { n: legacy.problems.length }));
-  }
-  return notices;
-}
-
-/* -- File handle memory (IndexedDB) -- */
-
-function handleStore(mode, fn) {
-  return new Promise((resolve, reject) => {
-    const open = indexedDB.open("invoisy", 1);
-    open.onupgradeneeded = () => open.result.createObjectStore("kv");
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const tx = open.result.transaction("kv", mode);
-      const req = fn(tx.objectStore("kv"));
-      tx.oncomplete = () => { open.result.close(); resolve(req.result); };
-      tx.onerror = tx.onabort = () => reject(tx.error);
-    };
-  });
-}
-
-const loadHandle = () => handleStore("readonly", (s) => s.get("dataFile"));
-const storeHandle = (handle) => handleStore("readwrite", (s) => s.put(handle, "dataFile"));
-
-/* -- Writing the data file -- */
 
 function errorText(e) {
   return (e && e.message) || "";
@@ -591,90 +217,54 @@ function setStorageMode(mode, reason) {
 }
 
 function canWrite() {
-  return storage.mode === "connected" || storage.mode === "unlinked";
+  return storage.mode === "ready";
 }
 
 function blockedMessage() {
-  const why = storage.mode === "disconnected" ? storage.reason : t("storage.notReady");
-  return t("storage.blocked", { reason: why });
+  const why = storage.mode === "connecting" ? t("storage.opening") : storage.reason;
+  return t("storage.notChanged", { reason: why });
 }
 
-function describeFileError(e, active) {
-  if (e && e.name === "NotFoundError") {
-    if (active) setStorageMode("disconnected", msgMissing());
-    return t("storage.nothingSaved", { reason: msgMissing() });
-  }
-  if (e && e.name === "NotAllowedError") {
-    if (active) setStorageMode("disconnected", msgPermission());
-    return t("storage.nothingSaved", { reason: msgPermission() });
-  }
-  return t("storage.writeFailed", { error: errorText(e) });
-}
-
-// Before writing, make sure nobody else changed the file since Invoisy last read or wrote it.
-async function checkUnchanged(handle, expectedStamp) {
-  const current = await (await handle.getFile()).text();
-  if (!current.trim()) {
-    setStorageMode("disconnected", t("storage.empty"));
-    return { error: t("storage.emptyNotOverwritten") };
-  }
-  const parsed = parseDataText(current);
-  if (parsed.error) {
-    const reason = t("storage.unreadable", { error: parsed.error });
-    setStorageMode("disconnected", reason);
-    return { error: reason };
-  }
-  if (parsed.data.lastSaved === expectedStamp) return null;
-  applyData(parsed.data);
-  storage.mirrorOk = writeMirror(current);
-  refreshAfterLoad();
-  return { error: t("storage.changedElsewhere") };
-}
-
-// expectedStamp: the lastSaved the file must still have (null skips the check, for a brand new file).
-async function writeToDataFile(handle, text, expectedStamp, active) {
+// Reads the older browser storage. window.localStorage can be blocked by browser settings, which is not an error here.
+function legacyStorage() {
   try {
-    if ((await handle.queryPermission({ mode: "readwrite" })) !== "granted") {
-      if (active) setStorageMode("disconnected", msgPermission());
-      return { error: t("storage.nothingSaved", { reason: msgPermission() }) };
-    }
-    if (expectedStamp !== null) {
-      const changed = await checkUnchanged(handle, expectedStamp);
-      if (changed) return changed;
-    }
-    const writable = await handle.createWritable();
+    if (typeof localStorage !== "undefined" && localStorage) return localStorage;
+  } catch { /* blocked by the browser */ }
+  return { getItem() { return null; }, removeItem() {} };
+}
+
+// Reloads everything from the database. Used at start, after a restore and when another window saved first.
+async function loadFromDatabase() {
+  applyData(await db.loadAll());
+}
+
+// Turns a failed save into a message. A conflict means another window saved first: its data is loaded so the
+// screen is up to date, and nothing from this change was saved.
+async function describeSaveFailure(e) {
+  const err = e instanceof InvoisyDB.DbError ? e : new InvoisyDB.DbError("ABORTED", InvoisyDB.MSG.ABORTED + " " + errorText(e));
+  if (err.code === "CONFLICT") {
     try {
-      await writable.write(text);
-      await writable.close();
-    } catch (e) {
-      try { await writable.abort(); } catch { /* already closed */ }
-      throw e;
-    }
-    if ((await (await handle.getFile()).text()) !== text) {
-      return { error: t("storage.verifyFailed") };
-    }
-    return {};
-  } catch (e) {
-    return { error: describeFileError(e, active) };
+      await loadFromDatabase();
+      refreshAfterLoad();
+    } catch { /* the message below still tells the person what to do */ }
+    return t("storage.conflictReload", { message: err.message });
   }
+  if (err.code === "CLOSED") setStorageMode("outdated", err.message);
+  return err.message;
 }
 
 async function persistData(draft) {
-  const built = buildPayload(draft, nextStamp());
-  if (built.error) return { error: built.error };
-
-  if (storage.mode === "connected") {
-    const written = await writeToDataFile(storage.handle, built.text, state.lastSaved, true);
-    if (written.error) return written;
-    storage.mirrorOk = writeMirror(built.text);
-    return { lastSaved: built.lastSaved, toFile: true };
+  const changes = InvoisyDB.diff(
+    { products: state.products, invoices: state.invoices, settings: state.settings, counter: state.counter },
+    draft
+  );
+  if (InvoisyDB.isEmptyChange(changes)) return { unchanged: true };
+  try {
+    const saved = await db.commitChanges(changes, { expectedRevision: state.revision });
+    return { revision: saved.revision, lastSaved: saved.lastSaved };
+  } catch (e) {
+    return { error: await describeSaveFailure(e) };
   }
-  if (!writeMirror(built.text)) {
-    storage.mirrorOk = false;
-    return { error: t("storage.browserSaveFailed") };
-  }
-  storage.mirrorOk = true;
-  return { lastSaved: built.lastSaved, toFile: false };
 }
 
 /* -- Transactions: every change goes through enqueue() and commit() -- */
@@ -691,7 +281,7 @@ function enqueue(task) {
 }
 
 // mutate(draft) edits a copy of the data and returns { error } to cancel, { skip: true } for "nothing to do",
-// or any extra result fields. The live state only changes after the data was saved successfully.
+// or any extra result fields. The live state only changes after the database has committed the change.
 function commit(mutate) {
   return enqueue(async () => {
     if (!canWrite()) return { error: blockedMessage() };
@@ -705,9 +295,10 @@ function commit(mutate) {
     if (result.error || result.skip) return result;
     const saved = await persistData(draft);
     if (saved.error) return { error: saved.error };
-    applyData({ ...draft, lastSaved: saved.lastSaved });
-    renderStorage();
-    return { ...result, toFile: saved.toFile };
+    if (saved.unchanged) return result;
+    applyData({ ...draft, lastSaved: saved.lastSaved, revision: saved.revision });
+    try { renderStorage(); } catch { /* the data is saved; only the status line failed to refresh */ }
+    return result;
   });
 }
 
@@ -715,221 +306,307 @@ let busy = false;
 async function guard(task) {
   if (busy) return;
   busy = true;
+  try { renderStorage(); } catch { /* status only */ }
   try {
     await task();
   } catch (e) {
     notify(t("app.somethingWrong", { error: errorText(e) }), "error");
   } finally {
     busy = false;
+    try { renderStorage(); } catch { /* status only */ }
   }
 }
 
-function savedNote(result) {
-  return result.toFile ? "" : t("storage.savedBrowserOnly");
-}
-
-/* -- Connecting a data file -- */
+/* -- Starting up: open the database, move older data over once, load -- */
 
 function describeData(d) {
   return `${tn("storage.countProducts", d.products.length)}, ${tn("storage.countInvoices", d.invoices.length)}`;
 }
 
-function reportFileProblem(message) {
+function reportDataProblem(message) {
   showError("dataError", message);
   notify(message, "error");
   return false;
 }
 
-async function startNewFile(handle) {
-  const built = buildPayload(draftFromState(), nextStamp());
-  if (built.error) return reportFileProblem(built.error);
-  const written = await writeToDataFile(handle, built.text, null, false);
-  if (written.error) return reportFileProblem(written.error);
-
-  state.lastSaved = built.lastSaved;
-  storage.mirrorOk = writeMirror(built.text);
-  storage.handle = handle;
-  storage.fileName = handle.name;
-  let remembered = true;
-  try { await storeHandle(handle); } catch { remembered = false; }
-  showError("dataError", "");
-  setStorageMode("connected");
-  notify(remembered
-    ? t("storage.fileSaved", { file: handle.name })
-    : t("storage.fileSavedNoMemory", { file: handle.name }));
-  return true;
+async function refreshBackupInfo() {
+  try {
+    storage.backup = await db.getBackupInfo();
+    $("backupDays").value = storage.backup.intervalDays;
+  } catch { /* keep what was known */ }
 }
 
-// chosen = the person just picked this file (otherwise it is the remembered file being reopened).
-async function connectHandle(handle, chosen) {
-  const fail = (message) => (chosen ? reportFileProblem(message) : (setStorageMode("disconnected", message), false));
-
-  let text;
+// Asks whether the browser promises to keep the data. This only reads; it never shows a browser prompt.
+async function refreshQuota() {
   try {
-    text = await (await handle.getFile()).text();
-  } catch (e) {
-    return fail(e && e.name === "NotFoundError" ? msgMissing() : t("storage.cannotOpen", { error: errorText(e) }));
-  }
-  if (!text.trim()) {
-    if (chosen) return startNewFile(handle);
-    return fail(t("storage.emptyReconnect"));
-  }
-  const parsed = parseDataText(text);
-  if (parsed.error) {
-    return fail(t("storage.unreadable", { error: parsed.error }));
-  }
-
-  const incoming = parsed.data;
-  const hasLocal = state.products.length > 0 || state.invoices.length > 0;
-  const sameVersion = incoming.lastSaved !== "" && incoming.lastSaved === state.lastSaved;
-  const browserNewer = Date.parse(state.lastSaved) > Date.parse(incoming.lastSaved);
-  if (hasLocal && !sameVersion && (chosen || browserNewer)) {
-    const lead = chosen
-      ? t("storage.confirmLoadChosen", { file: handle.name })
-      : t("storage.confirmLoadOlder", { file: handle.name });
-    const saved = (iso) => formatDateTime(iso) || t("storage.unknown");
-    const ok = confirm(t("storage.confirmLoadBody", {
-      lead,
-      file: describeData(incoming), fileSaved: saved(incoming.lastSaved),
-      browser: describeData(state), browserSaved: saved(state.lastSaved),
-    }));
-    if (!ok) {
-      if (!chosen) setStorageMode("disconnected", t("storage.olderNotLoaded"));
-      return false;
+    if (typeof navigator !== "undefined" && navigator.storage) {
+      if (navigator.storage.persisted) storage.persisted = await navigator.storage.persisted();
+      if (navigator.storage.estimate) {
+        const estimate = await navigator.storage.estimate();
+        storage.usage = estimate.usage;
+        storage.quota = estimate.quota;
+      }
     }
+  } catch { /* optional information */ }
+  renderStorage();
+}
+
+// Only when the person presses the button: some browsers show a permission prompt for this.
+async function askBrowserToKeepData() {
+  try {
+    if (navigator.storage && navigator.storage.persist) storage.persisted = await navigator.storage.persist();
+  } catch { /* the answer stays "not protected" */ }
+  await refreshQuota();
+  notify(t(storage.persisted ? "storage.keepYes" : "storage.keepNo"), storage.persisted ? undefined : "error");
+}
+
+function migrationNotice(result) {
+  const record = result.record;
+  if (!record || record.noticeShown) return "";
+  if (result.status === "migrated") return t("storage.noticeMigrated", { counts: describeData(record.counts) });
+  if (result.status === "conflict") return t("storage.noticeConflict");
+  if (record.legacyDataFile) return t("storage.noticeDataFile", { file: record.legacyDataFile });
+  return "";
+}
+
+async function initStorage() {
+  try {
+    await db.initDatabase();
+  } catch (e) {
+    setStorageMode(e.code === "UNAVAILABLE" ? "unavailable" : "failed", errorText(e));
+    return;
   }
 
-  applyData(incoming);
-  storage.mirrorOk = writeMirror(text);
-  storage.handle = handle;
-  storage.fileName = handle.name;
-  let remembered = true;
-  if (chosen) {
-    try { await storeHandle(handle); } catch { remembered = false; }
+  let notice = "";
+  try {
+    const migrated = await db.migrateLegacy(legacyStorage());
+    storage.migration = migrated.record;
+    storage.migrationFailed = false;
+    storage.migrationUnreadable = false;
+    notice = migrationNotice(migrated);
+    if (notice) db.updateMigrationRecord({ noticeShown: true }).catch(() => {});
+  } catch (e) {
+    const unreadable = e && e.code === "MIGRATION";
+    storage.migrationFailed = true;
+    storage.migrationUnreadable = unreadable;
+    setStorageMode("failed", t(unreadable ? "storage.migrationUnreadable" : "storage.migrationFailed", { error: errorText(e) }));
+    return;
   }
-  showError("dataError", "");
-  setStorageMode("connected");
+
+  try {
+    await loadFromDatabase();
+  } catch (e) {
+    setStorageMode("failed", t("storage.readFailed", { error: errorText(e) }));
+    return;
+  }
+  await refreshBackupInfo();
+  setStorageMode("ready");
   refreshAfterLoad();
-  const notes = [];
-  if (chosen) notes.push(t("storage.loadedFrom", { file: handle.name }));
-  if (!remembered) notes.push(t("storage.cannotRemember"));
-  if (incoming.counterRecovered) notes.push(t("storage.counterFixed"));
-  if (notes.length) notify(notes.join(" "), remembered ? undefined : "error");
-  return true;
+  refreshQuota();
+  if (notice) notify(notice);
 }
 
-async function pickDataFile(create) {
-  if (!storage.supported) return;
-  let handle;
+function startStorage() {
+  storage.ready = initStorage().catch((e) => {
+    setStorageMode("failed", t("storage.openFailed", { error: errorText(e) }));
+  });
+  return storage.ready;
+}
+
+/* -- Backup: export and restore -- */
+
+// Hands a text file to the browser as a download. The temporary address is released afterwards.
+function downloadText(text, name) {
+  const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
   try {
-    if (create) handle = await window.showSaveFilePicker({ suggestedName: DATA_FILE_NAME, types: FILE_TYPES });
-    else [handle] = await window.showOpenFilePicker({ types: FILE_TYPES, multiple: false });
-    if ((await handle.requestPermission({ mode: "readwrite" })) !== "granted") {
-      reportFileProblem(t("storage.notGranted"));
-      return;
-    }
-  } catch (e) {
-    if (!e || e.name !== "AbortError") reportFileProblem(t("storage.cannotOpen", { error: errorText(e) }));
-    return;
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
-  await enqueue(() => connectHandle(handle, true));
 }
 
-async function reconnect() {
-  const handle = storage.handle;
-  if (!handle) return pickDataFile(false);
-  try {
-    if ((await handle.requestPermission({ mode: "readwrite" })) !== "granted") {
-      notify(t("storage.notGranted"), "error");
-      return;
-    }
-  } catch (e) {
-    notify(t("storage.cannotReopen", { error: errorText(e) }), "error");
-    return;
-  }
-  await enqueue(() => connectHandle(handle, false));
-}
-
-async function initStorage(notices) {
-  if (storage.supported) {
-    let handle = null;
-    try { handle = await loadHandle(); } catch { handle = null; }
-    if (handle) {
-      storage.handle = handle;
-      storage.fileName = handle.name;
-      let granted = false;
-      try { granted = (await handle.queryPermission({ mode: "readwrite" })) === "granted"; } catch { granted = false; }
-      if (granted) await connectHandle(handle, false);
-      else setStorageMode("disconnected", t("storage.needPermission"));
-    } else {
-      setStorageMode("unlinked");
-    }
-  } else {
-    setStorageMode("unlinked");
-  }
-  if (notices.length) notify(notices.join(" "), "error");
-}
-
-function saveNow() {
+// Export Backup: reads the database (not the copy on screen), checks the file, downloads it, and only then
+// records the backup date. Invoisy can not see where the downloaded file ends up or whether it is kept.
+function exportBackup() {
   return guard(async () => {
-    const r = await commit(() => ({}));
-    if (r.error) return reportFileProblem(r.error);
     showError("dataError", "");
-    notify(t("storage.savedTo", { file: storage.fileName }));
+    await storage.ready;
+    if (storage.mode !== "ready") { reportDataProblem(blockedMessage()); return; }
+    let snapshot;
+    try {
+      snapshot = await db.loadAll();
+    } catch (e) {
+      reportDataProblem(t("storage.exportReadFailed", { error: errorText(e) }));
+      return;
+    }
+    const file = Validation.prepareBackupFile(snapshot, new Date());
+    if (file.error) { reportDataProblem(t("storage.exportNoDate", { error: file.error })); return; }
+    try {
+      downloadText(file.text, file.name);
+    } catch (e) {
+      reportDataProblem(t("storage.exportDownloadFailed", { error: errorText(e) }));
+      return;
+    }
+    try {
+      await db.recordBackup({ at: new Date().toISOString(), fileName: file.name, counts: file.counts });
+      await refreshBackupInfo();
+    } catch (e) {
+      renderStorage();
+      notify(t("storage.exportDateFailed", { error: errorText(e) }), "error");
+      return;
+    }
+    renderStorage();
+    notify(t("storage.backupExported", { name: file.name, counts: describeData(file.counts) }));
   });
 }
 
-function exportBackup() {
-  const built = buildPayload(draftFromState(), state.lastSaved || new Date().toISOString());
-  if (built.error) { reportFileProblem(built.error); return; }
-  const pad = (n) => String(n).padStart(2, "0");
-  const now = new Date();
-  const name = `invoisy-backup-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.json`;
-  const url = URL.createObjectURL(new Blob([built.text], { type: "application/json" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = name;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  showError("dataError", "");
-  notify(t("storage.backupExported", { name }));
-}
-
+// Import / Restore Backup: checks the whole file first, asks, downloads a safety copy of the current data,
+// then replaces everything in ONE transaction. A restore that fails changes nothing.
 function importBackup(file) {
   return guard(async () => {
     showError("dataError", "");
     if (!file) return;
+    await storage.ready;
+    if (!canWrite()) { reportDataProblem(blockedMessage()); return; }
     let text;
     try {
       text = await file.text();
     } catch {
-      reportFileProblem(t("storage.fileUnreadable"));
+      reportDataProblem(t("storage.fileUnreadable"));
       return;
     }
-    const parsed = parseDataText(text);
+    const parsed = Validation.parseBackup(text);
     if (parsed.error) {
-      reportFileProblem(t("storage.badBackup", { error: parsed.error }));
+      reportDataProblem(t("storage.badBackup", { error: parsed.error }));
       return;
     }
-    if (!canWrite()) { reportFileProblem(blockedMessage()); return; }
     const incoming = parsed.data;
-    const saved = formatDateTime(incoming.lastSaved) || t("storage.unknown");
-    if (!confirm(t("storage.confirmImport", { backup: describeData(incoming), saved, current: describeData(state) }))) return;
+    const made = formatDateTime(parsed.exportedAt) || t("storage.unknown");
+    const nextNumber = formatInvoiceNumber(Math.max(state.counter, incoming.counter) + 1);
+    const noted = parsed.warnings.slice(0, 3).map((w) => "\n- " + w).join("") + (parsed.warnings.length > 3 ? "\n- " + t("storage.andMore", { n: parsed.warnings.length - 3 }) : "");
+    const ok = confirm(t("storage.confirmRestore", {
+      backup: describeData(incoming), made, current: describeData(state), next: nextNumber,
+      notes: noted ? "\n\n" + t("storage.noteHeading") + noted : "",
+    }));
+    if (!ok) { notify(t("storage.restoreCancelled")); return; }
 
-    // The invoice counter never goes backwards, so numbers already issued are not reused.
-    const r = await commit((d) => {
-      d.products = incoming.products;
-      d.invoices = incoming.invoices;
-      d.settings = incoming.settings;
-      d.counter = Math.max(d.counter, incoming.counter);
+    const outcome = await enqueue(async () => {
+      let before;
+      try {
+        before = await db.loadAll();
+      } catch (e) {
+        return { error: t("storage.restoreReadFailed", { error: errorText(e) }) };
+      }
+      let safetyName = "";
+      if (Validation.hasMeaningfulData(before)) {
+        const safety = Validation.prepareBackupFile(before, new Date(), "invoisy-before-restore");
+        if (safety.error) return { error: t("storage.safetyMakeFailed", { error: safety.error }) };
+        try {
+          downloadText(safety.text, safety.name);
+          safetyName = safety.name;
+        } catch (e) {
+          return { error: t("storage.safetyDownloadFailed", { error: errorText(e) }) };
+        }
+      }
+      try {
+        const done = await db.restore(incoming, { expectedRevision: before.revision });
+        await loadFromDatabase();
+        return { done, safetyName };
+      } catch (e) {
+        return { error: await describeSaveFailure(e) };
+      }
     });
-    if (r.error) { reportFileProblem(r.error); return; }
+    if (outcome.error) { reportDataProblem(outcome.error); return; }
     refreshAfterLoad();
-    notify(t("storage.backupImported") + savedNote(r));
+    notify(t("storage.restored", { counts: describeData(outcome.done.counts) }) + (outcome.safetyName ? " " + t("storage.restoredSafety", { name: outcome.safetyName }) : ""));
   });
 }
+
+function saveBackupInterval() {
+  return guard(async () => {
+    const days = Number($("backupDays").value);
+    if (!Number.isInteger(days) || days < 1 || days > 365) { reportDataProblem(t("storage.intervalInvalid")); return; }
+    try {
+      await db.setBackupInterval(days);
+    } catch (e) {
+      reportDataProblem(errorText(e));
+      return;
+    }
+    showError("dataError", "");
+    await refreshBackupInfo();
+    renderStorage();
+    notify(tn("storage.intervalSaved", days));
+  });
+}
+
+/* -- Older browser data (what earlier versions saved in localStorage) -- */
+
+function downloadLegacyCopy() {
+  return guard(async () => {
+    showError("dataError", "");
+    const file = Validation.prepareLegacyCopy(legacyStorage(), new Date());
+    if (file.error) { reportDataProblem(file.error); return; }
+    try {
+      downloadText(file.text, file.name);
+    } catch (e) {
+      reportDataProblem(t("storage.downloadFailed", { error: errorText(e) }));
+      return;
+    }
+    try {
+      if (storage.migration) storage.migration = await db.updateMigrationRecord({ legacyCopyDownloadedAt: new Date().toISOString() }) || storage.migration;
+    } catch { /* the copy was still downloaded */ }
+    renderStorage();
+    notify(t("storage.legacyCopyDownloaded", { name: file.name }));
+  });
+}
+
+function removeLegacyCopy() {
+  return guard(async () => {
+    showError("dataError", "");
+    if (!confirm(t("storage.confirmRemoveLegacy"))) return;
+    try {
+      await db.removeLegacyData(legacyStorage());
+      storage.migration = await db.getMigrationRecord();
+    } catch (e) {
+      reportDataProblem(errorText(e));
+      return;
+    }
+    renderStorage();
+    notify(t("storage.legacyRemoved"));
+  });
+}
+
+// For data that could not be read at all: starts with an empty database. The older data stays where it is.
+function skipLegacyMigration() {
+  return guard(async () => {
+    if (!confirm(t("storage.confirmSkip"))) return;
+    try {
+      await db.skipMigration("The older data could not be read and the person chose to start empty.");
+    } catch (e) {
+      reportDataProblem(errorText(e));
+      return;
+    }
+    await startStorage();
+  });
+}
+
+db.on("blocked", () => { if (storage.mode === "connecting") setStorageMode("connecting", InvoisyDB.MSG.BLOCKED); });
+db.on("versionchange", () => setStorageMode("outdated", t("storage.versionChanged")));
+db.on("closed", () => { if (storage.mode === "ready") setStorageMode("outdated", t("storage.connectionClosed")); });
+// Another window saved: pick up its data (queued behind anything this window is saving).
+db.on("change", (message) => {
+  if (message.revision <= state.revision) return;
+  enqueue(async () => {
+    if (!canWrite()) return;
+    await loadFromDatabase();
+    refreshAfterLoad();
+  }).catch(() => {});
+});
 
 /* ==========================================================================
    PRODUCTS
@@ -1046,7 +723,7 @@ async function addProduct(values) {
   }
   resetProductForm();
   renderAll();
-  notify(t("product.added", { label: productLabel(values) }) + savedNote(r));
+  notify(t("product.added", { label: productLabel(values) }));
   $("pName").focus();
 }
 
@@ -1063,7 +740,7 @@ async function updateProduct(id, values) {
   }
   resetProductForm();
   renderAll();
-  notify(t("product.updated", { label: productLabel(values) }) + savedNote(r));
+  notify(t("product.updated", { label: productLabel(values) }));
 }
 
 async function deleteProduct(id) {
@@ -1076,7 +753,7 @@ async function deleteProduct(id) {
   if (state.selectedId === id) state.selectedId = null;
   if (state.editingId === id) resetProductForm();
   renderAll();
-  notify(t("product.deleted", { name: product.name }) + savedNote(r));
+  notify(t("product.deleted", { name: product.name }));
 }
 
 async function adjustStock(id, delta) {
@@ -1180,7 +857,7 @@ function loadDemoData() {
     if (r.error) { notify(r.error, "error"); return; }
     if (r.skip) { notify(t("demo.already")); return; }
     renderAll();
-    notify(tn("demo.added", r.added) + savedNote(r));
+    notify(tn("demo.added", r.added));
   });
 }
 
@@ -1362,16 +1039,13 @@ function salePaid(sale, total) {
   return Number.isFinite(v) && v > 0 ? Math.min(round2(v), total) : 0;
 }
 
-// Total paid, remaining balance and status are always calculated from the payments list.
+// Total paid, remaining balance and status are always calculated from the payments list
+// (the sums are in validation.js; the status is worded here in the current language).
 function paymentInfo(inv) {
-  const payments = Array.isArray(inv.payments) ? inv.payments : [];
-  const paid = round2(payments.reduce((sum, p) => sum + toNumber(p.amount), 0));
-  const remaining = Math.max(0, round2(toNumber(inv.total) - paid));
-  const cls = remaining <= 0 ? "paid" : paid > 0 ? "partial" : "unpaid";
+  const { payments, paid, remaining, cls } = Validation.paymentSummary(inv);
   const status = t({ paid: "inv.status.paid", partial: "inv.status.partial", unpaid: "inv.status.unpaid" }[cls]);
   return { payments, paid, remaining, status, cls };
 }
-
 function paidError() {
   const raw = String(state.sale.paidValue).trim();
   if (raw === "") return "";
@@ -1563,7 +1237,7 @@ function completeSale() {
     state.selectedId = null;
     $("search").value = "";
     renderAll();
-    notify(t("sell.completed", { number: r.invoice.invoiceNumber }) + savedNote(r));
+    notify(t("sell.completed", { number: r.invoice.invoiceNumber }));
   });
 }
 
@@ -1574,7 +1248,7 @@ async function deleteInvoice(id) {
   const r = await commit((d) => { d.invoices = d.invoices.filter((i) => i.id !== id); });
   if (r.error) { notify(r.error, "error"); return; }
   renderAll();
-  notify(t("invoice.deleted", { number: inv.invoiceNumber }) + savedNote(r));
+  notify(t("invoice.deleted", { number: inv.invoiceNumber }));
 }
 
 // Adds a cash payment (current date/time) to a saved invoice. Items and stock are never touched.
@@ -1639,7 +1313,7 @@ async function saveLogo(dataUrl) {
   }
   renderLogoSetting();
   renderInvoice();
-  notify(t(dataUrl ? "logo.saved" : "logo.removed") + savedNote(r));
+  notify(t(dataUrl ? "logo.saved" : "logo.removed"));
 }
 
 // Reads a PNG, shrinks it to fit LOGO_MAX_W x LOGO_MAX_H (never enlarges, keeps transparency) and saves it.
@@ -2034,7 +1708,7 @@ function saveLanguage(code) {
     renderAll();
     renderStorage();
     fillSettingsForm();
-    notify(t("settings.languageChanged") + savedNote(r));
+    notify(t("settings.languageChanged"));
   });
 }
 
@@ -2048,7 +1722,7 @@ function applyPaperSize() {
 async function savePaper(paper) {
   const r = await commit((d) => { d.settings.paper = paper; });
   if (r.error) notify(r.error, "error");
-  else notify(t("settings.paperSet", { paper }) + savedNote(r));
+  else notify(t("settings.paperSet", { paper }));
   applyPaperSize();
 }
 
@@ -2057,47 +1731,113 @@ function updateBannerHeight() {
   document.documentElement.style.setProperty("--banner-h", banner.hidden ? "0px" : banner.offsetHeight + "px");
 }
 
+function storageSize() {
+  if (storage.usage == null) return "";
+  const mb = Math.round((storage.usage / (1024 * 1024)) * 10) / 10;
+  return t("storage.sizeUsed", { mb: numberFormat.format(mb) });
+}
+
+function quotaText() {
+  const keep = storage.persisted === true
+    ? t("storage.persisted")
+    : storage.persisted === false
+      ? t("storage.notProtected")
+      : "";
+  return [storageSize(), keep].filter(Boolean).join(" ") || t("storage.notReported");
+}
+
+// The small reminder in the top bar. It never opens a dialog and never blocks a sale.
+function renderReminder() {
+  const hasData = storage.mode === "ready" && (state.products.length > 0 || state.invoices.length > 0);
+  const reminder = Validation.backupReminder(storage.backup, hasData, new Date());
+  const button = $("backupReminder");
+  button.hidden = !reminder.text;
+  button.textContent = reminder.text ? t("reminder.action", { text: reminder.text }) : "";
+  button.className = "backup-reminder no-print " + reminder.level;
+  button.disabled = busy;
+}
+
+// What happened to the data older versions kept in this browser, and what can still be done about it.
+function renderLegacy() {
+  const record = storage.migration;
+  const failed = storage.migrationFailed;
+  const kept = !!record && record.legacyRetained;
+  const lines = [];
+  if (failed) {
+    lines.push(t("legacy.failed"));
+  } else if (record && record.status === "migrated") {
+    lines.push(t("legacy.migrated", { counts: describeData(record.counts), date: formatDateTime(record.at) }));
+    if (record.rejectedCount) lines.push(tn("legacy.rejected", record.rejectedCount));
+    lines.push(t(kept ? "legacy.kept" : "legacy.removed"));
+  } else if (record && record.status === "conflict") {
+    lines.push(t("legacy.conflict", { older: describeData(record.legacyCounts), current: describeData(record.counts) }));
+  } else if (record && record.status === "skipped") {
+    lines.push(t("legacy.skipped"));
+  }
+  if (record && record.legacyDataFile) {
+    lines.push(t("legacy.dataFile", { file: record.legacyDataFile }));
+  }
+  $("legacyBox").hidden = lines.length === 0;
+  $("legacyText").textContent = lines.join(" ");
+
+  const hasCopy = failed || (kept && ["migrated", "conflict", "skipped"].includes(record.status));
+  const removable = !failed && kept && ((record.status === "migrated" && !!storage.backup.lastBackupAt) || (record.status === "conflict" && !!record.legacyCopyDownloadedAt));
+  $("legacyDownload").hidden = !hasCopy;
+  $("legacyDownload").disabled = busy;
+  $("legacyRemove").hidden = failed || !kept || !["migrated", "conflict"].includes(record.status);
+  $("legacyRemove").disabled = busy || !removable;
+  $("legacySkip").hidden = !(failed && storage.migrationUnreadable);
+  $("legacySkip").disabled = busy;
+}
+
 function renderStorage() {
   const m = storage.mode;
-  const connected = m === "connected";
+  const ready = m === "ready";
   let text = "";
   let action = "";
   let label = "";
-  if (m === "unlinked") {
-    text = t(storage.supported ? "banner.unlinked" : "banner.unsupported");
-    if (storage.supported) { action = "settings"; label = t("banner.setup"); }
-  } else if (m === "disconnected") {
-    text = t("banner.blocked", { reason: storage.reason });
-    action = storage.handle ? "reconnect" : "choose";
-    label = t(storage.handle ? "banner.reconnect" : "settings.chooseData");
+  if (m === "unavailable" || m === "failed") {
+    text = storage.reason;
+    action = "retry";
+    label = t("storage.retry");
+  } else if (m === "outdated") {
+    text = storage.reason;
+    action = "reload";
+    label = t("storage.reload");
+  } else if (m === "connecting") {
+    text = storage.reason;   // empty unless another window is blocking an update
   }
   const banner = $("storageBanner");
   banner.hidden = !text;
-  banner.classList.toggle("blocked", m === "disconnected");
+  banner.classList.toggle("blocked", m !== "connecting");
   $("bannerText").textContent = text;
   $("bannerAction").hidden = !action;
   $("bannerAction").textContent = label;
   $("bannerAction").dataset.action = action;
   updateBannerHeight();
 
-  const stateText = t({
-    connecting: "state.checking",
-    connected: "state.connected",
-    unlinked: storage.supported ? "state.unlinked" : "state.unsupported",
-    disconnected: "state.disconnected",
-  }[m]);
-  $("dataFile").textContent = (storage.fileName || DATA_FILE_NAME) + (connected ? "" : t("state.notConnectedSuffix"));
+  const stateText = t("storage.state." + m);
+  const lastBackup = storage.backup.lastBackupAt;
+  $("dataFile").textContent = t("storage.database");
   $("dataState").textContent = stateText;
   $("dataState").className = "state-" + m;
-  $("dataSaved").textContent = state.lastSaved ? formatDateTime(state.lastSaved) + (connected ? "" : t("state.browserCopySuffix")) : t("state.never");
-  $("dataNote").textContent = (connected
-    ? t("note.connected")
-    : m === "disconnected" ? storage.reason
-    : t("note.unlinked")) +
-    (storage.mirrorOk ? "" : t("note.mirrorFailed"));
-  $("saveNow").disabled = !connected;
-  $("chooseData").disabled = !storage.supported;
-  $("createData").disabled = !storage.supported;
+  $("dataSummary").textContent = ready ? describeData(state) : "-";
+  $("dataSaved").textContent = ready && state.lastSaved ? formatDateTime(state.lastSaved) : ready ? t("storage.nothingSavedYet") : "-";
+  $("dataBackup").textContent = lastBackup
+    ? formatDateTime(lastBackup) + (storage.backup.lastBackupFile ? ` (${storage.backup.lastBackupFile})` : "")
+    : t("storage.never");
+  $("dataQuota").textContent = quotaText();
+  $("dataNote").textContent = t("storage.note");
+
+  const locked = busy || !ready;
+  $("exportBackup").disabled = locked;
+  $("importBackup").disabled = locked;
+  $("backupDays").disabled = locked;
+  $("backupDaysSave").disabled = locked;
+  $("persistBtn").hidden = storage.persisted !== false;
+  $("persistBtn").disabled = busy;
+  renderReminder();
+  renderLegacy();
 }
 
 // Called after the in-memory data was replaced from the file, a backup or another window.
@@ -2360,7 +2100,7 @@ function bindEvents() {
       renderStock();
       renderResults();
       renderSelected();
-      notify(result.message + savedNote(result));
+      notify(result.message);
       $("rQty").focus();
     });
   });
@@ -2407,7 +2147,7 @@ function bindEvents() {
       $("payAmount").value = "";
       renderInvoices();
       renderInvoice();
-      notify(t("pay.added") + savedNote(result));
+      notify(t("pay.added"));
     });
   });
   $("payAmount").addEventListener("input", () => showError("payError", ""));
@@ -2434,7 +2174,7 @@ function bindEvents() {
         };
       });
       if (r.error) { notify(r.error, "error"); return; }
-      notify(t("settings.saved") + savedNote(r));
+      notify(t("settings.saved"));
       fillSettingsForm();
       renderAll();
     });
@@ -2444,17 +2184,19 @@ function bindEvents() {
   $("sLanguage").addEventListener("change", () => saveLanguage($("sLanguage").value));
 
   // Data storage
-  $("chooseData").addEventListener("click", () => pickDataFile(false));
-  $("createData").addEventListener("click", () => pickDataFile(true));
-  $("saveNow").addEventListener("click", saveNow);
   $("exportBackup").addEventListener("click", exportBackup);
+  $("backupReminder").addEventListener("click", exportBackup);
   $("importBackup").addEventListener("click", () => $("importFile").click());
   $("importFile").addEventListener("change", (e) => { importBackup(e.target.files[0]); e.target.value = ""; });
+  $("backupForm").addEventListener("submit", (e) => { e.preventDefault(); saveBackupInterval(); });
+  $("persistBtn").addEventListener("click", askBrowserToKeepData);
+  $("legacyDownload").addEventListener("click", downloadLegacyCopy);
+  $("legacyRemove").addEventListener("click", removeLegacyCopy);
+  $("legacySkip").addEventListener("click", skipLegacyMigration);
   $("bannerAction").addEventListener("click", () => {
     const action = $("bannerAction").dataset.action;
-    if (action === "settings") showView("settings");
-    else if (action === "reconnect") reconnect();
-    else if (action === "choose") pickDataFile(false);
+    if (action === "retry") startStorage();
+    else if (action === "reload") window.location.reload();
   });
   window.addEventListener("resize", updateBannerHeight);
   $("loadDemo").addEventListener("click", loadDemoData);
@@ -2462,15 +2204,6 @@ function bindEvents() {
   $("logoFile").addEventListener("change", (e) => { chooseLogo(e.target.files[0]); e.target.value = ""; });
   $("removeLogo").addEventListener("click", () => saveLogo(""));
   document.querySelectorAll('input[name="paper"]').forEach((r) => r.addEventListener("change", () => savePaper(r.value)));
-
-  // Another window saved new data: pick it up (the browser copy is only written after a successful save).
-  window.addEventListener("storage", (e) => {
-    if (e.key !== MIRROR_KEY) return;
-    const mirror = readMirror();
-    if (!mirror.data || mirror.data.lastSaved === state.lastSaved) return;
-    applyData(mirror.data);
-    refreshAfterLoad();
-  });
 }
 
 /* ---------- Start ---------- */
@@ -2488,6 +2221,8 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     validateSale,
     syncSaleWithProducts,
     getSale: () => state.sale,
+    getState: () => state,
+    getStorage: () => storage,
     productProblem,
     productLabel,
     findMatches,
@@ -2507,29 +2242,32 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     invoiceItemLabel,
     readProductForm,
     buildData,
-    buildPayload,
-    parseDataText,
     applyData,
     commit,
-    readMirror,
+    db,
+    startStorage,
+    loadFromDatabase,
+    addProduct,
+    updateProduct,
+    addStock,
+    completeSale,
+    deleteInvoice,
+    exportBackup,
+    importBackup,
     DEFAULT_SETTINGS,
     DEMO_PRODUCTS,
     localizedDemo,
-    invoiceHtml,
-    paymentInfo,
     money,
     customerLabel,
     describeData,
-    normalizeSettings,
-    settingsProblem,
+    normalizeSettings: Validation.normalizeSettings,
+    settingsProblem: Validation.settingsProblem,
+    Validation,
   });
 } else {
-  const startupNotices = loadLocalCopy();
   bindEvents();
   resetProductForm();
   showView("sell");
   renderStorage();
-  storage.ready = initStorage(startupNotices).catch((e) => {
-    setStorageMode("disconnected", t("storage.cannotOpen", { error: errorText(e) }));
-  });
+  startStorage();
 }

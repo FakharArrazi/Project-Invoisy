@@ -349,9 +349,27 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 .data-info dt { color: var(--muted); }
 .data-info dd { margin: 0; overflow-wrap: anywhere; }
 #dataState { font-weight: 600; }
-#dataState.state-connected { color: #1e7a3c; }
-#dataState.state-disconnected { color: var(--danger); }
-#dataState.state-unlinked { color: #9a5b00; }
+#dataState.state-ready { color: #1e7a3c; }
+#dataState.state-unavailable, #dataState.state-failed, #dataState.state-outdated { color: var(--danger); }
+#dataState.state-connecting { color: #9a5b00; }
+
+/* Backup reminder: a small pill in the top bar. It never opens a dialog and never blocks a sale. */
+.backup-reminder {
+  flex: none;
+  margin-left: auto;
+  padding: 4px 12px;
+  font: inherit; font-size: 12px;
+  color: #5a3a00; background: #fff4e0;
+  border: 1px solid #e8c27a; border-radius: 999px;
+  cursor: pointer;
+}
+.backup-reminder:hover { background: #ffe9c2; }
+.backup-reminder:disabled { opacity: 0.45; cursor: not-allowed; }
+.backup-interval { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; }
+.backup-interval input { width: 72px; }
+.legacy-box { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.legacy-box h3 { margin: 0 0 4px; font-size: 14px; }
+.legacy-box .actions { margin-top: 8px; }
 
 .storage-banner {
   display: flex; align-items: center; gap: 12px;

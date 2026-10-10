@@ -3,7 +3,7 @@
 // Sales, stock deduction and saved invoices, tested through the application functions in script.js.
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { loadProductApi } = require("./helpers");
+const { loadProductApi, openDatabase } = require("./helpers");
 
 // Reference product: 1,500 DA / m², 60 x 60 cm, 1.44 m² per box. Stock counted in boxes unless stated.
 function load(overrides = {}, extraProducts = []) {
@@ -21,6 +21,7 @@ function load(overrides = {}, extraProducts = []) {
 
 // Completes the sale the way the app does (one commit) and returns the saved invoice.
 async function complete(api) {
+  await openDatabase(api);   // saving goes to a disposable in-memory IndexedDB
   const result = await api.commit((d) => api.applySale(d, api.getSale()));
   assert.equal(result.error, undefined, result.error);
   return result.invoice;
@@ -85,6 +86,7 @@ test("a sale larger than the stock is refused", () => {
 test("stock is checked again when the sale is completed", async () => {
   const { api } = load({ stock: 5 });
   api.addToSale("t1", "5", "box");
+  await openDatabase(api);
   await api.commit((d) => { d.products[0].stock = 3; });          // stock lowered elsewhere
   const result = await api.commit((d) => api.applySale(d, api.getSale()));
   assert.match(result.error, /Not enough stock/);
@@ -212,14 +214,19 @@ test("16. a saved invoice keeps its units and prices after the product is edited
   assert.equal(saved.items[0].productPrice, 1500);
   assert.equal(saved.total, 5940);
 
-  // and it reads back the same after being written to the data file and loaded again
-  const written = api.buildPayload({ products: api.getProducts(), invoices: api.getInvoices(), settings: api.DEFAULT_SETTINGS, counter: 1 }, "now");
+  // and it reads back the same from the database, and from a backup file made from it
+  const stored = await api.db.loadAll();
+  const check = (invoice) => {
+    const item = invoice.items[0];
+    assert.equal(JSON.stringify([item.qty, item.sellingUnit, item.unitPrice, item.total, item.stockDeducted]), JSON.stringify([2, "box", 2160, 4320, 2]));
+    assert.equal(invoice.total, 5940);
+  };
+  check(stored.invoices[0]);
+  const written = api.Validation.prepareBackupFile(stored, new Date());
   assert.equal(written.error, undefined, written.error);
-  const loaded = api.parseDataText(written.text);
+  const loaded = api.Validation.parseBackup(written.text);
   assert.equal(loaded.error, undefined, loaded.error);
-  const item = loaded.data.invoices[0].items[0];
-  assert.equal(JSON.stringify([item.qty, item.sellingUnit, item.unitPrice, item.total, item.stockDeducted]), JSON.stringify([2, "box", 2160, 4320, 2]));
-  assert.equal(loaded.data.invoices[0].total, 5940);
+  check(loaded.data.invoices[0]);
 });
 
 test("the invoice shows the unit the customer bought, never m²", async () => {

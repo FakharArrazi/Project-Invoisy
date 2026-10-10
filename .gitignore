@@ -1,3 +1,4 @@
 # Private business data (inventory, invoices, payments, settings). Never commit.
 invoisy-data.json
 invoisy-backup-*.json
+node_modules/
