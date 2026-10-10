@@ -44,7 +44,6 @@ with sync_playwright() as p:
     # --- create a product through the real form
     go(page, "stock")
     page.fill("#pName", "Tile A")
-    page.fill("#pManufacturer", "Maker")
     page.fill("#pTileSize", "60*60")
     page.fill("#pCoveragePerBox", "1.44")
     page.fill("#pPrice", "800")

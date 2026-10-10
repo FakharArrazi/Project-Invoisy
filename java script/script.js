@@ -150,7 +150,7 @@ function newSale() {
     customer: { name: "", phone: "", address: "" },
     discountType: "amount", discountValue: "",
     taxType: "amount", taxValue: "",
-    paidValue: "",                          // amount paid now; empty = paid in full
+    paidValue: "",                          // amount paid now; empty = 0 (nothing paid yet)
   };
 }
 
@@ -620,7 +620,7 @@ function searchProducts(query) {
   const terms = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
   return state.products
     .filter((p) => {
-      const haystack = (p.name + " " + p.manufacturer + " " + p.tileSize + " " + p.sku + " " + p.category).toLowerCase();
+      const haystack = (p.name + " " + (p.manufacturer || "") + " " + p.tileSize + " " + p.sku + " " + p.category).toLowerCase();
       return terms.every((t) => haystack.includes(t));
     })
     .sort((a, b) => productLabel(a).localeCompare(productLabel(b)));
@@ -699,7 +699,6 @@ function readProductForm() {
   return {
     values: {
       name,
-      manufacturer: get("pManufacturer"),
       tileSize,
       coveragePerBox: coverageRaw === "" ? null : coveragePerBox,
       description: get("pDesc"),
@@ -715,7 +714,7 @@ function readProductForm() {
 }
 
 async function addProduct(values) {
-  const r = await commit((d) => { d.products.push({ id: uid(), ...values }); });
+  const r = await commit((d) => { d.products.push({ id: uid(), manufacturer: "", ...values }); });
   if (r.error) {
     showError("productError", r.error);
     notify(r.error, "error");
@@ -788,7 +787,6 @@ function startEditProduct(id) {
   if (!p) return;
   state.editingId = id;
   $("pName").value = p.name;
-  $("pManufacturer").value = p.manufacturer;
   $("pTileSize").value = p.tileSize;
   $("pCoveragePerBox").value = p.coveragePerBox == null ? "" : p.coveragePerBox;
   $("pDesc").value = p.description;
@@ -801,6 +799,7 @@ function startEditProduct(id) {
   $("pSku").value = p.sku;
   $("pCategory").value = p.category;
   renderProductFormMode();
+  syncCoverageMark();
   clearProductErrors();
   $("pName").focus();
 }
@@ -811,7 +810,15 @@ function resetProductForm() {
   $("pStock").value = 0;
   delete $("pStockUnit").dataset.touched;
   renderProductFormMode();
+  syncCoverageMark();
   clearProductErrors();
+}
+
+// Coverage per box is mandatory only while the price is per m² (see readProductForm), so its * follows that.
+function syncCoverageMark() {
+  const needed = $("pPriceUnit").value === "m2";
+  $("coverageReq").hidden = !needed;
+  $("pCoveragePerBox").setAttribute("aria-required", needed ? "true" : "false");
 }
 
 // The Stock form's title and buttons depend on whether a product is being edited.
@@ -1032,9 +1039,9 @@ function calculateTotals(sale) {
   return { subtotal, discount, tax, total };
 }
 
-// Amount received with the sale. An empty field means paid in full.
+// Amount received with the sale. An empty field means nothing was paid (never "paid in full").
 function salePaid(sale, total) {
-  if (String(sale.paidValue).trim() === "") return total;
+  if (String(sale.paidValue).trim() === "") return 0;
   const v = Number(sale.paidValue);
   return Number.isFinite(v) && v > 0 ? Math.min(round2(v), total) : 0;
 }
@@ -1430,14 +1437,38 @@ function unitOptions(selected, product) {
   }).join("");
 }
 
-// Shows how the line's price was worked out: "1,500 DA / m² x 1.44 m² = 2,160 DA per Box".
+// Shows the product's own price and unit from Stock, and how the line's price follows from it:
+// "Product price: 1,500 DA / m² (1 Box = 1.44 m²)". Old products without a price unit show nothing.
 function priceNote(item) {
   const p = findProduct(item.productId);
   const priced = p ? Calc.getUnitPrice(p, item.sellingUnit) : null;
   if (!priced || priced.error) return "";
   if (item.priceOverridden) return t("sell.customPrice", { price: money(item.listPrice) });
-  if (priced.legacy || priced.factor === 1) return "";
-  return `${money(priced.basePrice)} / ${unitLabel(priced.priceUnit)} × ${numberFormat.format(priced.factor)} ${unitLabel(priced.priceUnit)}`;
+  if (priced.legacy) return "";
+  const params = { price: money(priced.basePrice), priceUnit: unitLabel(priced.priceUnit) };
+  if (priced.factor === 1) return t("sell.priceNote", params);
+  return t("sell.priceNoteConv", {
+    ...params,
+    unit: unitLabel(item.sellingUnit, 1),
+    factor: numberFormat.format(priced.factor),
+    factorUnit: unitLabel(priced.priceUnit, priced.factor),
+  });
+}
+
+// What an invoice line shows in its Price column, from the line's own saved details (never from the
+// product's current data): the product's price and the unit it is priced per, plus the quantity sold
+// expressed in that unit when it differs ("2 Boxes" -> "2.88 m²"). { price, unit, qtyInPriceUnit }
+// A line whose price was typed by hand, or an old line without a price unit, shows the price that was
+// really charged, per unit sold.
+function invoiceLinePrice(item) {
+  const charged = { price: item.unitPrice, unit: item.sellingUnit || null, qtyInPriceUnit: null };
+  if (item.priceOverridden || !Calc.isUnit(item.priceUnit)) return charged;
+  const base = Number(item.productPrice);
+  if (item.productPrice == null || !Number.isFinite(base) || base < 0) return charged;
+  if (!item.sellingUnit || item.sellingUnit === item.priceUnit) return { price: base, unit: item.priceUnit, qtyInPriceUnit: null };
+  const converted = Calc.convertQuantity(item.qty, item.sellingUnit, item.priceUnit, item);
+  if (converted.error) return charged;
+  return { price: base, unit: item.priceUnit, qtyInPriceUnit: converted.value };
 }
 
 function renderSale() {
@@ -1470,7 +1501,7 @@ function renderTotals() {
   $("tTax").textContent = money(t.tax);
   $("tTotal").textContent = money(t.total);
   $("tRemaining").textContent = money(Math.max(0, round2(t.total - salePaid(state.sale, t.total))));
-  $("amountPaid").placeholder = numberFormat.format(t.total);
+  $("amountPaid").placeholder = "0";
 }
 
 // Updates totals, line totals and the preview without rebuilding the inputs (keeps focus).
@@ -1499,9 +1530,11 @@ function invoiceHtml(inv) {
   const logo = state.settings.logo ? `<img class="inv-logo" src="${esc(state.settings.logo)}" alt="${esc(t("logo.alt"))}">` : "";
 
   const rows = inv.items.length
-    ? inv.items.map((i) =>
-        `<tr><td>${esc(invoiceItemLabel(i))}</td><td class="num">${num(i.qty)}${i.sellingUnit ? ` ${esc(unitLabel(i.sellingUnit, i.qty))}` : ""}</td><td class="num">${num(i.unitPrice)}${i.sellingUnit ? ` <span class="inv-unit">/ ${esc(unitLabel(i.sellingUnit))}</span>` : ""}</td><td class="num">${num(i.total != null ? i.total : Calc.calculateLineTotal(i.qty, i.unitPrice))}</td></tr>`
-      ).join("")
+    ? inv.items.map((i) => {
+        const shown = invoiceLinePrice(i);
+        const inPriceUnit = shown.qtyInPriceUnit == null ? "" : `<div class="inv-sub">${num(shown.qtyInPriceUnit)} ${esc(unitLabel(shown.unit, shown.qtyInPriceUnit))}</div>`;
+        return `<tr><td>${esc(invoiceItemLabel(i))}</td><td class="num">${num(i.qty)}${i.sellingUnit ? ` ${esc(unitLabel(i.sellingUnit, i.qty))}` : ""}${inPriceUnit}</td><td class="num">${num(shown.price)}${shown.unit ? ` <span class="inv-unit">/ ${esc(unitLabel(shown.unit))}</span>` : ""}</td><td class="num">${num(i.total != null ? i.total : Calc.calculateLineTotal(i.qty, i.unitPrice))}</td></tr>`;
+      }).join("")
     : `<tr><td colspan="4" class="none">${esc(t("inv.noItems"))}</td></tr>`;
 
   const pay = paymentInfo(inv);
@@ -2077,6 +2110,7 @@ function bindEvents() {
   $("pPriceUnit").addEventListener("change", () => {
     const stockUnit = $("pStockUnit");
     if (!stockUnit.dataset.touched) stockUnit.value = Calc.defaultStockUnit($("pPriceUnit").value) || "";
+    syncCoverageMark();
   });
   $("pStockUnit").addEventListener("change", () => { $("pStockUnit").dataset.touched = "1"; });
   productForm.addEventListener("input", (e) => {
@@ -2229,6 +2263,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     priceLabel,
     buildInvoiceData,
     calculateTotals,
+    renderTotals,
     applySale,
     invoiceHtml,
     getProducts: () => state.products,
@@ -2241,6 +2276,8 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     priceNote,
     invoiceItemLabel,
     readProductForm,
+    startEditProduct,
+    syncCoverageMark,
     buildData,
     applyData,
     commit,

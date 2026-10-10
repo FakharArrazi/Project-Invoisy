@@ -1,11 +1,18 @@
 /* Selling price + price unit (Stock form) and the unit shown next to prices on invoices. */
 
-.grid-2.price-row { grid-template-columns: 3fr 2fr; }
+.grid-2.price-row { grid-template-columns: 3fr 2fr; align-items: end; }   /* inputs line up even if a label wraps */
 .field .price-with-unit { display: flex; gap: 6px; }
-.field .price-with-unit input { flex: 1 1 0; min-width: 0; width: auto; }
-.field .price-with-unit select { flex: 0 0 auto; width: 110px; }
+.field .price-with-unit .sub-field { flex: 1 1 0; min-width: 0; }
+.field .price-with-unit .sub-field.sub-unit { flex: 0 0 110px; }
+.field .price-with-unit input, .field .price-with-unit select { width: 100%; }
+
+/* Small, quiet mark on the labels of mandatory fields. */
+.req { color: var(--muted); font-size: 0.85em; font-weight: normal; }
 
 .inv-unit { font-size: 0.85em; color: var(--muted); white-space: nowrap; }
 
 /* How a sale line's price was worked out ("1,500 DA / m² x 1.44 m²"). */
 .price-note { margin-top: 2px; text-align: right; }
+
+/* Price shown on an invoice line, and the quantity worked out in that price unit ("2.88 m²"). */
+.inv-sub { font-size: 0.85em; color: var(--muted); }

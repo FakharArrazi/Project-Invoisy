@@ -81,7 +81,7 @@ test("realistic workflow: product, stock, sale, partial and final payment, expor
   assert.match((await app.api.addPayment(first.id, "1")).error, /already fully paid/);
 
   // 6. a second sale, paid in full
-  await sell(app, id, 1, "box");
+  await sell(app, id, 1, "box", { paid: 1152 });
   assert.equal(state.invoices[1].invoiceNumber, "INV-000002");
   assert.equal(state.products[0].stock, 12);
 

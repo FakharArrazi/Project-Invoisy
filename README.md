@@ -13,10 +13,30 @@ language files.
 - A product also has a **stock unit**: what its stock quantity is counted in. Selling boxes or
   pieces takes stock out converted to that unit (3 pieces from 20 boxes of 4 pieces leaves 19.25 boxes).
 - kg and meter products can only be sold by kg / meter.
+- An invoice line shows the product's own price and the unit it is priced per (1,500 / m²), the
+  quantity as it was sold (2 Boxes) and, when that is a different unit, the same quantity in the
+  price unit underneath (2.88 m²), then the line total. Selling by the box never turns the price
+  into a per-box price on the invoice. A price typed by hand on the Sell page is the exception: the
+  line then shows the price actually charged, per unit sold.
 - A saved invoice keeps the unit sold, the price charged and the details it was worked out from.
-  It is never recalculated from the product's current data.
+  It is never recalculated from the product's current data, and a sale never changes the price in Stock.
+
+## Payments
+
+- **Amount Paid left empty means nothing was paid**, exactly like 0. The invoice is saved as unpaid and
+  the whole total stays outstanding. Only a typed amount is recorded as a payment.
+- Later payments are added to the same invoice from Invoices (Add Payment) and are kept in its payment
+  history. Status follows the payments: unpaid (nothing paid), partially paid, paid. Remaining = total - paid,
+  and a payment can not be more than what is remaining.
 - Products saved before these fields existed keep working: their price is used as typed and their
   stock goes down one-for-one until a price unit and stock unit are set in the Stock form.
+
+## Stock form
+
+Mandatory fields have a small * on their label: product name, selling price, price unit and stock unit
+(and coverage per box while the price is per m²). Everything else may be left empty. Products saved
+before the Manufacturer / Brand field was removed keep that value (it is still shown on the invoice
+and found by search) but it is no longer asked for or editable.
 
 ## Tests
 

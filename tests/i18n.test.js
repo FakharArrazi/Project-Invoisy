@@ -252,6 +252,7 @@ test("the printed invoice is in French but the saved invoice data stays language
     invoices: [], settings: { ...api.DEFAULT_SETTINGS, language: "fr" }, counter: 0, lastSaved: "",
   });
   assert.equal(api.addToSale("p1", "2", "piece").ok, true);
+  api.getSale().paidValue = "240";                       // paid in full, typed explicitly (an empty field means nothing paid)
   const invoice = api.buildInvoiceData(api.getSale(), "INV-000001", new Date().toISOString());
 
   // What is saved in the data file does not change with the language.

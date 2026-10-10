@@ -147,7 +147,7 @@
           <div class="grand"><span data-i18n="sell.total">Total</span><span id="tTotal"></span></div>
           <div class="pay-input"><label for="amountPaid" data-i18n="sell.amountPaid">Amount Paid</label><input type="number" id="amountPaid" min="0" step="any"></div>
           <div class="due"><span data-i18n="sell.remaining">Remaining</span><span id="tRemaining"></span></div>
-          <p class="muted small pay-hint" data-i18n="sell.payHint">Leave Amount Paid empty if the customer pays in full.</p>
+          <p class="muted small pay-hint" data-i18n="sell.payHint">Leave Amount Paid empty or 0 if the customer pays nothing now. Add payments later from Invoices.</p>
         </div>
 
         <p class="error" id="saleError" role="alert"></p>
@@ -167,18 +167,12 @@
           <h2 id="productFormTitle">Add product</h2>
           <form id="productForm" novalidate>
             <div class="field">
-              <label for="pName" data-i18n="stock.productName">Product name</label>
-              <input type="text" id="pName" autocomplete="off">
+              <label for="pName"><span data-i18n="stock.productName">Product name</span> <span class="req" aria-hidden="true">*</span></label>
+              <input type="text" id="pName" autocomplete="off" aria-required="true">
             </div>
-            <div class="grid-2">
-              <div class="field">
-                <label for="pManufacturer"><span data-i18n="stock.manufacturer">Manufacturer / brand</span> <small data-i18n="stock.manufacturerHint"></small></label>
-                <input type="text" id="pManufacturer" autocomplete="off">
-              </div>
-              <div class="field">
-                <label for="pTileSize"><span data-i18n="stock.tileSize">Tile size</span> <small data-i18n="stock.tileSizeHint"></small></label>
-                <input type="text" id="pTileSize" placeholder="60*120" autocomplete="off">
-              </div>
+            <div class="field">
+              <label for="pTileSize" data-i18n="stock.tileSize">Tile size</label>
+              <input type="text" id="pTileSize" autocomplete="off">
             </div>
             <div class="field">
               <label for="pDesc" data-i18n="stock.description">Description</label>
@@ -186,50 +180,60 @@
             </div>
             <div class="grid-2 price-row">
               <div class="field">
-                <label for="pPrice" data-i18n="stock.sellingPrice">Selling price</label>
                 <div class="price-with-unit">
-                  <input type="number" id="pPrice" min="0" step="any">
-                  <select id="pPriceUnit" aria-label="Price unit" data-i18n-aria-label="stock.priceUnit">
+                  <div class="sub-field">
+                    <label for="pPrice"><span data-i18n="stock.sellingPrice">Selling price</span> <span class="req" aria-hidden="true">*</span></label>
+                    <input type="number" id="pPrice" min="0" step="any" aria-required="true">
+                  </div>
+                  <div class="sub-field sub-unit">
+                    <label for="pPriceUnit"><span data-i18n="stock.priceUnit">Price unit</span> <span class="req" aria-hidden="true">*</span></label>
+                    <select id="pPriceUnit" aria-required="true">
                     <option value="" data-i18n="stock.per">Per...</option>
                     <option value="piece" selected data-i18n="price.piece">per piece</option>
                     <option value="box" data-i18n="price.box">per box</option>
                     <option value="m2" data-i18n="price.m2">per m²</option>
                     <option value="kg" data-i18n="price.kg">per kg</option>
                     <option value="m" data-i18n="price.m">per m</option>
-                  </select>
+                    </select>
+                  </div>
                 </div>
               </div>
               <div class="field">
-                <label for="pCost"><span data-i18n="stock.purchasePrice">Purchase price</span> <small data-i18n="stock.optional">(optional)</small></label>
+                <label for="pCost" data-i18n="stock.purchasePrice">Purchase price</label>
                 <input type="number" id="pCost" min="0" step="any">
               </div>
             </div>
-            <div class="grid-2">
+            <div class="grid-2 price-row">
               <div class="field">
-                <label for="pStock" data-i18n="stock.stockQty">Stock quantity</label>
                 <div class="price-with-unit">
-                  <input type="number" id="pStock" min="0" step="any" value="0">
-                  <select id="pStockUnit" aria-label="Stock unit" data-i18n-aria-label="stock.stockUnit">
+                  <div class="sub-field">
+                    <label for="pStock" data-i18n="stock.stockQty">Stock quantity</label>
+                    <input type="number" id="pStock" min="0" step="any" value="0">
+                  </div>
+                  <div class="sub-field sub-unit">
+                    <label for="pStockUnit"><span data-i18n="stock.stockUnit">Stock unit</span> <span class="req" aria-hidden="true">*</span></label>
+                    <select id="pStockUnit" aria-required="true">
                     <option value="" data-i18n="stock.countedIn">Counted in...</option>
                     <option value="piece" selected data-i18n="stockunit.piece">pieces</option>
                     <option value="box" data-i18n="stockunit.box">boxes</option>
                     <option value="m2" data-i18n="stockunit.m2">m²</option>
                     <option value="kg" data-i18n="stockunit.kg">kg</option>
                     <option value="m" data-i18n="stockunit.m">m</option>
-                  </select>
+                    </select>
+                  </div>
                 </div>
               </div>
               <div class="field">
-                <label for="pSku"><span data-i18n="stock.sku">SKU</span> <small data-i18n="stock.optional">(optional)</small></label>
+                <label for="pSku" data-i18n="stock.sku">SKU</label>
                 <input type="text" id="pSku" autocomplete="off">
               </div>
             </div>
             <div class="field">
-              <label for="pCoveragePerBox"><span data-i18n="stock.coverage">Coverage per box (m²)</span> <small data-i18n="stock.optional">(optional)</small></label>
+              <label for="pCoveragePerBox"><span data-i18n="stock.coverage">Coverage per box (m²)</span> <span class="req" id="coverageReq" aria-hidden="true" hidden>*</span></label>
               <input type="number" id="pCoveragePerBox" min="0" step="any" placeholder="For example, 2.88" data-i18n-placeholder="stock.coveragePlaceholder">
             </div>
             <div class="field">
-              <label for="pCategory"><span data-i18n="stock.category">Category</span> <small data-i18n="stock.optional">(optional)</small></label>
+              <label for="pCategory" data-i18n="stock.category">Category</label>
               <input type="text" id="pCategory" list="categoryList" autocomplete="off">
               <datalist id="categoryList"></datalist>
             </div>
