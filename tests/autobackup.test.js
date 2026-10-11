@@ -210,7 +210,7 @@ test("the backup carries the schema version, creation time and database revision
   await db.add("products", product(1));
   const file = V.prepareBackupFile(await db.loadAll(), new Date(Date.UTC(2026, 9, 10, 8)));
   const raw = JSON.parse(file.text);
-  assert.equal(raw.formatVersion, 1);
+  assert.equal(raw.formatVersion, 2);
   assert.equal(raw.exportedAt, "2026-10-10T08:00:00.000Z");
   assert.equal(raw.revision, 1);
   assert.equal(V.parseBackup(file.text).revision, 1);
@@ -722,7 +722,7 @@ test("app: with no file API the Settings section explains it and the manual expo
   await app.api.exportBackup();
   const exported = JSON.parse(await app.downloadedText());
   assert.equal(exported.data.products.length, 1);
-  assert.equal(exported.formatVersion, 1);
+  assert.equal(exported.formatVersion, 2);
   assert.equal(app.field("backupReminder").dataset.mode, "", "no automatic-backup warning when there is none");
 });
 
@@ -954,4 +954,29 @@ test("app: the older data file (invoisy-data.json of the previous version) with 
   await app.api.connectBackupFile();
   assert.equal(app.confirms.length, 1, "it asks first");
   assert.equal(await app.downloadedText(app.downloads.length - 1), legacy, "and keeps a copy of the old file");
+});
+
+test("the automatic backup file keeps attached supplier invoices, so the file it writes can be restored", async () => {
+  const db = newDb();
+  await db.initDatabase();
+  const P = globalThis.Purchases;
+  const before = await db.loadAll();
+  const d = structuredClone(before);
+  d.attachments = { put: [], remove: [] };
+  d.products.push(product(1));
+  P.saveSupplier(d, { name: "Timgad Ceramic" });
+  const file = { id: "att-1", name: "invoice.pdf", type: "application/pdf", size: 9, addedAt: new Date().toISOString(), dataUrl: "data:application/pdf;base64,JVBERi0=" };
+  const drafted = P.saveDraft(d, { supplierId: d.suppliers[0].id, supplierInvoiceNumber: "FA-1", invoiceDate: P.toDay(new Date()), lines: [{ productId: d.products[0].id, unit: d.products[0].stockUnit, qty: "1", unitPrice: "5" }], attachments: [P.attachmentMeta(file)] });
+  assert.equal(drafted.error, undefined, drafted.error);
+  d.attachments.put.push({ ...file, purchaseId: drafted.purchase.id });
+  await db.commitChanges(DB.diff(before, d), { expectedRevision: before.revision });
+
+  const snapshot = await db.loadAll({ withAttachments: true });
+  const built = V.prepareBackupFile(snapshot, new Date());
+  assert.equal(built.error, undefined, "the file is valid with its attachments");
+  const parsed = V.parseBackup(built.text);
+  assert.equal(parsed.error, undefined);
+  assert.equal(parsed.data.attachments.length, 1);
+  const withoutFiles = V.prepareBackupFile(await db.loadAll(), new Date());
+  assert.match(withoutFiles.error, /missing from the data/, "a snapshot without attachment data is refused instead of written");
 });

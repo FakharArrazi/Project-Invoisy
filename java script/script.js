@@ -160,6 +160,10 @@ const state = {
   invoices: [],
   settings: { ...DEFAULT_SETTINGS },
   counter: 0,
+  suppliers: [],          // who the shop buys from (purchases.js); purchases are never mixed with sales
+  purchases: [],          // supplier invoices: drafts, confirmed purchases and cancelled ones
+  supplierPayments: [],   // money paid to suppliers, one record per payment
+  purchaseCounter: 0,     // numbers the internal purchase references (PUR-000001), never goes backwards
   lastSaved: "",          // when the data in the database was last changed
   revision: 0,            // the database revision this page has loaded; every save has to start from it
   view: "sell",
@@ -176,6 +180,10 @@ function applyData(d) {
   state.invoices = d.invoices;
   state.settings = d.settings;
   state.counter = d.counter;
+  state.suppliers = d.suppliers || [];
+  state.purchases = d.purchases || [];
+  state.supplierPayments = d.supplierPayments || [];
+  state.purchaseCounter = d.purchaseCounter || 0;
   state.lastSaved = d.lastSaved || "";
   if (d.revision !== undefined) state.revision = d.revision;
   I18n.setLanguage(state.settings.language);
@@ -183,7 +191,14 @@ function applyData(d) {
 }
 
 function draftFromState() {
-  return structuredClone({ products: state.products, invoices: state.invoices, settings: state.settings, counter: state.counter });
+  const draft = structuredClone({
+    products: state.products, invoices: state.invoices, settings: state.settings, counter: state.counter,
+    suppliers: state.suppliers, purchases: state.purchases, supplierPayments: state.supplierPayments, purchaseCounter: state.purchaseCounter,
+  });
+  // Scanned supplier invoices are not kept in memory. A change that adds or removes one lists it here, and
+  // it is saved in the same transaction as the purchase it belongs to.
+  draft.attachments = { put: [], remove: [] };
+  return draft;
 }
 
 /* ---------- Persistence: the browser database ----------
@@ -260,7 +275,10 @@ async function describeSaveFailure(e) {
 
 async function persistData(draft) {
   const changes = InvoisyDB.diff(
-    { products: state.products, invoices: state.invoices, settings: state.settings, counter: state.counter },
+    {
+      products: state.products, invoices: state.invoices, settings: state.settings, counter: state.counter,
+      suppliers: state.suppliers, purchases: state.purchases, supplierPayments: state.supplierPayments, purchaseCounter: state.purchaseCounter,
+    },
     draft
   );
   if (InvoisyDB.isEmptyChange(changes)) return { unchanged: true };
@@ -324,8 +342,13 @@ async function guard(task) {
 
 /* -- Starting up: open the database, move older data over once, load -- */
 
+// "12 products, 40 invoices", plus suppliers and purchases when there are any. `d` holds lists or counts.
 function describeData(d) {
-  return `${tn("storage.countProducts", d.products.length)}, ${tn("storage.countInvoices", d.invoices.length)}`;
+  const count = (v) => (Array.isArray(v) ? v.length : Number(v) || 0);
+  const parts = [tn("storage.countProducts", count(d.products)), tn("storage.countInvoices", count(d.invoices))];
+  if (count(d.suppliers)) parts.push(tn("storage.countSuppliers", count(d.suppliers)));
+  if (count(d.purchases)) parts.push(tn("storage.countPurchases", count(d.purchases)));
+  return parts.join(", ");
 }
 
 function reportDataProblem(message) {
@@ -424,8 +447,8 @@ function startStorage() {
 /* -- Backup: export and restore -- */
 
 // Hands a text file to the browser as a download. The temporary address is released afterwards.
-function downloadText(text, name) {
-  const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+function downloadText(text, name, type) {
+  const url = URL.createObjectURL(new Blob([text], { type: type || "application/json" }));
   try {
     const link = document.createElement("a");
     link.href = url;
@@ -447,7 +470,7 @@ function exportBackup() {
     if (storage.mode !== "ready") { reportDataProblem(blockedMessage()); return; }
     let snapshot;
     try {
-      snapshot = await db.loadAll();
+      snapshot = await db.loadAll({ withAttachments: true });
     } catch (e) {
       reportDataProblem(t("storage.exportReadFailed", { error: errorText(e) }));
       return;
@@ -506,7 +529,7 @@ function importBackup(file) {
     const outcome = await enqueue(async () => {
       let before;
       try {
-        before = await db.loadAll();
+        before = await db.loadAll({ withAttachments: true });
       } catch (e) {
         return { error: t("storage.restoreReadFailed", { error: errorText(e) }) };
       }
@@ -530,6 +553,7 @@ function importBackup(file) {
       }
     });
     if (outcome.error) { reportDataProblem(outcome.error); return; }
+    PurchasesUI.reset();   // an open supplier, purchase or form may point at data the backup replaced
     refreshAfterLoad();
     notify(t("storage.restored", { counts: describeData(outcome.done.counts) }) + (outcome.safetyName ? " " + t("storage.restoredSafety", { name: outcome.safetyName }) : ""));
   });
@@ -539,7 +563,11 @@ function importBackup(file) {
 
 // Is what a file holds the same data as the database? Both sides went through the same reader, so they compare directly.
 function sameBackupData(a, b) {
-  const pick = (d) => ({ products: d.products, invoices: d.invoices, settings: d.settings, counter: d.counter });
+  const pick = (d) => ({
+    products: d.products, invoices: d.invoices, settings: d.settings, counter: d.counter,
+    suppliers: d.suppliers || [], purchases: d.purchases || [], supplierPayments: d.supplierPayments || [],
+    attachments: d.attachments || [], purchaseCounter: d.purchaseCounter || 0,
+  });
   return Validation.sameValue(pick(a), pick(b));
 }
 
@@ -562,7 +590,7 @@ function connectBackupFile() {
 
     let current;
     try {
-      current = await db.loadAll();
+      current = await db.loadAll({ withAttachments: true });
     } catch (e) {
       reportDataProblem(t("storage.readFailed", { error: errorText(e) }));
       return;
@@ -1904,7 +1932,7 @@ function quotaText() {
 
 // The small reminder in the top bar. It never opens a dialog and never blocks a sale.
 function renderReminder() {
-  const hasData = storage.mode === "ready" && (state.products.length > 0 || state.invoices.length > 0);
+  const hasData = storage.mode === "ready" && (state.products.length > 0 || state.invoices.length > 0 || state.suppliers.length > 0 || state.purchases.length > 0);
   const button = $("backupReminder");
   const auto = autoBackup.getStatus();
   // An automatic backup file that is not being kept up to date is worth a warning at the top: it opens Settings.
@@ -2074,6 +2102,7 @@ function renderAll() {
   renderStock();
   renderInvoices();
   renderInvoice();
+  PurchasesUI.render();
 }
 
 /* ==========================================================================
@@ -2120,7 +2149,10 @@ function selectProduct(id) {
 
 function bindEvents() {
   // Navigation and shared buttons
-  document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
+  document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.view === state.view) PurchasesUI.home(b.dataset.view);   // the menu button of the open page returns to its list
+    showView(b.dataset.view);
+  }));
   $("brand").addEventListener("click", () => showView("sell"));
   document.addEventListener("click", (e) => {
     const action = e.target.closest("[data-action='goto-add'], [data-action='demo']");
@@ -2128,6 +2160,8 @@ function bindEvents() {
     if (action.dataset.action === "goto-add") goToAddProduct();
     else loadDemoData();
   });
+
+  PurchasesUI.bind();
 
   // Product picker
   const search = $("search");
@@ -2425,6 +2459,12 @@ function bindEvents() {
 
 /* ---------- Start ---------- */
 
+// The Suppliers and Purchases screens (purchases-ui.js) work on this page's data and save through the same commit().
+PurchasesUI.init({
+  state, db, commit, guard, $, t, tn, esc, money, numberFormat, notify, formatDateTime, productLabel, priceLabel, stockText, formatTileSize,
+  downloadText, showView,
+});
+
 if (globalThis.__INVOISY_TEST_EXPORTS__) {
   Object.assign(globalThis.__INVOISY_TEST_EXPORTS__, {
     normalizeProduct,
@@ -2440,6 +2480,9 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     getSale: () => state.sale,
     getState: () => state,
     getStorage: () => storage,
+    renderAll,
+    showView,
+    draftFromState,
     productProblem,
     productLabel,
     findMatches,
@@ -2486,6 +2529,8 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     money,
     customerLabel,
     describeData,
+    PurchasesUI,
+    Purchases,
     normalizeSettings: Validation.normalizeSettings,
     settingsProblem: Validation.settingsProblem,
     Validation,

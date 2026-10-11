@@ -41,6 +41,14 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8l-5-5z"/><path d="M14 3v5h5M8 13h8M8 17h6"/></svg>
       <span data-i18n="nav.invoices">Invoices</span>
     </button>
+    <button type="button" class="nav-btn" data-view="purchases">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7l9-4 9 4v10l-9 4-9-4V7z"/><path d="M3 7l9 4 9-4M12 11v10"/><path d="M16 14l-2 2 2 2"/></svg>
+      <span data-i18n="nav.purchases">Purchases</span>
+    </button>
+    <button type="button" class="nav-btn" data-view="suppliers">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 17V7h12v10M14 10h4l4 3v4h-8"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/></svg>
+      <span data-i18n="nav.suppliers">Suppliers</span>
+    </button>
     <button type="button" class="nav-btn" data-view="settings">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M19 6h1M4 12h2M12 12h8M4 18h8M18 18h2"/><circle cx="16" cy="6" r="2.5"/><circle cx="9" cy="12" r="2.5"/><circle cx="15" cy="18" r="2.5"/></svg>
       <span data-i18n="nav.settings">Settings</span>
@@ -320,6 +328,18 @@
       </div>
     </section>
 
+    <!-- PURCHASES (goods bought from suppliers; never mixed with sales) -->
+    <section class="view" id="view-purchases" hidden>
+      <h1 class="sr-only" data-i18n="nav.purchases">Purchases</h1>
+      <div id="purchasesRoot"></div>
+    </section>
+
+    <!-- SUPPLIERS -->
+    <section class="view" id="view-suppliers" hidden>
+      <h1 class="sr-only" data-i18n="nav.suppliers">Suppliers</h1>
+      <div id="suppliersRoot"></div>
+    </section>
+
     <!-- SETTINGS -->
     <section class="view" id="view-settings" hidden>
       <h1 class="sr-only" data-i18n="nav.settings">Settings</h1>
@@ -473,15 +493,20 @@
 
 </div>
 
+<!-- What is printed from the Suppliers and Purchases screens (hidden on screen, shown only when printing) -->
+<article class="invoice purchase-print" id="purchasePrint"></article>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="java script/i18n.js"></script>
 <script src="java script/lang/en.js"></script>
 <script src="java script/lang/fr.js"></script>
 <script src="java script/calc.js"></script>
+<script src="java script/purchases.js"></script>
 <script src="java script/validation.js"></script>
 <script src="java script/database.js"></script>
 <script src="java script/autobackup.js"></script>
+<script src="java script/purchases-ui.js"></script>
 <script src="java script/script.js"></script>
 </body>
 </html>

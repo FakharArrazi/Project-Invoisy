@@ -54,13 +54,13 @@ test("export writes the documented envelope and every kind of data", async () =>
   const file = V.prepareBackupFile(snapshot, when);
   assert.equal(file.error, undefined);
   assert.equal(file.name, "invoisy-backup-2026-10-09.json");
-  assert.deepEqual(file.counts, { products: 2, invoices: 2 });
+  assert.deepEqual(file.counts, { products: 2, invoices: 2, suppliers: 0, purchases: 0, supplierPayments: 0, attachments: 0 });
 
   const parsed = JSON.parse(file.text);
   assert.equal(parsed.application, "Invoisy");
-  assert.equal(parsed.formatVersion, 1);
+  assert.equal(parsed.formatVersion, 2);
   assert.equal(parsed.exportedAt, when.toISOString());
-  assert.deepEqual(Object.keys(parsed.data).sort(), ["invoiceCounter", "invoices", "products", "settings"]);
+  assert.deepEqual(Object.keys(parsed.data).sort(), ["attachments", "invoiceCounter", "invoices", "products", "purchaseCounter", "purchases", "settings", "supplierPayments", "suppliers"]);
   assert.equal(parsed.data.products.length, 2);
   assert.equal(parsed.data.invoices.length, 2);
   assert.equal(parsed.data.invoiceCounter, 2);
@@ -194,7 +194,7 @@ test("Export Backup downloads a valid file, then records the date; the reminder 
   const info = await app.api.db.getBackupInfo();
   assert.ok(info.lastBackupAt, "the date was recorded");
   assert.equal(info.lastBackupFile, app.downloads[0].name);
-  assert.deepEqual(info.lastBackupCounts, { products: 2, invoices: 2 });
+  assert.deepEqual(info.lastBackupCounts, { products: 2, invoices: 2, suppliers: 0, purchases: 0, supplierPayments: 0, attachments: 0 });
   assert.equal(app.field("backupReminder").hidden, true, "the reminder is gone after a successful export");
   assert.match(app.toast(), /Backup exported/);
 
@@ -294,7 +294,7 @@ const badFiles = [
   ["a missing format version", backupText(null, { formatVersion: undefined }), /format version/],
   ["a format version of zero", backupText(null, { formatVersion: 0 }), /format version/],
   ["a text format version", backupText(null, { formatVersion: "1" }), /format version/],
-  ["a newer format version", backupText(null, { formatVersion: 2 }), /newer version of Invoisy/],
+  ["a newer format version", backupText(null, { formatVersion: 3 }), /newer version of Invoisy/],
   ["a missing data section", backupText(null, { data: undefined }), /no data section/],
   ["a data section that is a list", backupText(null, { data: [] }), /no data section/],
   ["counts that do not match the content", backupText(null, { counts: { products: 99, invoices: 2 } }), /counts .* do not match/i],
@@ -425,7 +425,7 @@ test("restore replaces everything: records missing from the backup are gone, set
 
   const incoming = V.parseBackup(backupText()).data;
   const result = await db.restore(incoming);
-  assert.deepEqual(result.counts, { products: 2, invoices: 2 });
+  assert.deepEqual(result.counts, { products: 2, invoices: 2, suppliers: 0, purchases: 0, supplierPayments: 0, attachments: 0 });
 
   const after = await db.loadAll();
   assert.deepEqual(after.products.map((p) => p.id).sort(), ["p-1", "p-2"]);
@@ -482,7 +482,7 @@ test("the restore works again after a failed one (nothing is left locked or half
   await assert.rejects(db.restore(incoming));
   undo();
   const result = await db.restore(incoming);
-  assert.deepEqual(result.counts, { products: 2, invoices: 2 });
+  assert.deepEqual(result.counts, { products: 2, invoices: 2, suppliers: 0, purchases: 0, supplierPayments: 0, attachments: 0 });
   assert.deepEqual((await db.loadAll()).products.map((p) => p.id).sort(), ["p-1", "p-2"]);
 });
 

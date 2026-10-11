@@ -219,7 +219,7 @@
       emit();
       try {
         return await withLock(async () => {
-          const snapshot = await db.loadAll();   // everything, in one transaction, as it is right now
+          const snapshot = await db.loadAll({ withAttachments: true });   // everything (including attached supplier invoices), in one transaction, as it is right now
           noteRevision(snapshot.revision);
           if (!forceNext) {
             const seen = peek(await readText(h));

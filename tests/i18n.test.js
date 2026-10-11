@@ -46,7 +46,7 @@ function loadApp() {
     setTimeout, clearTimeout, structuredClone,
   };
   vm.createContext(context);
-  for (const file of LANGUAGE_FILES.concat(["calc.js", "validation.js", "database.js", "autobackup.js", "script.js"])) vm.runInContext(read(file), context, { filename: file });
+  for (const file of LANGUAGE_FILES.concat(["calc.js", "purchases.js", "validation.js", "database.js", "autobackup.js", "purchases-ui.js", "script.js"])) vm.runInContext(read(file), context, { filename: file });
   const api = exports;
   const useLanguage = (language) => api.applyData({
     products: [], invoices: [], settings: { ...api.DEFAULT_SETTINGS, language }, counter: 0, lastSaved: "",
@@ -114,7 +114,7 @@ test("every text key used in the code or in index.html exists in English", () =>
   const literal = new RegExp(`"((?:${namespaces.join("|")})\\.[A-Za-z0-9.]+)"`, "g");
 
   const used = new Map();   // key -> where
-  for (const file of ["script.js", "calc.js", "validation.js", "database.js", "autobackup.js"]) {
+  for (const file of ["script.js", "calc.js", "purchases.js", "purchases-ui.js", "validation.js", "database.js", "autobackup.js"]) {
     for (const m of read(file).matchAll(literal)) used.set(m[1], file);
   }
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
@@ -326,4 +326,30 @@ test("data-check messages speak French and describeData counts correctly", () =>
   assert.equal(built.problems[0], "Produit 1\u00a0: nom manquant.");
   assert.equal(api.describeData({ products: [], invoices: [{}] }), "0 produit, 1 facture");
   assert.equal(api.Validation.parseBackup("not json").error, "Le fichier n’est pas un JSON valide.");
+});
+
+test("the supplier and purchase screens' run-time texts exist in every language", () => {
+  const en = loadMessages("lang/en.js");
+  const fr = loadMessages("lang/fr.js");
+  const sets = {
+    "pur.status.": ["draft", "confirmed", "cancelled"],
+    "pur.pay.": ["unpaid", "partial", "paid"],
+    "pur.delivery.": ["pending", "partial", "received"],
+    "sup.filter.": ["active", "archived", "all"],
+    "sup.dup.": ["name", "phone", "taxId"],
+    "sup.tab.": ["overview", "purchases", "payments", "products", "documents"],
+    "pur.log.": ["created", "draftSaved", "confirmed", "received", "receiptReversed", "cancelled", "edited"],
+    "db.what.": ["suppliers", "purchases", "supplierPayments", "attachments", "purchaseCounter"],
+    "stockunit.": ["piece", "box", "m2", "kg", "m"],
+    "price.": ["piece", "box", "m2", "kg", "m"],
+  };
+  for (const [prefix, names] of Object.entries(sets)) {
+    for (const name of names) {
+      assert.ok(prefix + name in en, `English text ${prefix}${name}`);
+      assert.ok(prefix + name in fr, `French text ${prefix}${name}`);
+    }
+  }
+  for (const key of ["pur.overdueDays", "sup.terms.days", "storage.countSuppliers", "storage.countPurchases"]) {
+    for (const messages of [en, fr]) assert.ok(`${key}.one` in messages && `${key}.other` in messages, `${key} has both forms`);
+  }
 });

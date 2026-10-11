@@ -442,3 +442,132 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
   html[data-paper="a5"] .inv-title { font-size: 17pt; }
   html[data-paper="a5"] .inv-table th, html[data-paper="a5"] .inv-table td { font-size: 9.5pt; }
 }
+
+/* ==========================================================================
+   Suppliers and Purchases
+   ========================================================================== */
+
+textarea {
+  width: 100%;
+  font: inherit;
+  padding: 7px 9px;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  resize: vertical;
+}
+textarea[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--danger); }
+input:disabled, select:disabled, textarea:disabled { background: #f1f3f6; color: var(--muted); }
+
+.req { color: var(--danger); }
+.link { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.link:hover { text-decoration: underline; }
+.link.back { display: inline-block; margin-bottom: 6px; font-size: 13px; }
+.prewrap { white-space: pre-wrap; }
+.narrow { max-width: 260px; }
+.top { align-items: start; }
+
+.stat-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.stat { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; }
+.stat-label { display: block; font-size: 12px; color: var(--muted); }
+.stat strong { display: block; font-size: 17px; margin-top: 2px; overflow-wrap: anywhere; }
+.stat.warn strong { color: #8a5a00; }
+.stat.bad strong { color: var(--danger); }
+.stat-strip.small { margin-bottom: 10px; }
+.stat-strip.small .stat { padding: 6px 10px; }
+.stat-strip.small .stat strong { font-size: 14px; }
+
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.toolbar input[type="search"] { width: 220px; }
+.toolbar select { width: auto; }
+.toolbar.period { align-items: end; }
+.toolbar.period .field { margin-bottom: 0; }
+.panel-head.wrap { flex-wrap: wrap; }
+.panel-head .toolbar input { max-width: none; }
+
+.th-sort { font: inherit; font-weight: 600; font-size: 12px; color: var(--muted); background: none; border: 0; padding: 0; cursor: pointer; }
+.th-sort:hover { color: var(--text); }
+.table td.owed { color: #8a5a00; font-weight: 600; }
+.table td.struck { text-decoration: line-through; color: var(--muted); }
+.table tr.voided td { color: var(--muted); }
+.table tr.voided td:nth-child(2) { text-decoration: line-through; }
+.table tr.total-row td { font-weight: 700; border-top: 2px solid var(--border-strong); }
+
+.badge.st-draft, .badge.dl-pending, .badge.dl-partial, .badge.info { color: var(--muted); }
+.badge.st-confirmed, .badge.dl-received { color: #1b6e3c; }
+.badge.st-cancelled { color: var(--muted); border-style: dashed; }
+.badge.overdue { color: var(--danger); background: #fdecea; }
+.badge.dl-partial { color: #8a5a00; }
+
+.tabs-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 14px; border-bottom: 1px solid var(--border-strong); }
+.tabs-row .tabs { margin-bottom: 0; flex: 1; }
+.tab { font: inherit; padding: 8px 14px; color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent; cursor: pointer; margin-bottom: -1px; }
+.tab:hover { color: var(--text); }
+.tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+.profile-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.profile-head h2 { font-size: 18px; margin: 0; }
+.profile-head .actions { margin-top: 0; }
+.panel h3 { font-size: 14px; margin: 0 0 8px; }
+.panel h4 { font-size: 13px; margin: 0 0 6px; }
+
+.notice { margin: 0 0 10px; padding: 8px 12px; font-size: 13px; background: var(--accent-tint); border-left: 3px solid var(--accent); border-radius: 3px; }
+.warn-box { margin: 0 0 12px; padding: 8px 12px; font-size: 13px; color: #5a3a00; background: #fff4e0; border: 1px solid #e8c27a; border-radius: 4px; }
+.warn-box ul { margin: 6px 0; padding-left: 18px; }
+.subpanel { margin: 0 0 12px; padding: 12px; background: #f6f8fa; border: 1px solid var(--border); border-radius: 4px; }
+.action-panel { border-color: var(--accent); }
+
+.grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: start; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; align-items: end; }
+.check { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; font-size: 13px; }
+.check input { width: auto; }
+
+.pl-row { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.pl-row:last-child { border-bottom: 0; }
+.pl-main { display: grid; grid-template-columns: minmax(180px, 2.4fr) 90px 100px 90px 110px 100px 110px auto; gap: 8px; align-items: end; }
+.pl-main .field { margin-bottom: 0; }
+.pl-total strong { display: block; padding: 7px 0; text-align: right; }
+.pl-total .label { font-size: 13px; }
+.pl-remove { align-self: end; margin-bottom: 4px; }
+.pl-sub { min-height: 18px; margin-top: 4px; }
+.pl-sub .conv { font-weight: 600; color: var(--accent-dark); }
+.pl-new { margin: 8px 0; padding: 10px 12px; background: #f6f8fa; border: 1px dashed var(--border-strong); border-radius: 4px; }
+.pl-notes { margin: 6px 0 0; }
+
+.adjust { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 320px); gap: 16px; align-items: start; }
+.adjust .totals { margin: 0; max-width: none; width: 100%; }
+.adjust .totals .due { font-weight: 600; }
+.totals .due { font-weight: 600; }
+
+.att-list { list-style: none; margin: 0 0 10px; padding: 0; }
+.att-list li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.file-add { display: block; margin-top: 8px; }
+.log { margin: 0; padding-left: 18px; font-size: 13px; }
+.sticky-actions { position: sticky; bottom: 0; padding: 10px 0; background: var(--bg); }
+.dr-line { max-width: 360px; }
+
+/* Printed supplier statements and purchase records use the invoice look; they stay hidden on screen. */
+.purchase-print { display: none; }
+
+@media (max-width: 1180px) {
+  .pl-main { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .pl-product { grid-column: 1 / -1; }
+  .adjust { grid-template-columns: minmax(0, 1fr); }
+  .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 720px) {
+  .grid-3, .grid-4, .pl-main { grid-template-columns: 1fr; }
+  .toolbar input[type="search"] { width: 100%; }
+}
+
+@media print {
+  body[data-printing="purchase"] .preview-panel { display: none !important; }
+  body[data-printing="purchase"] .purchase-print { display: block !important; border: 0; padding: 15mm; font-size: 11pt; }
+  body[data-printing="purchase"] .purchase-print .inv-table th, body[data-printing="purchase"] .purchase-print .inv-table td { font-size: 10.5pt; }
+  .purchase-print .inv-table tr, .purchase-print .inv-totals, .purchase-print .inv-status, .purchase-print .inv-payments { page-break-inside: avoid; }
+  .purchase-print .inv-sub { color: #555; font-size: 9pt; }
+  .purchase-print .prewrap { white-space: pre-wrap; }
+}

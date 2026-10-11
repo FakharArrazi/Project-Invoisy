@@ -6,8 +6,8 @@
    Plain script (no modules, so index.html still works when opened directly).
    No DOM and no storage access: it only inspects and converts data, so the
    database layer, backups and tests can all share exactly the same rules.
-   Loaded after i18n.js, the language files and calc.js (it uses their units
-   and speaks the current language) and before database.js and script.js.
+   Loaded after i18n.js, the language files, calc.js and purchases.js (it uses their
+   units and rules, and speaks the current language) and before database.js and script.js.
 
    Three situations use it:
      - writes     : database.js checks every record before it is saved.
@@ -25,13 +25,15 @@
   const APP_NAME = "Invoisy";
   const CURRENCY = "DA";                 // default currency (can be changed in Settings)
   const DATA_VERSION = 1;                // version of the old invoisy-data.json file format
-  const BACKUP_FORMAT_VERSION = 1;       // version of the backup file made by Export Backup
+  const BACKUP_FORMAT_VERSION = 2;       // version of the backup file made by Export Backup (1 = before suppliers and purchases; still readable)
+  const P = globalThis.Purchases;        // suppliers, purchases and supplier payments (purchases.js)
   const MIRROR_KEY = "invoisy-data";     // browser copy written by the previous (data file) version
   const LEGACY_KEYS = ["products", "invoices", "settings", "invoiceCounter"];
   const DERIVED_INVOICE_FIELDS = ["amountPaid", "remaining", "status"];   // calculated from the payments, never trusted
   const INVOICE_STATUSES = ["paid", "partial", "unpaid"];
   const MONEY_TOLERANCE = 0.01;
   const DEFAULT_BACKUP_DAYS = 7;
+  const SUPPLIER_LISTS = ["suppliers", "purchases", "supplierPayments", "attachments"];   // the supplier side of a backup
 
   const DEFAULT_SETTINGS = {
     businessName: "My Store",
@@ -352,7 +354,7 @@
 
     // Names the record (its invoice number or product name) so the person can find it in the file.
     const nameOf = (item) => {
-      const name = isObj(item) ? item.invoiceNumber || item.name : "";
+      const name = isObj(item) ? item.invoiceNumber || item.name || item.reference : "";
       return isStr(name) && name ? ` (${name.length > 40 ? name.slice(0, 40) + "..." : name})` : "";
     };
 
@@ -371,6 +373,7 @@
         const why = candidate ? problemOf(candidate) : t("problem.notValid");
         if (why) return reject(why);
         if (kind === "invoice") warnings.push(...invoiceWarnings(item));
+        if (kind === "purchase") warnings.push(...P.purchaseWarnings(item));
         out.push(lenient ? candidate : normalize(item));
       });
       return out;
@@ -378,6 +381,19 @@
 
     let products = collect(raw.products, "product", t("problem.label.product"), legacyProductIssue, productProblem, normalizeProduct);
     let invoices = collect(raw.invoices, "invoice", t("problem.label.invoice"), legacyInvoiceIssue, invoiceProblem, normalizeInvoice);
+
+    // The supplier side (purchases from suppliers). Older files and the old browser storage have none of it.
+    const supplierSide = {};
+    for (const key of SUPPLIER_LISTS) {
+      if (raw[key] !== undefined && !Array.isArray(raw[key])) return { error: t("data.badList", { list: key }) };
+      supplierSide[key] = raw[key] || [];
+    }
+    if (raw.purchaseCounter !== undefined && (!Number.isInteger(raw.purchaseCounter) || raw.purchaseCounter < 0)) return { error: t("data.badPurchaseCounter") };
+    const none = () => "";
+    const suppliers = collect(supplierSide.suppliers, "supplier", t("problem.label.supplier"), none, P.supplierProblem, P.normalizeSupplier);
+    const purchases = collect(supplierSide.purchases, "purchase", t("problem.label.purchase"), none, P.purchaseProblem, P.normalizePurchase);
+    const supplierPayments = collect(supplierSide.supplierPayments, "supplierPayment", t("problem.label.supplierPayment"), none, P.paymentProblem, P.normalizePayment);
+    const attachments = collect(supplierSide.attachments, "attachment", t("problem.label.attachment"), none, P.attachmentProblem, (a) => a);
 
     if (lenient) {
       // Old data may repeat an id. The first entry is kept and the repeat is set aside, never merged.
@@ -395,6 +411,12 @@
       if (dupInvoice) return { error: t("data.dupInvoice", { id: dupInvoice }) };
       const dupNumber = firstDuplicate(invoices.map((i) => i.invoiceNumber));
       if (dupNumber) return { error: t("data.dupNumber", { number: dupNumber }) };
+      for (const [list, kind] of [[suppliers, "supplier"], [purchases, "purchase"], [supplierPayments, "supplier payment"], [attachments, "attachment"]]) {
+        const dup = firstDuplicate(list.map((r) => r.id));
+        if (dup) return { error: t("data.dupRecord", { kind, id: dup }) };
+      }
+      // Every link must point at something that is in the file, and no number may be used twice.
+      problems.push(...P.linkProblems({ suppliers, purchases, supplierPayments, attachments }));
     }
 
     // The counter never goes backwards: if it is lower than an invoice already issued, it is raised.
@@ -412,6 +434,12 @@
         counter: Math.max(stored, highest),
         counterRecovered: highest > stored,
         lastSaved: isStr(raw.lastSaved) ? raw.lastSaved : "",
+        suppliers,
+        purchases,
+        supplierPayments,
+        attachments,
+        // The purchase reference counter never goes backwards either.
+        purchaseCounter: Math.max(Math.max(0, Math.floor(toNumber(raw.purchaseCounter))), P.highestReference(purchases)),
       },
     };
   }
@@ -421,7 +449,11 @@
     if (!data) return false;
     return (data.products && data.products.length > 0) ||
       (data.invoices && data.invoices.length > 0) ||
+      (data.suppliers && data.suppliers.length > 0) ||
+      (data.purchases && data.purchases.length > 0) ||
+      (data.supplierPayments && data.supplierPayments.length > 0) ||
       toNumber(data.counter) > 0 ||
+      toNumber(data.purchaseCounter) > 0 ||
       (!!data.settings && !sameValue(normalizeSettings(data.settings), DEFAULT_SETTINGS));
   }
 
@@ -443,11 +475,21 @@
     return { ...inv, amountPaid: pay.paid, remaining: pay.remaining, status: pay.cls };
   }
 
-  // The backup file. `snapshot` is what database.js reads: { products, invoices, settings, counter }.
+  // How many records of each kind a snapshot or a parsed backup holds.
+  function countsOf(data) {
+    return {
+      products: data.products.length, invoices: data.invoices.length,
+      suppliers: (data.suppliers || []).length, purchases: (data.purchases || []).length,
+      supplierPayments: (data.supplierPayments || []).length, attachments: (data.attachments || []).length,
+    };
+  }
+
+  // The backup file. `snapshot` is what database.js reads: { products, invoices, settings, counter, suppliers,
+  // purchases, supplierPayments, attachments, purchaseCounter }.
   // Customers and payments are saved inside each invoice, so there are no separate lists for them.
+  // Purchases from suppliers, their payments and the scanned supplier invoices have lists of their own.
   // `revision` (the database revision the snapshot was read at) is optional and only written when the snapshot
-  // has one. Older Invoisy versions ignore it, so the format version stays 1. The automatic backup file uses it
-  // to know which state of the database the file holds.
+  // has one. The automatic backup file uses it to know which state of the database the file holds.
   function buildBackup(snapshot, now) {
     const revision = Number.isInteger(snapshot.revision) && snapshot.revision >= 0 ? { revision: snapshot.revision } : {};
     return {
@@ -455,12 +497,17 @@
       formatVersion: BACKUP_FORMAT_VERSION,
       exportedAt: (now || new Date()).toISOString(),
       ...revision,
-      counts: { products: snapshot.products.length, invoices: snapshot.invoices.length },
+      counts: countsOf(snapshot),
       data: {
         products: snapshot.products,
         invoices: snapshot.invoices.map(withDerived),
         settings: snapshot.settings,
         invoiceCounter: snapshot.counter,
+        suppliers: snapshot.suppliers || [],
+        purchases: snapshot.purchases || [],
+        supplierPayments: snapshot.supplierPayments || [],
+        attachments: snapshot.attachments || [],
+        purchaseCounter: snapshot.purchaseCounter || 0,
       },
     };
   }
@@ -477,10 +524,12 @@
     }
     const check = parseBackup(text);
     if (check.error) return { error: t("backup.safetyFailed", { error: check.error }) };
-    if (check.data.products.length !== snapshot.products.length || check.data.invoices.length !== snapshot.invoices.length) {
+    const wanted = countsOf(snapshot);
+    const got = countsOf(check.data);
+    if (Object.keys(wanted).some((key) => wanted[key] !== got[key])) {
       return { error: t("backup.safetyFailed", { error: t("backup.safetyCounts") }) };
     }
-    return { text, name: backupFileName(when, prefix), counts: { products: snapshot.products.length, invoices: snapshot.invoices.length } };
+    return { text, name: backupFileName(when, prefix), counts: wanted };
   }
 
   // Reads a backup file (the current format, or the old invoisy-data.json / backup format).
@@ -505,7 +554,13 @@
       if (!Number.isInteger(raw.formatVersion) || raw.formatVersion < 1) return { error: t("backup.noFormat") };
       if (raw.formatVersion > BACKUP_FORMAT_VERSION) return { error: t("backup.newerFormat", { version: raw.formatVersion }) };
       if (!isObj(raw.data)) return { error: t("backup.noData") };
-      inner = { version: DATA_VERSION, products: raw.data.products, invoices: raw.data.invoices, settings: raw.data.settings, invoiceCounter: raw.data.invoiceCounter };
+      // A format 2 file must carry the supplier lists (possibly empty); a format 1 file predates them.
+      if (raw.formatVersion >= 2 && SUPPLIER_LISTS.some((key) => !Array.isArray(raw.data[key]))) return { error: t("backup.noSupplierData") };
+      inner = {
+        version: DATA_VERSION, products: raw.data.products, invoices: raw.data.invoices, settings: raw.data.settings, invoiceCounter: raw.data.invoiceCounter,
+        suppliers: raw.data.suppliers, purchases: raw.data.purchases, supplierPayments: raw.data.supplierPayments, attachments: raw.data.attachments,
+        purchaseCounter: raw.data.purchaseCounter,
+      };
       format = "backup";
       exportedAt = isDate(raw.exportedAt) ? raw.exportedAt : "";
       counts = isObj(raw.counts) ? raw.counts : null;
@@ -521,8 +576,11 @@
     const built = buildData(inner, false);
     if (built.error) return { error: built.error };
     if (built.problems.length) return { error: summarize(built.problems) };
-    if (counts && (counts.products !== built.data.products.length || counts.invoices !== built.data.invoices.length)) {
-      return { error: t("backup.countsMismatch") };
+    if (counts) {
+      const actual = countsOf(built.data);
+      const wrong = counts.products !== actual.products || counts.invoices !== actual.invoices ||
+        ["suppliers", "purchases", "supplierPayments", "attachments"].some((key) => counts[key] !== undefined && counts[key] !== actual[key]);
+      if (wrong) return { error: t("backup.countsMismatch") };
     }
     const warnings = [...built.warnings];
     if (!exportedAt) warnings.push(t("warn.noExportDate"));
@@ -661,7 +719,7 @@
     formatInvoiceNumber, invoiceSequence, highestInvoiceNumber,
     isTileSize, normalizeTileSize, normalizeProduct, normalizeInvoice, normalizeSettings, paymentSummary, stripDerived,
     productProblem, invoiceProblem, invoiceWarnings, settingsProblem, legacyProductIssue, legacyInvoiceIssue,
-    buildData, hasMeaningfulData, buildBackup, prepareBackupFile, parseBackup, backupFileName,
+    buildData, hasMeaningfulData, countsOf, buildBackup, prepareBackupFile, parseBackup, backupFileName,
     readLegacyStorage, prepareLegacyCopy, backupReminder,
   };
 })();

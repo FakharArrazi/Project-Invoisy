@@ -30,7 +30,7 @@ test("initDatabase creates the versioned schema with its stores and indexes", as
   assert.equal((await db.initDatabase()).version, DB.DB_VERSION, "calling it twice is harmless");
 
   const raw = await rawOpen(factory, "schema");
-  assert.deepEqual(names(raw.objectStoreNames), ["counters", "invoices", "meta", "products", "settings"]);
+  assert.deepEqual(names(raw.objectStoreNames), ["attachments", "counters", "invoices", "meta", "products", "purchases", "settings", "supplierPayments", "suppliers"]);
   const tx = raw.transaction(["invoices", "products"]);
   assert.equal(tx.objectStore("invoices").index("invoiceNumber").unique, true, "invoice numbers must be unique");
   assert.ok(tx.objectStore("invoices").indexNames.contains("date"));

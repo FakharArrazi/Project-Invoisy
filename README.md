@@ -53,6 +53,46 @@ Mandatory fields have a small * on their label: product name, selling price, pri
 before the Manufacturer / Brand field was removed keep that value (it is still shown on the invoice
 and found by search) but it is no longer asked for or editable.
 
+## Suppliers and purchases
+
+Two pages in the main navigation, **Suppliers** and **Purchases**, record what you buy. They are kept
+apart from sales: purchases never create customer invoices, and sales never touch purchase records.
+
+- **Suppliers**: searchable, sortable list with total purchased, paid, outstanding, last purchase and
+  status. A supplier needs only a name; the rest (contact, phone, email, address, tax ID, website, payment
+  terms 15 / 30 / custom days, optional credit limit, notes) is optional. A likely duplicate (same name,
+  phone, email or tax ID) shows a warning and is never merged automatically. A supplier with purchase
+  history can only be **archived**, never deleted. A credit limit only shows a warning.
+- **Supplier profile** has tabs: Overview, Purchases, Payments, Products, Documents & Notes.
+- **Purchases**: supplier invoice number (unique per supplier, the same number may be used by another
+  supplier), invoice and due dates, internal reference, notes, optional attachment (max 5 MB), several
+  lines (existing or new product, quantity, purchase unit, conversion factor, unit price, line discount)
+  and invoice-level delivery, discount and tax (added or already included). A purchase can be saved as a
+  **draft**; a draft never changes stock and can be deleted.
+- **Confirming** a purchase is one all-or-nothing step: it checks everything again, creates new
+  products, receives the goods into stock and records the initial payment. Confirming twice (double click,
+  retry) does nothing the second time. Example: 200 boxes at 1.44 m² per box adds 288 m² to a product
+  whose stock unit is m².
+- **Partial deliveries**: goods can be received in several receipts. Each receipt is kept; a receipt can be
+  reversed with a reason, which takes the stock out again. A reversal is refused when that stock has
+  already been sold (stock never goes negative).
+- **Cancelling** needs a reason, is refused while active payments exist (void them first) and reverses
+  the stock that was received. A cancelled purchase keeps its record, counts nowhere in the totals, and frees
+  its supplier invoice number.
+- After confirmation the lines, prices, totals and supplier are locked. Invoice number, dates, reference
+  and notes can still be edited.
+- **Supplier payments**: any number of separate payments per purchase. Outstanding = total minus
+  payments not voided. Status: Unpaid, Partially Paid, Paid. An empty initial payment means 0. Amounts must
+  be positive, may not exceed what is outstanding (overpayment is refused) and may not be dated in the
+  future. A payment is never deleted: editing keeps its history and voiding keeps the record with a reason.
+- **Reports** (Purchases page): purchases in a period, outstanding balances, overdue purchases, totals by
+  supplier, purchase history per product and payments made in a period. Cancelled purchases and voided
+  payments are excluded, so nothing is counted twice. The totals add amounts as they are, so they assume
+  one currency.
+- **Costing**: a product's purchase price and cost are **not** updated automatically and there is no stock
+  valuation (no average cost, FIFO or similar). The cost of each purchase stays on its purchase line. A
+  purchase never changes a product's selling price.
+
 ## Tests
 
 Needs Node 20 or newer. The app itself has no dependencies. The tests that save data use a disposable in-memory IndexedDB from the `fake-indexeddb` package (a development-only dependency), so run this once:
@@ -61,6 +101,10 @@ Needs Node 20 or newer. The app itself has no dependencies. The tests that save 
     npm test
 
 (`node --test` alone also runs, but the persistence tests then stop with a message asking for `npm install`.)
+
+`tests/purchases.test.js` covers the supplier and purchase module: suppliers and duplicates, purchase
+validation, stock on confirm, double confirm, partial receipts and reversals, cancel, payments, reports,
+the database upgrade from version 2 and backup / restore of the new data.
 
 ## Where your data lives
 
@@ -79,7 +123,7 @@ Two things follow from that, and both are worth knowing:
 - **Import / Restore Backup** reads a backup file, checks all of it, asks for confirmation, downloads a safety copy of what is there now (`invoisy-before-restore-YYYY-MM-DD.json`), and then replaces everything in one step. If anything goes wrong nothing is changed. Invoice numbers never go backwards after a restore.
 - A **reminder** in the top bar appears when you have data and no backup for 7 days (the number of days can be changed in Settings). It never opens a dialog and never blocks a sale.
 
-Backups from the previous version (`invoisy-data.json`) can also be restored.
+Backups now also contain suppliers, purchases, supplier payments and purchase attachments (embedded in the file, so the file can become large when attachments are used). The backup format is version 2. Backups made by the earlier format (version 1, no supplier data) can still be restored; restoring one replaces everything, so suppliers and purchases that exist now would be replaced as well (the confirmation says so). An older Invoisy that does not know format 2 will refuse a version 2 backup as coming from a newer version. Backups from the previous version (`invoisy-data.json`) can also be restored.
 
 ## Automatic backup file (Settings, Automatic backup file)
 
@@ -92,7 +136,7 @@ Invoisy can keep one file, `invoisy-data.json`, up to date by itself: after ever
 - **If writing fails** (file moved or deleted, disk full, drive unplugged, access withdrawn) the change you made is still saved in the browser database. The backup stays "pending", is retried three times with growing pauses, and is tried again after the next change, when you come back to the window, or when you press **Retry backup**. A warning also appears in the top bar.
 - **Safe writing:** quick changes are folded into one write; one write at a time (across windows too); the browser writes a temporary copy and swaps it in only when it is complete, so a failed write leaves the previous file as it was. A file that holds a *newer* revision than the database is not overwritten.
 - **Browsers:** needs the File System Access API (Chrome, Edge, Opera on a computer). Firefox and Safari do not have it: Settings says so, nothing is pretended, and Export Backup is the way to back up.
-- The backup file has the same format as Export Backup, plus a `revision` (the database revision it holds). Older Invoisy versions ignore that field.
+- The backup file has the same format as Export Backup (format version 2, including suppliers, purchases, supplier payments and attached files), plus a `revision` (the database revision it holds). Because attached supplier invoices are inside the file, the automatic file grows with them and is rewritten after every change.
 
 ## Updating from the previous version
 
@@ -105,23 +149,28 @@ index.html
 css/style.css, css/pricing.css
 java script/i18n.js, lang/    the language layer and the English / French texts
 java script/calc.js           unit conversion and price maths
+java script/purchases.js      suppliers, purchases, stock receipts, supplier payments and reports (logic only, no screens)
 java script/validation.js     the shape and rules of the data; backup file format; reminder rule; old-data reader
 java script/database.js       the IndexedDB layer (the only code that touches IndexedDB)
 java script/autobackup.js     the automatic backup file (file handle, write queue, status)
-java script/script.js         the screens
+java script/purchases-ui.js   the Suppliers and Purchases screens
+java script/script.js         the other screens and the wiring
 ```
 
-Scripts load in that order (see the end of `index.html`). Every message the persistence code shows or throws comes from `lang/en.js` and `lang/fr.js`.
+Scripts load in the order i18n, lang, calc, purchases, validation, database, autobackup, purchases-ui, script (see the end of `index.html`). Every message the persistence code shows or throws comes from `lang/en.js` and `lang/fr.js`.
 
-- Schema version 2, database name `invoisy`. Stores: `products`, `invoices` (unique `invoiceNumber`), `settings`, `counters`, `meta`. Customers and payments are stored inside each invoice.
-- A sale (invoice + stock deduction + invoice counter) is one transaction. Every write also checks the database revision it started from, so a second open window can not overwrite a change it has not seen.
+- Schema version 3, database name `invoisy`. Stores: `products`, `invoices` (unique `invoiceNumber`), `settings`, `counters`, `meta`, and since version 3 `suppliers`, `purchases`, `supplierPayments`, `attachments`. Customers and payments are stored inside each invoice. The upgrade from version 2 only adds stores and a purchase counter; existing data is not touched. Unique indexes on purchases (supplier + normalised invoice number, and internal reference) apply to non-cancelled purchases only.
+- A sale (invoice + stock deduction + invoice counter) is one transaction, and so is a purchase confirmation (purchase + new products + stock + payment + purchase counter + attachment). Every write also checks the database revision it started from, so a second open window can not overwrite a change it has not seen.
 - Every committed change to business data moves the revision on in one of two places (`commitInTx`, `writeDataset`); both call `markCommit`, and `withTx` emits a `commit` event only after the transaction has really committed. `autobackup.js` listens to that event, so a new feature that saves through `database.js` is covered without touching the backup code. The file handle and backup notes are kept in the `meta` store (no schema change).
 - `tests/autobackup.test.js` covers the commit event and the backup file with a stand-in file handle. `tests/e2e/autobackup_check.py` is an optional real-browser check of it (real IndexedDB and a real `FileSystemFileHandle` from the browser's private file system; only the operating system's Save dialog is replaced).
+- `tests/purchases.test.js` covers the supplier and purchase module; `tests/e2e/purchases_check.py` is an optional real-browser walk through the suppliers / purchases flow (same setup as below; not run by `npm test`).
 - `tests/e2e/browser_check.py` is an optional real-browser check (Playwright + Chromium, opened over `file://`, disposable profile).
 
 ## Known limits
 
 - Invoisy can not see where a downloaded backup is stored or whether it is kept.
+- Purchases: no inventory valuation or costing method, and a product's purchase price field is not updated by purchases. Report totals assume a single currency. Attachments are limited to 5 MB each and are stored inside IndexedDB and in the backup files.
+- The version 2 to 3 upgrade and the purchase flows were tested with an in-memory IndexedDB and in Chromium only; the print layout of a purchase was not checked visually.
 - Two windows can be open at once; if both change data at the same time, the second save is refused with a message to repeat the action, with the latest data already loaded.
 - Data entered in an old Invoisy window that is still open after updating is not picked up automatically; close old windows before updating.
 - Automatic backup file, not verified in a real browser: the operating system's Save dialog itself, the browser asking again for permission after a restart, and use over `file://` (Chromium does not offer its private file system there, so the real-browser check runs over a local web server). These are covered only by the stand-in tests. Two browsers or profiles pointed at the same file will keep refusing to overwrite each other's newer data; use one.

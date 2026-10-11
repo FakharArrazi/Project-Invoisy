@@ -16,7 +16,7 @@ try {
 }
 
 const scriptDir = path.join(__dirname, "..", "..", "java script");
-for (const file of ["i18n.js", "lang/en.js", "lang/fr.js", "calc.js", "validation.js", "database.js", "autobackup.js"]) {
+for (const file of ["i18n.js", "lang/en.js", "lang/fr.js", "calc.js", "purchases.js", "validation.js", "database.js", "autobackup.js"]) {
   vm.runInThisContext(fs.readFileSync(path.join(scriptDir, file), "utf8"), { filename: file });
 }
 
