@@ -95,4 +95,21 @@ async function openDatabase(api) {
   api.getStorage().mode = "ready";
 }
 
-module.exports = { loadProductApi, ceramic, openDatabase, LANGUAGE_FILES, APP_FILES, SCRIPT_DIR };
+// Fills the Stock form the way a person would and reads it with the application's own readProductForm().
+// Plain fields are set by their element id. The selling prices are the form's price rows: give `priceRows`
+// ([{ unit, price }, ...]), or the single pair pPriceUnit / pPrice. Returns { values } or { field, error }.
+function fillProductForm(app, values) {
+  const { api, field } = app;
+  const rows = values.priceRows || [{ unit: values.pPriceUnit === undefined ? "" : values.pPriceUnit, price: values.pPrice === undefined ? "" : values.pPrice }];
+  for (const [id, value] of Object.entries(values)) {
+    if (id === "priceRows" || id === "pPrice" || id === "pPriceUnit") continue;
+    field(id).value = value;
+  }
+  api.setPriceRows(rows);
+  return api.readProductForm();
+}
+
+// The element id of a price row's price / unit control, by row position (0 = first row).
+const priceFieldId = (api, index, part) => `${part === "unit" ? "priceUnit" : "priceValue"}-${api.getState().priceRows[index].rowId}`;
+
+module.exports = { loadProductApi, ceramic, openDatabase, fillProductForm, priceFieldId, LANGUAGE_FILES, APP_FILES, SCRIPT_DIR };

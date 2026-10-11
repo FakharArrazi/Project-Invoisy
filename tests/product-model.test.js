@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { loadProductApi, ceramic } = require("./helpers");
+const { loadProductApi, ceramic, fillProductForm, priceFieldId } = require("./helpers");
 
 test("keeps same-name products from different manufacturers as distinct records", () => {
   const { api } = loadProductApi();
@@ -61,8 +61,7 @@ test("validates ceramic form fields and persists a product creation and edit", a
     pCoveragePerBox: "2.88", pDesc: "", pPrice: "1000", pCost: "800",
     pStock: "12", pStockUnit: "box", pSku: "EV-GREY", pCategory: "Tiles", pPriceUnit: "box",
   };
-  for (const [id, value] of Object.entries(values)) field(id).value = value;
-  const created = api.readProductForm();
+  const created = fillProductForm({ api, field }, values);
 
   assert.equal(created.error, undefined);
   assert.equal(created.values.tileSize, "60*120");
@@ -253,14 +252,13 @@ test("the product form requires a price unit and a coverage for per-m² prices",
   const { api, field } = loadProductApi();
   const fill = (extra) => {
     const base = { pName: "Tile", pManufacturer: "", pTileSize: "60*60", pCoveragePerBox: "1.44", pDesc: "", pPrice: "800", pPriceUnit: "m2", pCost: "", pStock: "5", pStockUnit: "box", pSku: "", pCategory: "" };
-    for (const [id, value] of Object.entries({ ...base, ...extra })) field(id).value = value;
-    return api.readProductForm();
+    return fillProductForm({ api, field }, { ...base, ...extra });
   };
   const ok = fill({});
   assert.equal(ok.values.priceUnit, "m2");
   assert.equal(ok.values.coveragePerBox, 1.44);
-  assert.equal(fill({ pPriceUnit: "" }).field, "pPriceUnit");
-  assert.equal(fill({ pPriceUnit: "bogus" }).field, "pPriceUnit");
+  assert.equal(fill({ pPriceUnit: "" }).field, priceFieldId(api, 0, "unit"));
+  assert.equal(fill({ pPriceUnit: "bogus" }).field, priceFieldId(api, 0, "unit"));
   assert.equal(fill({ pCoveragePerBox: "" }).field, "pCoveragePerBox");
   assert.equal(fill({ pCoveragePerBox: "", pPriceUnit: "piece" }).error, undefined);
 });

@@ -41,7 +41,7 @@ with sync_playwright() as p:
 
     page.click('.nav-btn[data-view="stock"]')
     page.fill("#pName", "Tile A"); page.fill("#pTileSize", "60*60"); page.fill("#pCoveragePerBox", "1.44")
-    page.fill("#pPrice", "1000"); page.select_option("#pPriceUnit", "m2"); page.fill("#pStock", "20")
+    page.locator("#priceRows input[data-field='price']").first.fill("1000"); page.locator("#priceRows select[data-field='unit']").first.select_option("m2"); page.fill("#pStock", "20")
     page.click("#productSubmit")
     page.wait_for_selector("#stockBody tr")
 

@@ -20,3 +20,14 @@
 /* Unit price of a sale line with the unit it is for next to it ("900 DA/m²"). */
 .price-cell { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
 .price-unit { color: var(--muted); font-size: 0.85em; white-space: nowrap; }
+
+/* Stock form: the three sections (product information, selling prices, stock information). */
+.form-section { margin-bottom: 12px; }
+.price-hint { margin: 0 0 8px; }
+
+/* One selling price: "Price per m²" label, then the price, its unit and a Remove button on one line. */
+.price-entry { margin-bottom: 10px; }
+.price-entry .price-entry-line { display: flex; gap: 6px; align-items: center; }
+.price-entry .price-entry-line input { flex: 1 1 0; min-width: 0; }
+.price-entry .price-entry-line select { flex: 0 0 110px; }
+.price-entry .price-entry-line .btn { flex: 0 0 auto; }

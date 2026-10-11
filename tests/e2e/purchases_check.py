@@ -73,8 +73,8 @@ with sync_playwright() as p:
     page.fill("#pName", "Tile A")
     page.fill("#pTileSize", "60*60")
     page.fill("#pCoveragePerBox", "1.44")
-    page.fill("#pPrice", "800")
-    page.select_option("#pPriceUnit", "m2")
+    page.locator("#priceRows input[data-field='price']").first.fill("800")
+    page.locator("#priceRows select[data-field='unit']").first.select_option("m2")
     page.select_option("#pStockUnit", "m2")      # counted in m², bought in boxes of 1.44 m²
     page.fill("#pStock", "10")
     page.click("#productSubmit")

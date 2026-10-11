@@ -110,10 +110,12 @@ function productDetails(product) {
   return details.join(", ");
 }
 
-// "800 DA / m²". A product saved without a price unit shows just the amount.
+// "1,000 DA / m² · 300 DA / piece · 1,440 DA / box": every price the product has, each with its own unit.
+// A product saved without a price unit shows just the amount.
 function priceLabel(product) {
-  const unit = Calc.unitLabel(product.priceUnit);
-  return money(product.sellingPrice) + (unit ? ` / ${unit}` : "");
+  const prices = Calc.getSellingPrices(product);
+  if (prices.length === 0) return money(product.sellingPrice);
+  return prices.map((entry) => `${money(entry.price)} / ${Calc.unitLabel(entry.unit)}`).join(" · ");
 }
 
 // "20 Boxes" (stock counted in boxes), or just "20" for an old product with no stock unit.
@@ -172,6 +174,7 @@ const state = {
   selectedId: null,       // product selected in the picker
   previewInvoice: null,   // saved invoice shown in the preview (null = live sale)
   editingId: null,        // product being edited in the Stock form
+  priceRows: [],          // the selling price rows of the Stock form, as typed: { rowId, unit, price }
   addUnitFor: null,       // product the Sell page unit list was last set up for
 };
 
@@ -792,14 +795,17 @@ function readProductForm() {
     return fail("pCoveragePerBox", t("product.coverageGreater"));
   }
 
-  const priceRaw = get("pPrice");
-  const price = Number(priceRaw);
-  if (priceRaw === "" || !Number.isFinite(price)) return fail("pPrice", t("product.priceRequired"));
-  if (price < 0) return fail("pPrice", t("product.priceNegative"));
-
-  const priceUnit = get("pPriceUnit");
-  if (!Calc.isUnit(priceUnit)) return fail("pPriceUnit", t("product.chooseUnit"));
-  if (priceUnit === "m2" && coverageRaw === "") {
+  // Selling prices: one independent price per unit (checked in calc.js, the same rules the database applies).
+  const rows = state.priceRows;
+  const unitless = rows.find((r) => !Calc.isUnit(r.unit));
+  if (unitless) return fail("priceUnit-" + unitless.rowId, t("product.chooseUnit"));
+  const checked = Calc.checkSellingPrices(rows.map((r) => ({ unit: r.unit, price: String(r.price).trim() })));
+  if (checked.error) {
+    const row = rows[checked.index];
+    return fail(row ? (checked.field === "price" ? "priceValue-" : "priceUnit-") + row.rowId : "addPriceRow", checked.error);
+  }
+  const prices = checked.value;
+  if (prices.some((entry) => entry.unit === "m2") && coverageRaw === "") {
     return fail("pCoveragePerBox", t("product.coverageNeeded"));
   }
 
@@ -809,13 +815,17 @@ function readProductForm() {
 
   const stockUnit = get("pStockUnit");
   if (!Calc.isUnit(stockUnit)) return fail("pStockUnit", t("product.chooseStockUnit"));
-  if (Calc.unitFamily(stockUnit) !== Calc.unitFamily(Calc.defaultStockUnit(priceUnit))) {
-    return fail("pStockUnit", t("product.stockUnitMismatch", { stock: t("stockunit." + stockUnit), price: t("price." + priceUnit) }));
+  if (Calc.unitFamily(stockUnit) !== Calc.unitFamily(prices[0].unit)) {
+    return fail("pStockUnit", t("product.stockUnitMismatch", { stock: t("stockunit." + stockUnit), price: t("price." + prices[0].unit) }));
   }
 
   const stockRaw = get("pStock");
   const stock = stockRaw === "" ? 0 : Number(stockRaw);
-  if (!Number.isFinite(stock) || stock < 0 || (Calc.isWholeUnit(stockUnit) && !Number.isInteger(stock))) {
+  // Selling pieces out of box-counted stock leaves part of a box (19.25 boxes). That saved quantity can be kept as it is
+  // while editing (to change a price, say); only a quantity typed in has to be a whole number for a whole unit.
+  const editing = state.editingId ? state.products.find((p) => p.id === state.editingId) : null;
+  const unchangedStock = Boolean(editing) && stockRaw !== "" && stock === editing.stock && stockUnit === editing.stockUnit;
+  if (!Number.isFinite(stock) || stock < 0 || (Calc.isWholeUnit(stockUnit) && !Number.isInteger(stock) && !unchangedStock)) {
     return fail("pStock", t(Calc.isWholeUnit(stockUnit) ? "product.stockWhole" : "product.stockNumber"));
   }
 
@@ -834,8 +844,7 @@ function readProductForm() {
       description: get("pDesc"),
       sku,
       category: get("pCategory"),
-      sellingPrice: price,
-      priceUnit,
+      ...Calc.priceFields(prices),   // sellingPrices, plus sellingPrice / priceUnit as the first entry
       stockUnit,
       purchasePrice: costRaw === "" ? null : cost,
       stock,
@@ -921,8 +930,10 @@ function startEditProduct(id) {
   $("pTileSize").value = p.tileSize;
   $("pCoveragePerBox").value = p.coveragePerBox == null ? "" : p.coveragePerBox;
   $("pDesc").value = p.description;
-  $("pPrice").value = p.sellingPrice;
-  $("pPriceUnit").value = p.priceUnit || "";   // empty for products saved before price units
+  // Each saved price is its own row. A product saved before price units existed has a price but no unit:
+  // its row shows the price with the unit left to choose (never guessed).
+  const saved = Calc.getSellingPrices(p);
+  setPriceRows(saved.length ? saved : [{ unit: "", price: p.sellingPrice }]);
   $("pCost").value = p.purchasePrice == null ? "" : p.purchasePrice;
   $("pStock").value = p.stock;
   $("pStockUnit").value = p.stockUnit || "";   // empty for products saved before stock units
@@ -940,14 +951,107 @@ function resetProductForm() {
   $("productForm").reset();
   $("pStock").value = 0;
   delete $("pStockUnit").dataset.touched;
+  setPriceRows([{ unit: "m2", price: "" }]);   // a new product starts with a price per m² (stock counted in boxes)
   renderProductFormMode();
   syncCoverageMark();
   clearProductErrors();
 }
 
-// Coverage per box is mandatory only while the price is per m² (see readProductForm), so its * follows that.
+/* ---------- Selling price rows (Stock form) ----------
+   The rows live in state.priceRows (as typed) and the form is drawn from them, so what is saved never depends
+   on what the page happens to hold. Each row is one price for one unit; a unit can only be on one row. */
+
+const PRICE_UNIT_ORDER = ["m2", "piece", "box", "kg", "m"];
+let priceRowSerial = 0;
+
+function newPriceRow(unit, price) {
+  return { rowId: ++priceRowSerial, unit: unit || "", price: price === undefined || price === null ? "" : String(price) };
+}
+
+function findPriceRow(rowId) {
+  return state.priceRows.find((r) => String(r.rowId) === String(rowId));
+}
+
+const unitsTakenByOtherRows = (rowId) => state.priceRows.filter((r) => r.rowId !== rowId).map((r) => r.unit).filter(Boolean);
+
+// The kind of unit the form's prices are in (set by the first row): piece / box / m² together, kg or m alone.
+const priceFamily = () => (state.priceRows[0] && state.priceRows[0].unit ? Calc.unitFamily(state.priceRows[0].unit) : null);
+
+// The unit a new row starts on: the first unit of the same kind that has no price yet (null = none left).
+function nextPriceUnit() {
+  const taken = unitsTakenByOtherRows(null);
+  const family = priceFamily();
+  return PRICE_UNIT_ORDER.find((u) => !taken.includes(u) && (!family || Calc.unitFamily(u) === family)) || null;
+}
+
+function setPriceRows(entries) {
+  state.priceRows = (entries && entries.length ? entries : [{ unit: "m2", price: "" }]).map((e) => newPriceRow(e.unit, e.price));
+  renderPriceRows();
+  syncCoverageMark();
+}
+
+function addPriceRow() {
+  const unit = nextPriceUnit();
+  if (!unit) return null;
+  const row = newPriceRow(unit, "");
+  state.priceRows.push(row);
+  renderPriceRows();
+  syncCoverageMark();
+  const input = $("priceValue-" + row.rowId);
+  if (input) input.focus();
+  return row;
+}
+
+// At least one price always stays.
+function removePriceRow(rowId) {
+  if (state.priceRows.length < 2) return false;
+  state.priceRows = state.priceRows.filter((r) => String(r.rowId) !== String(rowId));
+  renderPriceRows();
+  syncCoverageMark();
+  return true;
+}
+
+function setPriceRowUnit(rowId, unit) {
+  const row = findPriceRow(rowId);
+  if (!row) return;
+  if (unit && unitsTakenByOtherRows(row.rowId).includes(unit)) {
+    showError("productError", t("product.priceRowUnitUsed"));
+    renderPriceRows();
+    return;
+  }
+  row.unit = unit;
+  // The first price decides what a new product is counted in (m² -> boxes), until a stock unit is chosen by hand.
+  if (row === state.priceRows[0] && !$("pStockUnit").dataset.touched) $("pStockUnit").value = Calc.defaultStockUnit(unit) || "";
+  renderPriceRows();
+  syncCoverageMark();
+  const select = $("priceUnit-" + row.rowId);
+  if (select) select.focus();
+}
+
+function renderPriceRows() {
+  const family = priceFamily();
+  const only = state.priceRows.length < 2;
+  $("priceRows").innerHTML = state.priceRows.map((row, index) => {
+    const per = row.unit ? t("price." + row.unit) : "";
+    const taken = unitsTakenByOtherRows(row.rowId);
+    const options = (row.unit ? "" : `<option value="" selected>${esc(t("stock.per"))}</option>`) + PRICE_UNIT_ORDER.map((u) => {
+      const blocked = u !== row.unit && (taken.includes(u) || (index > 0 && family && Calc.unitFamily(u) !== family));
+      return `<option value="${u}"${u === row.unit ? " selected" : ""}${blocked ? " disabled" : ""}>${esc(t("price." + u))}</option>`;
+    }).join("");
+    return `<div class="price-entry" data-row="${row.rowId}">` +
+      `<label for="priceValue-${row.rowId}">${esc(row.unit ? t("stock.priceFor", { per }) : t("stock.sellingPrice"))}${index === 0 ? ' <span class="req" aria-hidden="true">*</span>' : ""}</label>` +
+      `<div class="price-entry-line">` +
+      `<input type="number" id="priceValue-${row.rowId}" data-field="price" min="0" step="any" value="${esc(row.price)}"${index === 0 ? ' aria-required="true"' : ""}>` +
+      `<select id="priceUnit-${row.rowId}" data-field="unit" aria-label="${esc(t("stock.sellingUnit"))}">${options}</select>` +
+      `<button type="button" class="btn small" data-action="remove-price" aria-label="${esc(per ? t("stock.removePriceAria", { per }) : t("stock.removePrice"))}"${only ? " disabled" : ""}>${esc(t("stock.removePrice"))}</button>` +
+      `</div></div>`;
+  }).join("");
+  $("addPriceRow").disabled = nextPriceUnit() === null;
+}
+
+// Coverage per box is mandatory only while one of the prices is per m² (see readProductForm), so its * follows that.
 function syncCoverageMark() {
-  const needed = $("pPriceUnit").value === "m2";
+  const needed = state.priceRows.some((r) => r.unit === "m2");
   $("coverageReq").hidden = !needed;
   $("pCoveragePerBox").setAttribute("aria-required", needed ? "true" : "false");
 }
@@ -1052,6 +1156,11 @@ function fitQuantity(product, unit, remaining) {
   return Math.max(fit, whole ? 1 : 0.001);
 }
 
+// What a sale line's catalogue price came from, kept on the line so the saved invoice can show it later:
+// the unit the price is per, the price, and whether it was saved for that unit ("explicit"), worked out from
+// the main price ("calculated") or the price of an old product with no unit ("legacy").
+const catalogOf = (priced) => ({ unit: priced.priceUnit, price: priced.basePrice, source: priced.source });
+
 function addToSale(productId, rawQty, rawUnit) {
   const product = findProduct(productId);
   if (!product) return { error: t("product.selectFirst") };
@@ -1060,7 +1169,8 @@ function addToSale(productId, rawQty, rawUnit) {
   if (checked.error) return { error: checked.error };
   const qty = checked.value;
 
-  // The price of one unit comes from the selling price and its price unit (1,500 DA per m² -> 2,160 DA per box).
+  // The price of one unit: the price saved for that unit when there is one, else worked out from the main price
+  // (1,500 DA per m² -> 2,160 DA per box). Nothing is saved to the product either way.
   const priced = Calc.getUnitPrice(product, sellingUnit);
   if (priced.error) return { error: priced.error };
   // Stock is checked in the product's own stock unit, so 1 box is not the same as 1 piece.
@@ -1071,7 +1181,7 @@ function addToSale(productId, rawQty, rawUnit) {
 
   const item = state.sale.items.find((i) => i.productId === productId && i.sellingUnit === sellingUnit);
   if (item) item.qty = Calc.cleanNumber(item.qty + qty);
-  else state.sale.items.push({ lineId: uid(), productId, qty, sellingUnit, unitPrice: priced.value, listPrice: priced.value, priceOverridden: false });
+  else state.sale.items.push({ lineId: uid(), productId, qty, sellingUnit, unitPrice: priced.value, listPrice: priced.value, priceOverridden: false, catalog: catalogOf(priced) });
   return { ok: true };
 }
 
@@ -1108,6 +1218,7 @@ function updateSaleUnit(lineId, rawUnit) {
   item.unitPrice = priced.value;
   item.listPrice = priced.value;
   item.priceOverridden = false;
+  if (product) item.catalog = catalogOf(priced);
   return priceReset ? { priceReset: true } : {};
 }
 
@@ -1231,6 +1342,7 @@ function repriceLine(item, product) {
   const priced = Calc.getUnitPrice(product, item.sellingUnit);
   if (priced.error) return;
   item.listPrice = priced.value;
+  item.catalog = catalogOf(priced);   // what the line's catalogue price now is (it may be a newly saved price for this unit)
   if (item.priceOverridden && round2(item.unitPrice) !== round2(priced.value)) return;
   item.unitPrice = priced.value;
   item.priceOverridden = false;
@@ -1304,8 +1416,11 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
       total: Calc.calculateLineTotal(item.qty, item.unitPrice),
       // What the price was worked out from, kept so the line can be audited later. A saved invoice
       // is never recalculated from the product's current price, size or coverage.
-      priceUnit: p ? p.priceUnit : null,
-      productPrice: p ? p.sellingPrice : item.unitPrice,
+      // `priceUnit` / `productPrice` are the catalogue price the line used (the price saved for the unit sold, or the
+      // main price it was converted from). `priceSource` says which: explicit, calculated, legacy, or custom (typed here).
+      priceUnit: item.catalog ? item.catalog.unit : p ? p.priceUnit : null,
+      productPrice: item.catalog ? item.catalog.price : p ? p.sellingPrice : item.unitPrice,
+      ...(item.priceOverridden || item.catalog ? { priceSource: item.priceOverridden ? "custom" : item.catalog.source } : {}),
       calculatedUnitPrice: item.listPrice != null ? item.listPrice : item.unitPrice,
       priceOverridden: Boolean(item.priceOverridden),
       stockUnit: p ? p.stockUnit : null,
@@ -1564,7 +1679,9 @@ function syncAddUnit(p) {
 
 // "Box: 1,152 DA" for a tile priced per m², so the cashier sees what one box costs.
 function boxPriceNote(p) {
-  if (!p.priceUnit || p.priceUnit === "box" || !p.coveragePerBox) return "";
+  // Not needed when the box has a price of its own (it is in the price list already) or the main price is per box.
+  const main = Calc.getSellingPrices(p)[0];
+  if (!main || main.unit === "box" || Calc.getExplicitPrice(p, "box") !== null || !p.coveragePerBox) return "";
   const box = Calc.getUnitPrice(p, "box");
   return box.error ? "" : `<span>${esc(t("selected.box", { price: money(box.value) }))}</span>`;
 }
@@ -2096,6 +2213,7 @@ function refreshAfterLoad() {
 function renderAll() {
   applyLanguage();
   renderProductFormMode();
+  renderPriceRows();
   applyPaperSize();
   applyCurrency();
   renderResults();
@@ -2318,11 +2436,25 @@ function bindEvents() {
       else await addProduct(result.values);
     });
   });
-  $("pPriceUnit").addEventListener("change", () => {
-    const stockUnit = $("pStockUnit");
-    if (!stockUnit.dataset.touched) stockUnit.value = Calc.defaultStockUnit($("pPriceUnit").value) || "";
-    syncCoverageMark();
+  // Selling price rows: typing a price only updates the row; a unit change or a removal redraws the rows.
+  const priceRows = $("priceRows");
+  const rowIdOf = (el) => { const row = el.closest("[data-row]"); return row ? row.dataset.row : null; };
+  priceRows.addEventListener("input", (e) => {
+    const input = e.target.closest("input[data-field='price']");
+    const row = input && findPriceRow(rowIdOf(input));
+    if (row) row.price = input.value;
   });
+  priceRows.addEventListener("change", (e) => {
+    const select = e.target.closest("select[data-field='unit']");
+    if (select) setPriceRowUnit(rowIdOf(select), select.value);
+  });
+  priceRows.addEventListener("click", (e) => {
+    const button = e.target.closest("[data-action='remove-price']");
+    if (!button) return;
+    clearProductErrors();
+    removePriceRow(rowIdOf(button));
+  });
+  $("addPriceRow").addEventListener("click", () => { clearProductErrors(); addPriceRow(); });
   $("pStockUnit").addEventListener("change", () => { $("pStockUnit").dataset.touched = "1"; });
   productForm.addEventListener("input", (e) => {
     e.target.removeAttribute("aria-invalid");
@@ -2507,6 +2639,12 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     renderSale,
     invoiceItemLabel,
     readProductForm,
+    setPriceRows,
+    addPriceRow,
+    removePriceRow,
+    setPriceRowUnit,
+    renderPriceRows,
+    nextPriceUnit,
     startEditProduct,
     syncCoverageMark,
     buildData,

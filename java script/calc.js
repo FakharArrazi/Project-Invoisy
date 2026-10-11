@@ -182,25 +182,115 @@
 
   /* ---------- Prices ---------- */
 
-  // Price of ONE `targetUnit` of the product, from the reference price and its price unit.
-  //   { value, basePrice, priceUnit, factor }   factor = how many price-units are in one target unit
-  // A product without a price unit (saved before the field existed) keeps its old behavior:
-  // the price applies as typed to whatever unit is sold ({ legacy: true }).
+  // The prices a product is sold at: [{ unit, price }], one entry per unit.
+  //   - The main price lives in the product's `sellingPrice` / `priceUnit`, as it always has, and comes first.
+  //     Whatever writes those fields (the Stock form, a purchase that creates a product, an older version) changes
+  //     the main price, and nothing in the saved list can shadow it.
+  //   - `sellingPrices` (the saved list) adds the other units' prices. Its entry for the main unit is only a copy
+  //     of the main price (the Stock form keeps the two equal), so it is not used.
+  //   - A product saved before the list existed has just its one price, in its own price unit.
+  //   - A product with no price unit has no entries (its price applies as typed, see getUnitPrice).
+  // Nothing is written anywhere: this only reads, so old data is never rewritten or reinterpreted.
+  function getSellingPrices(product) {
+    const valid = (unitRaw, raw) => {
+      const unit = normalizeUnit(unitRaw);
+      const price = Number(raw);
+      return unit && !isBlank(raw) && typeof raw !== "boolean" && Number.isFinite(price) && price >= 0 ? { unit, price } : null;
+    };
+    const out = [];
+    const main = valid(product && product.priceUnit, product && product.sellingPrice);
+    if (main) out.push(main);
+    const saved = product && product.sellingPrices;
+    if (Array.isArray(saved)) {
+      for (const entry of saved) {
+        const item = valid(entry && entry.unit, entry && entry.price);
+        if (item && !out.some((e) => e.unit === item.unit)) out.push(item);
+      }
+    }
+    return out;
+  }
+
+  // The price saved for exactly this unit, or null when the product has none for it.
+  function getExplicitPrice(product, unit) {
+    const found = getSellingPrices(product).find((entry) => entry.unit === unit);
+    return found ? found.price : null;
+  }
+
+  // The fields a product stores for a price list: the list itself plus the older single-price fields,
+  // kept equal to the first entry.
+  function priceFields(entries) {
+    const list = entries.map((e) => ({ unit: e.unit, price: Number(e.price) }));
+    return { sellingPrices: list, sellingPrice: list[0].price, priceUnit: list[0].unit };
+  }
+
+  const PRICE_ERRORS = {
+    none: "calc.pricesNone",
+    unit: "calc.priceUnitBad",
+    duplicate: "calc.priceUnitDuplicate",
+    missing: "calc.priceMissing",
+    invalid: "calc.priceInvalid",
+    negative: "calc.priceNegative",
+    mixed: "calc.pricesMixed",
+  };
+
+  // Checks a price list typed or loaded: { value: [{ unit, price }] } or { error, code, index, field }.
+  // Every entry needs a supported unit and a finite price of 0 or more; a unit may appear only once; there must
+  // be at least one entry; all units must be of one kind (piece / box / m² together, kg alone, m alone).
+  // A bad entry is reported, never turned into 0 or repaired.
+  function checkSellingPrices(entries) {
+    const fail = (code, index, field, params) => ({ error: say(PRICE_ERRORS[code], params), code, index, field });
+    if (!Array.isArray(entries) || entries.length === 0) return fail("none", -1, null);
+    const seen = new Set();
+    const value = [];
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const unit = entry && entry.unit;
+      if (!isUnit(unit)) return fail("unit", i, "unit");
+      const params = { per: say("price." + unit) };
+      if (seen.has(unit)) return fail("duplicate", i, "unit", params);
+      const raw = entry.price;
+      if (isBlank(raw) || typeof raw === "boolean") return fail("missing", i, "price", params);
+      const price = Number(raw);
+      if (!Number.isFinite(price)) return fail("invalid", i, "price", params);
+      if (price < 0) return fail("negative", i, "price", params);
+      seen.add(unit);
+      value.push({ unit, price });
+    }
+    const family = unitFamily(value[0].unit);
+    const odd = value.findIndex((e) => unitFamily(e.unit) !== family);
+    if (odd >= 0) return fail("mixed", odd, "unit");
+    return { value };
+  }
+
+  // Price of ONE `targetUnit` of the product. This is the one place that decides a selling price:
+  //   1. a price saved for exactly that unit is used as it is (source "explicit"), never recalculated;
+  //   2. otherwise the product's main price (its first entry) is converted with the tile size and the coverage
+  //      per box (source "calculated"), only when the units belong together; a kg price never gives an m² price;
+  //   3. a product with no price unit (saved before the field existed) keeps its old behavior: the price applies
+  //      as typed to whatever unit is sold (source "legacy").
+  // Nothing is saved: a calculated price is worked out each time and never stored in the catalogue.
+  //   { value, basePrice, priceUnit, factor, source }   factor = how many price-units are in one target unit
   function getUnitPrice(product, targetUnit) {
     if (!isUnit(targetUnit)) return { error: say("calc.unsupportedSellUnit", { name: nameOf(product) }) };
-    const base = Number(product && product.sellingPrice);
-    if (isBlank(product && product.sellingPrice) || !Number.isFinite(base) || base < 0) {
-      return { error: say("calc.noPrice", { name: nameOf(product) }) };
+    const prices = getSellingPrices(product);
+    const explicit = prices.find((entry) => entry.unit === targetUnit);
+    if (explicit) return { value: explicit.price, basePrice: explicit.price, priceUnit: targetUnit, factor: 1, source: "explicit" };
+
+    if (prices.length === 0) {
+      const base = Number(product && product.sellingPrice);
+      if (isBlank(product && product.sellingPrice) || !Number.isFinite(base) || base < 0) {
+        return { error: say("calc.noPrice", { name: nameOf(product) }) };
+      }
+      return { value: base, basePrice: base, priceUnit: null, factor: 1, legacy: true, source: "legacy" };
     }
-    const priceUnit = product.priceUnit;
-    if (!isUnit(priceUnit)) return { value: base, basePrice: base, priceUnit: null, factor: 1, legacy: true };
-    if (priceUnit === targetUnit) return { value: base, basePrice: base, priceUnit, factor: 1 };
-    if (unitFamily(priceUnit) !== unitFamily(targetUnit)) {
-      return { error: say("calc.cannotSell", { name: nameOf(product), from: unitWord(priceUnit), to: unitWord(targetUnit) }) };
+
+    const main = prices[0];
+    if (unitFamily(main.unit) !== unitFamily(targetUnit)) {
+      return { error: say("calc.cannotSell", { name: nameOf(product), from: unitWord(main.unit), to: unitWord(targetUnit) }) };
     }
-    const factor = getUnitFactor(product, targetUnit, priceUnit);
+    const factor = getUnitFactor(product, targetUnit, main.unit);
     if (factor.error) return factor;
-    return { value: roundMoney(base * factor.value), basePrice: base, priceUnit, factor: factor.value };
+    return { value: roundMoney(main.price * factor.value), basePrice: main.price, priceUnit: main.unit, factor: factor.value, source: "calculated" };
   }
 
   // Quantity x price of one unit, rounded to 2 decimals. Invalid numbers count as 0
@@ -261,6 +351,7 @@
     parseTileSize, isTileSize, normalizeTileSize,
     getPieceArea, getBoxCoverage, getPiecesPerBox, getAreaOf,
     getUnitFactor, convertQuantity, boxesForArea,
+    getSellingPrices, getExplicitPrice, priceFields, checkSellingPrices,
     getUnitPrice, calculateLineTotal, calculateSubtotal,
     defaultStockUnit, inferStockUnit, defaultSellingUnit,
     stockDeduction, stockIn, hasEnoughStock, checkSellable,

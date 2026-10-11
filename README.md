@@ -7,9 +7,16 @@ Nothing else converts units. The unit names and the messages it returns are not 
 they come from `java script/lang/` (English and French), so `calc.js` is loaded after `i18n.js` and the
 language files.
 
-- A product has a **selling price** and the **unit that price is per** (piece, box, m², kg or meter).
-  Selling in another unit works the price out from the tile size and the coverage per box, e.g.
-  1,500 DA/m², 60*60 cm tile, 1.44 m² per box: piece = 540 DA, box = 2,160 DA.
+- A product has one or more **selling prices**, each for one unit (piece, box, m², kg or meter) and each
+  **independent**: 1,000 DA/m², 300 DA/piece and 1,440 DA/box can all be saved on the same tile, and the piece
+  price is not forced to equal the m² price converted. A unit can have only one price per product.
+- The price of a unit is decided in one place, `getUnitPrice` in `calc.js`:
+  1. a price saved for exactly the unit sold is used as it is;
+  2. otherwise the product's **main price** (the first one in its list) is converted with the tile size and the
+     coverage per box, e.g. 1,500 DA/m², 60*60 cm tile, 1.44 m² per box: piece = 540 DA, box = 2,160 DA;
+  3. a kg price never gives an m² price (and the other way round); a product saved with no price unit keeps its
+     price as typed.
+  A price worked out in step 2 is only used for that sale. It is never saved to the product.
 - A product also has a **stock unit**: what its stock quantity is counted in. Selling boxes or
   pieces takes stock out converted to that unit (3 pieces from 20 boxes of 4 pieces leaves 19.25 boxes).
 - kg and meter products can only be sold by kg / meter.
@@ -26,12 +33,14 @@ language files.
   are kept to 2 decimals; blank, negative or non-numeric prices are refused. Changing the unit of a line
   with a typed price replaces it with the new unit's price (a price per m² is not a price per box), and a
   price changed in Stock reaches lines at the normal price but never a typed price. Prices never affect stock.
-- An invoice line shows the product's own price and the unit it is priced per (1,500 / m²), the
-  quantity as it was sold (2 Boxes) and, when that is a different unit, the same quantity in the
-  price unit underneath (2.88 m²), then the line total. Selling by the box never turns the price
-  into a per-box price on the invoice. A price typed by hand on the Sell page is the exception: the
-  line then shows the price actually charged, per unit sold. The product's price is only ever shown when
-  it really is what was charged (checked again from the line's own saved details).
+- An invoice line shows the catalogue price it used and the unit that price is per. With a price saved for the
+  unit sold, that is simply the price per unit sold (300 / Piece, 1,440 / Box). When the price was worked out from
+  another unit, the line shows the main price and its unit (1,500 / m²), the quantity as it was sold (2 Boxes)
+  and, when that is a different unit, the same quantity in the price unit underneath (2.88 m²), then the line
+  total. A price typed by hand on the Sell page is the exception: the line then shows the price actually charged,
+  per unit sold. The product's price is only ever shown when it really is what was charged (checked again from
+  the line's own saved details). Saved invoice lines also keep a `priceSource` (`explicit`, `calculated`,
+  `legacy` or `custom`).
 - A saved invoice keeps the unit sold, the price charged, the unit that price is for (`unitPriceUnit`) and
   the details it was worked out from.
   It is never recalculated from the product's current data, and a sale never changes the price in Stock.
@@ -48,11 +57,41 @@ language files.
 
 ## Stock form
 
-Mandatory fields have a small * on their label: product name, selling price, price unit and stock unit
-(and coverage per box while the price is per m²). Everything else may be left empty, including
-**Manufacturer** (a free-text brand or manufacturer name such as VEGA or Porcelanosa). It is saved with the
-product, can be changed or cleared when editing, is shown on the invoice and found by search, and is
-included in backups. Products saved without one keep working unchanged.
+The form has three sections.
+
+- **Product information:** product name, Manufacturer, tile size, SKU, category, description.
+- **Selling prices:** one row per price: "Price per m²", "Price per piece", "Price per box", and so on. A new
+  product starts with one m² row; **Add price** adds a row for the next unit that has no price; **Remove** takes a
+  row away (one always stays). A unit can only be on one row, and all rows must be of one kind (piece, box and m²
+  together; kg alone; meter alone). The first row is the product's main price.
+- **Stock information:** stock quantity, stock unit (boxes for a new product), coverage per box, purchase price.
+
+Mandatory fields have a small * on their label: product name, the first selling price, stock unit, and coverage
+per box while any price is per m². Everything else may be left empty. Coverage per box is never invented: it stays
+blank until entered, and a tile's size is never used as its coverage.
+
+**Manufacturer** is an optional free-text brand or manufacturer name such as VEGA or Porcelanosa. It is saved with
+the product, can be changed or cleared when editing, is shown next to the product name in Stock and on invoices,
+found by search, and included in backups. Products saved without one keep working unchanged.
+
+A box-counted product that has had pieces sold (19.25 boxes) can still be edited; that saved quantity is kept as it
+is. A newly typed quantity in a whole unit (boxes, pieces) still has to be a whole number.
+
+## Selling prices in the data (migration)
+
+Products store `sellingPrices: [{ unit, price }, ...]`. `sellingPrice` and `priceUnit` are still saved and always
+equal the first entry, so older Invoisy versions and older tools keep reading a price.
+
+- **No migration step runs and no stored record is rewritten.** A product saved before this change has no
+  `sellingPrices`; it is read as one price in its own price unit (`sellingPrice: 1000`, `priceUnit: "m2"` is one m²
+  price). A product with no price unit is not given one: its price still applies as typed.
+- A product is saved with a list the first time it is edited in the Stock form. Restoring an older backup fills the
+  list from the old fields in the restored copy; stock, invoices, payments and the invoice counter are untouched.
+- The database schema stays at version 2 (no new store or index). Backups keep the same format; the new field is
+  validated when present (numbers only, supported units, one price per unit, one kind of unit).
+- The main (first) price is read from `sellingPrice` / `priceUnit`, so anything that writes those fields (a product
+  created from a purchase, an older version) changes the main price and is never shadowed by the list; the list
+  only adds the other units' prices. An older version only sees and edits that main price.
 
 ## Suppliers and purchases
 

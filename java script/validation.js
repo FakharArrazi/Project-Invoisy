@@ -100,8 +100,12 @@
 
   function normalizeProduct(raw) {
     if (!raw || typeof raw !== "object" || !raw.name) return null;
-    const price = Number(raw.sellingPrice);
-    const priceUnit = Calc.normalizeUnit(raw.priceUnit);
+    // The price list: the saved `sellingPrices`, or (a product saved before the list existed) its one price in its own
+    // price unit. A product with no price unit gets an empty list and keeps its price as typed. The older
+    // `sellingPrice` / `priceUnit` fields are kept equal to the first entry, so older versions still read them.
+    const priceList = Calc.getSellingPrices({ sellingPrices: raw.sellingPrices, sellingPrice: raw.sellingPrice, priceUnit: raw.priceUnit });
+    const price = priceList.length ? priceList[0].price : Number(raw.sellingPrice);
+    const priceUnit = priceList.length ? priceList[0].unit : Calc.normalizeUnit(raw.priceUnit);
     // What the stock quantity is counted in. null = an old product whose unit was never recorded:
     // its stock keeps being reduced one-for-one, as before.
     const stockUnit = Calc.inferStockUnit({ stockUnit: raw.stockUnit, priceUnit });
@@ -125,6 +129,8 @@
       sellingPrice: Number.isFinite(price) && price >= 0 ? price : 0,
       // What the selling price is per (piece, box, m2, kg, m). null = saved before this field existed.
       priceUnit,
+      // One independent price per selling unit (see calc.js). Empty for a product that has no price unit.
+      sellingPrices: priceList,
       stockUnit,
       purchasePrice: hasCost ? Number(raw.purchasePrice) : null,
       stock: Number.isFinite(stock) && stock >= 0 ? Calc.cleanNumber(stock) : 0,
@@ -193,6 +199,21 @@
 
   /* ---------- Validation of single records ---------- */
 
+  // `sellingPrices` is optional (products saved before it existed do not have it). When it is there it must be a
+  // valid list. The main price is still read from the older fields (`sellingPrice`, `priceUnit`, see Calc.getSellingPrices),
+  // which the Stock form keeps equal to the list's first entry. They are not compared here, so a backup can always be
+  // exported and restored.
+  function sellingPricesProblem(p) {
+    if (p.sellingPrices === undefined) return "";
+    if (!Array.isArray(p.sellingPrices)) return t("problem.badPrices");
+    if (p.sellingPrices.length === 0) return "";
+    // a saved price is a number (the form turns what was typed into one before saving); text is not repaired
+    if (p.sellingPrices.some((e) => !e || typeof e.price !== "number")) return t("problem.badPrices");
+    const checked = Calc.checkSellingPrices(p.sellingPrices);
+    if (checked.error) return checked.code === "duplicate" ? t("problem.dupPriceUnit") : t("problem.badPrices");
+    return "";
+  }
+
   function productProblem(p) {
     if (!isObj(p)) return t("problem.notObject");
     if (!isStr(p.id) || !p.id) return t("problem.noId");
@@ -202,6 +223,8 @@
     if (p.coveragePerBox !== undefined && p.coveragePerBox !== null && (!isNum(p.coveragePerBox) || p.coveragePerBox <= 0)) return t("problem.badCoverage");
     if (!isNum(p.sellingPrice) || p.sellingPrice < 0) return t("problem.badPrice");
     if (p.priceUnit !== undefined && p.priceUnit !== null && !Calc.isUnit(p.priceUnit)) return t("problem.badPriceUnit");
+    const listProblem = sellingPricesProblem(p);
+    if (listProblem) return listProblem;
     if (p.stockUnit !== undefined && p.stockUnit !== null && !Calc.isUnit(p.stockUnit)) return t("problem.badStockUnit");
     if (p.purchasePrice != null && (!isNum(p.purchasePrice) || p.purchasePrice < 0)) return t("problem.badCost");
     if (!isNum(p.stock) || p.stock < 0) return t("problem.badStock");
@@ -281,6 +304,13 @@
     if (present(raw.purchasePrice) && !finiteAtLeast(raw.purchasePrice, 0)) return t("problem.badCost");
     if (present(raw.priceUnit) && !Calc.isUnit(raw.priceUnit)) return t("problem.badPriceUnit");
     if (present(raw.stockUnit) && !Calc.isUnit(raw.stockUnit)) return t("problem.badStockUnit");
+    if (raw.sellingPrices !== undefined && raw.sellingPrices !== null) {
+      if (!Array.isArray(raw.sellingPrices)) return t("problem.badPrices");
+      if (raw.sellingPrices.length) {
+        const checked = Calc.checkSellingPrices(raw.sellingPrices);
+        if (checked.error) return checked.code === "duplicate" ? t("problem.dupPriceUnit") : t("problem.badPrices");
+      }
+    }
     if (present(raw.stock)) {
       // Fractional stock is only meaningful when the unit is known (same rule as normalizeProduct).
       const unit = Calc.inferStockUnit({ stockUnit: raw.stockUnit, priceUnit: Calc.normalizeUnit(raw.priceUnit) });

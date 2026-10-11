@@ -235,14 +235,22 @@ test("stock is shown with its unit in French, and the new product-form checks sp
   assert.equal(api.priceNote(line), "Prix personnalisé pour cette vente uniquement (prix enregistré\u00a0: 540 DA/pièce)");
 
   const fill = (extra) => {
-    const base = { pName: "Tile", pManufacturer: "", pTileSize: "60*60", pCoveragePerBox: "1.44", pDesc: "", pPrice: "800", pPriceUnit: "m2", pCost: "", pStock: "5", pStockUnit: "box", pSku: "", pCategory: "" };
+    const base = { pName: "Tile", pManufacturer: "", pTileSize: "60*60", pCoveragePerBox: "1.44", pDesc: "", pCost: "", pStock: "5", pStockUnit: "box", pSku: "", pCategory: "" };
     for (const [id, value] of Object.entries({ ...base, ...extra })) field(id).value = value;
+    api.setPriceRows(extra.rows || [{ unit: "m2", price: "800" }]);
     return api.readProductForm();
   };
   assert.equal(fill({ pStockUnit: "" }).error, "Choisissez l’unité dans laquelle le stock est compté.");
   assert.equal(fill({ pStockUnit: "kg" }).error, "Un stock compté en kg ne correspond pas à un prix par m².");
   assert.equal(fill({ pStock: "2.5" }).error, "Le stock doit être un nombre entier, 0 ou plus.");
   assert.equal(api.productProblem({ ...tile, stockUnit: "bogus" }), "unité de stock non valide");
+
+  // the selling price messages (several prices) speak French too
+  assert.equal(fill({ rows: [{ unit: "m2", price: "" }] }).error, "Saisissez le prix par m².");
+  assert.equal(fill({ rows: [{ unit: "m2", price: "800" }, { unit: "piece", price: "-1" }] }).error, "Le prix par pièce ne peut pas être négatif.");
+  assert.equal(fill({ rows: [{ unit: "m2", price: "800" }, { unit: "m2", price: "900" }] }).error, "Il y a deux prix par m². Chaque unité ne peut avoir qu’un seul prix.");
+  assert.equal(fill({ rows: [] }).error, "Saisissez le prix par m².", "no rows at all gives one empty m² row, which is asked for its price");
+  assert.equal(api.productProblem({ ...tile, sellingPrices: [{ unit: "m2", price: 1500 }, { unit: "m2", price: 9 }] }), "deux prix de vente pour la même unité");
 });
 
 test("the printed invoice is in French but the saved invoice data stays language-neutral", () => {
