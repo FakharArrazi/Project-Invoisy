@@ -106,6 +106,7 @@ I18n.register("en", "English", {
   "stock.addProduct": "Add product",
   "stock.editProduct": "Edit product",
   "stock.productName": "Product name",
+  "stock.manufacturer": "Manufacturer",
   "stock.tileSize": "Tile size",
   "stock.description": "Description",
   "stock.sellingPrice": "Selling price",

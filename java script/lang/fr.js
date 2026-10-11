@@ -110,6 +110,7 @@
     "stock.addProduct": "Ajouter un produit",
     "stock.editProduct": "Modifier le produit",
     "stock.productName": "Nom du produit",
+    "stock.manufacturer": "Fabricant",
     "stock.tileSize": "Dimensions du carreau",
     "stock.description": "Description",
     "stock.sellingPrice": "Prix de vente",

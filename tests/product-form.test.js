@@ -12,9 +12,9 @@ const { loadApp } = require("./helpers/app");
 const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 const formHtml = html.slice(html.indexOf('<form id="productForm"'), html.indexOf("</form>", html.indexOf('<form id="productForm"')));
 
-const FIELDS = ["pName", "pTileSize", "pDesc", "pPrice", "pPriceUnit", "pCost", "pStock", "pStockUnit", "pSku", "pCoveragePerBox", "pCategory"];
+const FIELDS = ["pName", "pManufacturer", "pTileSize", "pDesc", "pPrice", "pPriceUnit", "pCost", "pStock", "pStockUnit", "pSku", "pCoveragePerBox", "pCategory"];
 const valid = (extra) => ({
-  pName: "Tile", pTileSize: "60*60", pCoveragePerBox: "1.44", pDesc: "", pPrice: "800", pPriceUnit: "piece",
+  pName: "Tile", pManufacturer: "", pTileSize: "60*60", pCoveragePerBox: "1.44", pDesc: "", pPrice: "800", pPriceUnit: "piece",
   pCost: "", pStock: "5", pStockUnit: "piece", pSku: "", pCategory: "", ...extra,
 });
 
@@ -23,15 +23,38 @@ function fillForm(app, values) {
   return app.api.readProductForm();
 }
 
+// Opens a product in the form like a click on Edit does. A real <input> turns whatever is assigned to it into
+// text, so the stand-in elements are made to do the same before the form is read back.
+function openEdit(app, id) {
+  app.api.startEditProduct(id);
+  for (const field of FIELDS) app.field(field).value = String(app.field(field).value);
+}
+
 // ids of the inputs whose label carries a "*" in the page, and the ones that are optional.
 const markedIds = [...formHtml.matchAll(/<label for="(\w+)">(?:(?!<\/label>)[^])*?class="req"[^>]*>\*<\/span>/g)].map((m) => m[1]);
 
-test("the Manufacturer / Brand field is gone from the form, and nothing in it asks for one", () => {
-  assert.doesNotMatch(formHtml, /pManufacturer/);
-  assert.doesNotMatch(formHtml, /manufacturer/i);
-  assert.doesNotMatch(formHtml, /brand/i);
+test("the Manufacturer field is a plain, optional text input right after Product name", () => {
+  assert.match(formHtml, /<input type="text" id="pManufacturer" autocomplete="off">/, "a simple text input");
+  assert.match(formHtml, /<label for="pManufacturer" data-i18n="stock\.manufacturer">Manufacturer<\/label>/);
+  assert.ok(formHtml.indexOf('id="pName"') < formHtml.indexOf('id="pManufacturer"'), "after the product name");
+  assert.ok(formHtml.indexOf('id="pManufacturer"') < formHtml.indexOf('id="pTileSize"'), "before the tile size");
+  assert.doesNotMatch(formHtml, /id="pManufacturer"[^>]*(aria-required|required|list=)/, "not required, no suggestions");
+  assert.ok(!markedIds.includes("pManufacturer"), "no mandatory asterisk");
+
   const app = loadApp();
-  assert.equal("manufacturer" in fillForm(app, valid()).values, false, "the form no longer reads a manufacturer");
+  const without = fillForm(app, valid());
+  assert.equal(without.error, undefined, "a product can be saved without a manufacturer");
+  assert.equal(without.values.manufacturer, "");
+  const withOne = fillForm(app, valid({ pManufacturer: "  VEGA  " }));
+  assert.equal(withOne.error, undefined);
+  assert.equal(withOne.values.manufacturer, "VEGA", "any text is accepted; surrounding spaces are trimmed");
+  assert.equal(fillForm(app, valid({ pManufacturer: "Porcelanosa" })).values.manufacturer, "Porcelanosa");
+});
+
+test("the Manufacturer label exists in English and French", () => {
+  const lang = (file) => fs.readFileSync(path.join(__dirname, "..", "java script", "lang", file), "utf8");
+  assert.match(lang("en.js"), /"stock\.manufacturer": "Manufacturer"/);
+  assert.match(lang("fr.js"), /"stock\.manufacturer": "Fabricant"/);
 });
 
 test("the Tile size field keeps working but no longer shows an example", () => {
@@ -94,33 +117,128 @@ test("every mandatory field is refused when empty, with its own message", () => 
   assert.equal(fillForm(app, valid({ pStock: "" })).values.stock, 0, "an empty stock quantity is accepted as 0, so it is not marked");
 });
 
-test("a product saved with a manufacturer still loads, edits, and keeps that data; new products have none", async () => {
+test("create with and without a manufacturer, edit it, change it, clear it, and keep it after a reload", async () => {
   const app = loadApp();
   assert.equal((await app.start()).mode, "ready");
-  const old = {
-    name: "Golden Era", manufacturer: "Garnada", tileSize: "60*120", coveragePerBox: 2.88, description: "", sku: "GE-1",
-    category: "", sellingPrice: 1000, priceUnit: "m2", stockUnit: "box", purchasePrice: null, stock: 4,
-  };
-  await app.api.addProduct(old);
-  const saved = app.api.getState().products[0];
-  assert.equal(saved.manufacturer, "Garnada");
-  assert.equal(app.api.productLabel(saved), "Golden Era — 60*120 — Garnada", "existing data is still shown");
 
-  app.api.startEditProduct(saved.id);                                    // must not need the removed field
-  const form = fillForm(app, valid({ pName: "Golden Era 2", pPrice: "1100", pPriceUnit: "m2", pStockUnit: "box", pCoveragePerBox: "2.88", pTileSize: "60*120", pSku: "GE-1" }));
-  assert.equal(form.error, undefined, form.error);
-  await app.api.updateProduct(saved.id, form.values);
-  const edited = app.api.getState().products[0];
-  assert.equal(edited.name, "Golden Era 2");
-  assert.equal(edited.manufacturer, "Garnada", "editing never wipes the stored manufacturer");
+  // created with a manufacturer
+  const a = fillForm(app, valid({ pName: "Marble", pSku: "M-1", pManufacturer: "VEGA" }));
+  await app.api.addProduct(a.values);
+  // created without one
+  const b = fillForm(app, valid({ pName: "Plain", pSku: "P-1" }));
+  await app.api.addProduct(b.values);
+  const byName = (api, name) => api.getState().products.find((p) => p.name === name);
+  assert.equal(byName(app.api, "Marble").manufacturer, "VEGA");
+  assert.equal(byName(app.api, "Plain").manufacturer, "");
+  assert.equal(app.api.productLabel(byName(app.api, "Marble")), "Marble — 60*60 — VEGA");
 
+  // Edit shows the saved value; a product without one shows an empty field
+  openEdit(app, byName(app.api, "Marble").id);
+  assert.equal(app.field("pManufacturer").value, "VEGA");
+  openEdit(app, byName(app.api, "Plain").id);
+  assert.equal(app.field("pManufacturer").value, "");
+
+  // Change it
+  const marbleId = byName(app.api, "Marble").id;
+  openEdit(app, marbleId);
+  app.field("pManufacturer").value = "Porcelanosa";
+  const changed = app.api.readProductForm();
+  assert.equal(changed.error, undefined, changed.error);
+  await app.api.updateProduct(marbleId, changed.values);
+  assert.equal(byName(app.api, "Marble").manufacturer, "Porcelanosa");
+
+  // Editing something else leaves it alone
+  openEdit(app, marbleId);
+  app.field("pPrice").value = "950";
+  await app.api.updateProduct(marbleId, app.api.readProductForm().values);
+  assert.equal(byName(app.api, "Marble").manufacturer, "Porcelanosa");
+  assert.equal(byName(app.api, "Marble").sellingPrice, 950);
+
+  // Add a manufacturer to the product that had none
+  const plainId = byName(app.api, "Plain").id;
+  openEdit(app, plainId);
+  app.field("pManufacturer").value = "Garnada";
+  await app.api.updateProduct(plainId, app.api.readProductForm().values);
+  assert.equal(byName(app.api, "Plain").manufacturer, "Garnada");
+
+  // It is still there after a reload (a new page on the same IndexedDB)
   const reloaded = loadApp({ indexedDB: app.indexedDB });
   await reloaded.start();
-  assert.equal(reloaded.api.getState().products[0].manufacturer, "Garnada");
+  assert.equal(byName(reloaded.api, "Marble").manufacturer, "Porcelanosa");
+  assert.equal(byName(reloaded.api, "Plain").manufacturer, "Garnada");
+  openEdit(reloaded, marbleId);
+  assert.equal(reloaded.field("pManufacturer").value, "Porcelanosa", "shown again when editing after the reload");
 
-  const fresh = fillForm(app, valid({ pName: "New one", pSku: "N-1" }));
-  await app.api.addProduct(fresh.values);
-  const added = app.api.getState().products.find((p) => p.name === "New one");
-  assert.equal(added.manufacturer, "", "a new product has no manufacturer");
+  // Clear it
+  reloaded.field("pManufacturer").value = "   ";
+  const cleared = reloaded.api.readProductForm();
+  assert.equal(cleared.error, undefined, cleared.error);
+  await reloaded.api.updateProduct(marbleId, cleared.values);
+  assert.equal(byName(reloaded.api, "Marble").manufacturer, "");
+  const again = loadApp({ indexedDB: app.indexedDB });
+  await again.start();
+  assert.equal(byName(again.api, "Marble").manufacturer, "", "the cleared value is what is saved");
+  assert.equal(byName(again.api, "Plain").manufacturer, "Garnada");
+});
+
+test("the manufacturer is part of a backup and comes back after a restore", async () => {
+  const app = loadApp();
+  await app.start();
+  await app.api.addProduct(fillForm(app, valid({ pName: "Marble", pSku: "M-1", pManufacturer: "VEGA" })).values);
+  await app.api.addProduct(fillForm(app, valid({ pName: "Plain", pSku: "P-1" })).values);
+  await app.api.exportBackup();
+  const text = await app.downloadedText();
+  const backup = JSON.parse(text);
+  assert.equal(backup.data.products.find((p) => p.name === "Marble").manufacturer, "VEGA");
+
+  const target = loadApp();
+  await target.start();
+  await target.api.importBackup(target.file(text));
+  const restored = target.api.getState().products;
+  assert.equal(restored.find((p) => p.name === "Marble").manufacturer, "VEGA");
+  assert.equal(restored.find((p) => p.name === "Plain").manufacturer, "");
+  openEdit(target, restored.find((p) => p.name === "Marble").id);
+  assert.equal(target.field("pManufacturer").value, "VEGA");
+});
+
+test("a product saved before the field existed (no manufacturer at all) still loads, edits and saves", async () => {
+  // a backup whose product has no "manufacturer" key, like data saved by an older version
+  const source = loadApp();
+  await source.start();
+  await source.api.addProduct(fillForm(source, valid({ pName: "Old tile", pSku: "O-1" })).values);
+  await source.api.exportBackup();
+  const backup = JSON.parse(await source.downloadedText());
+  delete backup.data.products[0].manufacturer;
+  assert.equal("manufacturer" in backup.data.products[0], false);
+
+  const app = loadApp();
+  await app.start();
+  await app.api.importBackup(app.file(JSON.stringify(backup)));
+  const old = app.api.getState().products[0];
+  assert.equal(old.name, "Old tile");
+  assert.equal(old.manufacturer, "", "a missing manufacturer reads as empty");
+  assert.equal(app.api.productLabel(old), "Old tile — 60*60", "no stray 'undefined' in labels");
   assert.equal(app.api.findMatches("undefined").length, 0, "the search text never contains the word 'undefined'");
+
+  openEdit(app, old.id);
+  assert.equal(app.field("pManufacturer").value, "", "the field is empty, not 'undefined'");
+  app.field("pPrice").value = "900";
+  const edited = app.api.readProductForm();
+  assert.equal(edited.error, undefined, edited.error);
+  await app.api.updateProduct(old.id, edited.values);
+  assert.equal(app.api.getState().products[0].sellingPrice, 900);
+  assert.equal(app.api.getState().products[0].manufacturer, "");
+});
+
+test("a product saved with a manufacturer by the previous version is still shown, searched and kept", async () => {
+  const app = loadApp();
+  assert.equal((await app.start()).mode, "ready");
+  await app.api.addProduct({
+    name: "Golden Era", manufacturer: "Garnada", tileSize: "60*120", coveragePerBox: 2.88, description: "", sku: "GE-1",
+    category: "", sellingPrice: 1000, priceUnit: "m2", stockUnit: "box", purchasePrice: null, stock: 4,
+  });
+  const saved = app.api.getState().products[0];
+  assert.equal(saved.manufacturer, "Garnada");
+  assert.equal(app.api.productLabel(saved), "Golden Era — 60*120 — Garnada");
+  assert.equal(app.api.findMatches("garnada").length, 1, "found by manufacturer");
 });

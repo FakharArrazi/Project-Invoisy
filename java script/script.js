@@ -828,6 +828,7 @@ function readProductForm() {
   return {
     values: {
       name,
+      manufacturer: get("pManufacturer"),
       tileSize,
       coveragePerBox: coverageRaw === "" ? null : coveragePerBox,
       description: get("pDesc"),
@@ -916,6 +917,7 @@ function startEditProduct(id) {
   if (!p) return;
   state.editingId = id;
   $("pName").value = p.name;
+  $("pManufacturer").value = p.manufacturer || "";   // empty for products saved without one
   $("pTileSize").value = p.tileSize;
   $("pCoveragePerBox").value = p.coveragePerBox == null ? "" : p.coveragePerBox;
   $("pDesc").value = p.description;

@@ -49,9 +49,10 @@ language files.
 ## Stock form
 
 Mandatory fields have a small * on their label: product name, selling price, price unit and stock unit
-(and coverage per box while the price is per m²). Everything else may be left empty. Products saved
-before the Manufacturer / Brand field was removed keep that value (it is still shown on the invoice
-and found by search) but it is no longer asked for or editable.
+(and coverage per box while the price is per m²). Everything else may be left empty, including
+**Manufacturer** (a free-text brand or manufacturer name such as VEGA or Porcelanosa). It is saved with the
+product, can be changed or cleared when editing, is shown on the invoice and found by search, and is
+included in backups. Products saved without one keep working unchanged.
 
 ## Suppliers and purchases
 
