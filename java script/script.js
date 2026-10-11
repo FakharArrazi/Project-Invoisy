@@ -193,6 +193,10 @@ function draftFromState() {
 
 const db = InvoisyDB.create();
 
+// The automatic backup file (autobackup.js). It listens to the database's "commit" event (see below), so every
+// change saved through database.js is covered without any screen having to ask for it.
+const autoBackup = AutoBackup.create({ db });
+
 const storage = {
   mode: "connecting",     // connecting | ready | unavailable | failed | outdated
   reason: "",             // why the database can not be used (shown to the person)
@@ -403,6 +407,9 @@ async function initStorage() {
   setStorageMode("ready");
   refreshAfterLoad();
   refreshQuota();
+  // Reconnects to the backup file chosen earlier and, if the database is ahead of it, brings it up to date. This
+  // never waits for the file, never prompts, and a problem with the file never affects the database.
+  autoBackup.start().catch(() => {});
   if (notice) notify(notice);
 }
 
@@ -527,6 +534,94 @@ function importBackup(file) {
   });
 }
 
+/* -- Automatic backup file: choose it, grant access again, retry -- */
+
+// Is what a file holds the same data as the database? Both sides went through the same reader, so they compare directly.
+function sameBackupData(a, b) {
+  const pick = (d) => ({ products: d.products, invoices: d.invoices, settings: d.settings, counter: d.counter });
+  return Validation.sameValue(pick(a), pick(b));
+}
+
+// Choose backup file. A file that already holds something is never replaced quietly: it must be an Invoisy backup,
+// Invoisy must have data of its own (an empty Invoisy never overwrites a file that has data: restore it first),
+// the person confirms, and a copy of the file as it is now is downloaded. Nothing is ever restored from here.
+function connectBackupFile() {
+  return guard(async () => {
+    showError("dataError", "");
+    let chosen;
+    try {
+      chosen = await autoBackup.pickFile();   // first, while the click still counts
+    } catch (e) {
+      reportDataProblem(t("auto.pickFailed", { error: errorText(e) }));
+      return;
+    }
+    if (!chosen) return;   // cancelled
+    await storage.ready;
+    if (!canWrite()) { reportDataProblem(blockedMessage()); return; }
+
+    let current;
+    try {
+      current = await db.loadAll();
+    } catch (e) {
+      reportDataProblem(t("storage.readFailed", { error: errorText(e) }));
+      return;
+    }
+    const seen = await autoBackup.inspect(chosen);
+    if (seen.kind === "unreadable") { reportDataProblem(seen.error); return; }
+    if (seen.kind === "foreign") { reportDataProblem(t("auto.notBackup", { error: seen.error })); return; }
+
+    if (seen.kind === "invoisy") {
+      const mine = Validation.prepareBackupFile(current, new Date());
+      if (mine.error) { reportDataProblem(mine.error); return; }
+      if (!sameBackupData(Validation.parseBackup(mine.text).data, seen.parsed.data)) {
+        const inFile = describeData(seen.parsed.data);
+        if (!Validation.hasMeaningfulData(current)) { reportDataProblem(t("auto.fileHasData", { file: inFile })); return; }
+        const made = formatDateTime(seen.parsed.exportedAt) || t("storage.unknown");
+        if (!confirm(t("auto.confirmReplace", { file: inFile, made, current: describeData(current) }))) { notify(t("auto.cancelled")); return; }
+        try {
+          downloadText(seen.text, Validation.backupFileName(new Date(), "invoisy-before-autobackup"));
+        } catch (e) {
+          reportDataProblem(t("auto.safetyFailed", { error: errorText(e) }));
+          return;
+        }
+      }
+    }
+
+    let result;
+    try {
+      result = await autoBackup.attach(chosen);
+    } catch (e) {
+      reportDataProblem(errorText(e));
+      return;
+    }
+    const parts = [];
+    let kind;
+    if (result.status.state === "current") {
+      parts.push(t("auto.connected", { name: result.status.fileName }));
+    } else {
+      parts.push(t("auto.connectedPending", { error: result.status.error }));
+      kind = "error";
+    }
+    if (!result.remembered) { parts.push(t("auto.notRemembered")); kind = "error"; }
+    notify(parts.join(" "), kind);
+  });
+}
+
+function reportAutoBackupResult(status) {
+  if (status.state === "needs-permission") notify(t("auto.permissionStillNeeded"), "error");
+  else if (status.state === "current") notify(t("auto.nowCurrent"));
+  else if (status.error) notify(status.error, "error");
+}
+
+// Needs a click: the browser only shows its permission question after one.
+function grantBackupPermission() {
+  return guard(async () => { reportAutoBackupResult(await autoBackup.grant()); });
+}
+
+function retryBackupFile() {
+  return guard(async () => { reportAutoBackupResult(await autoBackup.retry()); });
+}
+
 function saveBackupInterval() {
   return guard(async () => {
     const days = Number($("backupDays").value);
@@ -607,6 +702,11 @@ db.on("change", (message) => {
     refreshAfterLoad();
   }).catch(() => {});
 });
+// The automatic backup file. "commit" comes from database.js after a transaction in THIS window really committed
+// a change; "change" is another window's commit (that window may not have the file connected, this one may).
+db.on("commit", (message) => autoBackup.notifyCommitted(message.revision));
+db.on("change", (message) => autoBackup.notifyCommitted(message.revision));
+autoBackup.on(() => { try { renderStorage(); } catch { /* status only */ } });
 
 /* ==========================================================================
    PRODUCTS
@@ -1782,12 +1882,66 @@ function quotaText() {
 // The small reminder in the top bar. It never opens a dialog and never blocks a sale.
 function renderReminder() {
   const hasData = storage.mode === "ready" && (state.products.length > 0 || state.invoices.length > 0);
-  const reminder = Validation.backupReminder(storage.backup, hasData, new Date());
   const button = $("backupReminder");
-  button.hidden = !reminder.text;
+  const auto = autoBackup.getStatus();
+  // An automatic backup file that is not being kept up to date is worth a warning at the top: it opens Settings.
+  if (storage.mode === "ready" && auto.attention) {
+    button.hidden = false;
+    button.dataset.mode = "auto";
+    button.textContent = t("auto.reminderText");
+    button.title = t("auto.reminderTitle");
+    button.className = "backup-reminder no-print overdue";
+    button.disabled = false;
+    return;
+  }
+  const reminder = Validation.backupReminder(storage.backup, hasData, new Date());
+  // While the automatic backup file is verified to be current, the "export a backup" reminder is not needed.
+  button.hidden = !reminder.text || auto.state === "current";
+  button.dataset.mode = "";
+  button.title = t("backup.reminderTitle");
   button.textContent = reminder.text ? t("reminder.action", { text: reminder.text }) : "";
   button.className = "backup-reminder no-print " + reminder.level;
   button.disabled = busy;
+}
+
+const AUTO_STATUS_TEXT = {
+  current: "auto.status.current",
+  pending: "auto.status.pending",
+  writing: "auto.status.writing",
+  error: "auto.status.error",
+  "needs-permission": "auto.status.needsPermission",
+  "file-newer": "auto.status.fileNewer",
+  "not-connected": "auto.status.notConnected",
+  unsupported: "auto.status.unsupported",
+};
+
+// The "Automatic backup file" section of Settings. "Backup current" is only ever shown for a file that was written
+// (or found to hold the latest revision) and read back; a write that has merely started never counts.
+function renderAutoBackup() {
+  const s = autoBackup.getStatus();
+  const locked = busy || storage.mode !== "ready";
+  const connection = s.state === "unsupported" ? "auto.connection.unsupported"
+    : !s.connected ? "auto.connection.notConnected"
+    : s.state === "needs-permission" ? "auto.connection.needsPermission"
+    : "auto.connection.connected";
+  $("autoNote").textContent = s.state === "unsupported" ? t("auto.unsupportedNote")
+    : s.state === "not-connected" ? t("auto.notConnectedNote", { name: AutoBackup.FILE_NAME }) + " " + t("auto.intro")
+    : t("auto.intro");
+  $("autoConnection").textContent = t(connection);
+  $("autoFile").textContent = s.fileName || "-";
+  $("autoStatus").textContent = t(AUTO_STATUS_TEXT[s.state]);
+  $("autoStatus").className = "state-" + s.state;
+  $("autoLast").textContent = s.lastSuccessAt ? formatDateTime(s.lastSuccessAt) : t("storage.never");
+  $("autoDbRevision").textContent = s.latestRevision === null ? t("auto.unknown") : String(s.latestRevision);
+  $("autoBackedRevision").textContent = s.lastRevision === null ? t("auto.none") : String(s.lastRevision);
+  $("autoError").textContent = s.error || t("auto.none");
+  $("autoChoose").hidden = s.state === "unsupported";
+  $("autoChoose").textContent = t(s.connected ? "auto.chooseOther" : "auto.choose");
+  $("autoChoose").disabled = locked;
+  $("autoGrant").hidden = s.state !== "needs-permission";
+  $("autoGrant").disabled = busy;
+  $("autoRetry").hidden = !(s.connected && (s.state === "error" || s.state === "pending"));
+  $("autoRetry").disabled = busy;
 }
 
 // What happened to the data older versions kept in this browser, and what can still be done about it.
@@ -1870,6 +2024,7 @@ function renderStorage() {
   $("persistBtn").hidden = storage.persisted !== false;
   $("persistBtn").disabled = busy;
   renderReminder();
+  renderAutoBackup();
   renderLegacy();
 }
 
@@ -2219,7 +2374,15 @@ function bindEvents() {
 
   // Data storage
   $("exportBackup").addEventListener("click", exportBackup);
-  $("backupReminder").addEventListener("click", exportBackup);
+  $("backupReminder").addEventListener("click", () => {
+    if ($("backupReminder").dataset.mode === "auto") showView("settings");
+    else exportBackup();
+  });
+  $("autoChoose").addEventListener("click", connectBackupFile);
+  $("autoGrant").addEventListener("click", grantBackupPermission);
+  $("autoRetry").addEventListener("click", retryBackupFile);
+  // Coming back to this window is a good moment to try a backup that is waiting (a drive plugged back in, say).
+  window.addEventListener("focus", () => { autoBackup.nudge().catch(() => {}); });
   $("importBackup").addEventListener("click", () => $("importFile").click());
   $("importFile").addEventListener("change", (e) => { importBackup(e.target.files[0]); e.target.value = ""; });
   $("backupForm").addEventListener("submit", (e) => { e.preventDefault(); saveBackupInterval(); });
@@ -2282,6 +2445,9 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     applyData,
     commit,
     db,
+    autoBackup,
+    renderAutoBackup,
+    connectBackupFile,
     startStorage,
     loadFromDatabase,
     addProduct,

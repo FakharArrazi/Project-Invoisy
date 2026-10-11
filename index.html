@@ -364,6 +364,24 @@
           </div>
         </div>
       </div>
+      <div class="panel" id="autoBackupPanel">
+        <h2 data-i18n="auto.title">Automatic backup file</h2>
+        <p class="muted small" id="autoNote"></p>
+        <dl class="data-info" id="autoInfo">
+          <dt data-i18n="auto.row.connection">Backup file</dt><dd id="autoConnection"></dd>
+          <dt data-i18n="auto.row.file">File name</dt><dd id="autoFile"></dd>
+          <dt data-i18n="auto.row.status">Backup status</dt><dd id="autoStatus"></dd>
+          <dt data-i18n="auto.row.lastSuccess">Last successful backup</dt><dd id="autoLast"></dd>
+          <dt data-i18n="auto.row.dbRevision">Latest database revision</dt><dd id="autoDbRevision"></dd>
+          <dt data-i18n="auto.row.backedRevision">Last backed-up revision</dt><dd id="autoBackedRevision"></dd>
+          <dt data-i18n="auto.row.error">Last error</dt><dd id="autoError"></dd>
+        </dl>
+        <div class="actions left wrap">
+          <button type="button" class="btn primary" id="autoChoose">Choose backup file</button>
+          <button type="button" class="btn" id="autoGrant" data-i18n="auto.grant" hidden>Grant permission</button>
+          <button type="button" class="btn" id="autoRetry" data-i18n="auto.retry" hidden>Retry backup</button>
+        </div>
+      </div>
       <div class="panel">
         <h2 data-i18n="settings.business">Business details</h2>
         <form id="settingsForm" novalidate>
@@ -463,6 +481,7 @@
 <script src="java script/calc.js"></script>
 <script src="java script/validation.js"></script>
 <script src="java script/database.js"></script>
+<script src="java script/autobackup.js"></script>
 <script src="java script/script.js"></script>
 </body>
 </html>

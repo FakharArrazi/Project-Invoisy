@@ -351,6 +351,9 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 #dataState { font-weight: 600; }
 #dataState.state-ready { color: #1e7a3c; }
 #dataState.state-unavailable, #dataState.state-failed, #dataState.state-outdated { color: var(--danger); }
+#autoStatus.state-current { color: #1e7a3c; }
+#autoStatus.state-error, #autoStatus.state-needs-permission, #autoStatus.state-file-newer { color: var(--danger); }
+#autoError { color: var(--danger); }
 #dataState.state-connecting { color: #9a5b00; }
 
 /* Backup reminder: a small pill in the top bar. It never opens a dialog and never blocks a sale. */

@@ -445,11 +445,16 @@
 
   // The backup file. `snapshot` is what database.js reads: { products, invoices, settings, counter }.
   // Customers and payments are saved inside each invoice, so there are no separate lists for them.
+  // `revision` (the database revision the snapshot was read at) is optional and only written when the snapshot
+  // has one. Older Invoisy versions ignore it, so the format version stays 1. The automatic backup file uses it
+  // to know which state of the database the file holds.
   function buildBackup(snapshot, now) {
+    const revision = Number.isInteger(snapshot.revision) && snapshot.revision >= 0 ? { revision: snapshot.revision } : {};
     return {
       application: APP_NAME,
       formatVersion: BACKUP_FORMAT_VERSION,
       exportedAt: (now || new Date()).toISOString(),
+      ...revision,
       counts: { products: snapshot.products.length, invoices: snapshot.invoices.length },
       data: {
         products: snapshot.products,
@@ -494,6 +499,7 @@
     let format;
     let exportedAt = "";
     let counts = null;
+    let revision = null;
     if (raw.application !== undefined) {
       if (raw.application !== APP_NAME) return { error: t("backup.otherApp") };
       if (!Number.isInteger(raw.formatVersion) || raw.formatVersion < 1) return { error: t("backup.noFormat") };
@@ -503,6 +509,7 @@
       format = "backup";
       exportedAt = isDate(raw.exportedAt) ? raw.exportedAt : "";
       counts = isObj(raw.counts) ? raw.counts : null;
+      revision = Number.isInteger(raw.revision) && raw.revision >= 0 ? raw.revision : null;
     } else if (raw.version !== undefined || (Array.isArray(raw.products) && Array.isArray(raw.invoices))) {
       inner = raw;
       format = "legacy-file";
@@ -519,7 +526,7 @@
     }
     const warnings = [...built.warnings];
     if (!exportedAt) warnings.push(t("warn.noExportDate"));
-    return { format, exportedAt, data: built.data, warnings };
+    return { format, exportedAt, revision, data: built.data, warnings };
   }
 
   /* ---------- Data an older version left in the browser (localStorage) ---------- */

@@ -26,6 +26,9 @@
        is the last line of defence against two invoices with the same number.
      - Nothing here ever clears the database as error recovery. The only operations that replace data
        are restore() and the first-run migration, and both verify what they wrote before it commits.
+     - After EVERY committed change to business data a "commit" event is emitted (see markCommit below). The
+       automatic backup file (autobackup.js) listens to it. It is never emitted for a transaction that aborts,
+       for a read, or for a write that only touches the meta store (backup bookkeeping, migration notes).
    ========================================================================== */
 
 (function () {
@@ -49,6 +52,18 @@
   const BACKUP_KEY = "backup";
   const MIGRATION_VERSION = 1;
   const MAX_REJECTED_KEPT = 200;
+
+  /* ---------- Commit marking ---------- */
+
+  // The revision in meta/state is moved on by exactly two pieces of code (commitInTx and writeDataset), and
+  // every change to business data goes through one of them. They call markCommit(tx, revision); withTx() then
+  // emits "commit" once the transaction has really committed. A transaction that aborts never gets that far.
+  // A future write that moves the revision on through the same helper is covered without touching anything else.
+  const committedRevision = new WeakMap();
+
+  function markCommit(tx, revision) {
+    committedRevision.set(tx, revision);
+  }
 
   /* ---------- Errors ---------- */
 
@@ -209,7 +224,7 @@
     const opts = options || {};
     const name = opts.name || DB_NAME;
     const instanceId = Math.random().toString(36).slice(2);
-    const listeners = { versionchange: [], blocked: [], closed: [], change: [] };
+    const listeners = { versionchange: [], blocked: [], closed: [], change: [], commit: [] };
     let conn = null;
     let channel = null;
 
@@ -308,6 +323,9 @@
       } catch (e) {
         throw wrapError(e);
       }
+      // The transaction has committed. If it moved the revision on, tell the listeners (they must not throw:
+      // emit() contains any failure, and a committed change is never undone or delayed by a listener).
+      if (committedRevision.has(tx)) emit("commit", { revision: committedRevision.get(tx) });
       return result;
     }
 
@@ -358,6 +376,12 @@
         ]);
         return assemble(products, invoices, settingsRecord, counterRecord, stateRecord);
       });
+    }
+
+    // The current database revision (0 for a database nothing was ever saved in). Reads one small record.
+    async function getRevision() {
+      const record = await withTx([META], "readonly", (tx) => req(tx.objectStore(META).get(STATE_KEY)));
+      return record && record.value && Number.isInteger(record.value.revision) ? record.value.revision : 0;
     }
 
     async function getSettings() {
@@ -434,6 +458,7 @@
       const lastSaved = new Date(Math.max(Date.parse(nowIso()), Number.isNaN(previous) ? 0 : previous + 1)).toISOString();
       const revision = state.revision + 1;
       meta.put({ key: STATE_KEY, value: { revision, lastSaved } });
+      markCommit(tx, revision);
       return { revision, lastSaved, counter: next };
     }
 
@@ -506,6 +531,7 @@
       tx.objectStore(SETTINGS).put({ key: SETTINGS_KEY, value: data.settings });
       tx.objectStore(COUNTERS).put({ name: COUNTER_NAME, value: counter });
       tx.objectStore(META).put({ key: STATE_KEY, value: state });
+      markCommit(tx, state.revision);
     }
 
     // Reads back, inside the same transaction, what was just written. If anything differs the
@@ -745,7 +771,7 @@
       initDatabase, close,
       on(event, fn) { if (listeners[event]) listeners[event].push(fn); },
       getAll, getById, count, add, update, remove,
-      loadAll, getSettings, saveSettings, getInvoiceCounter, getNextInvoiceNumber,
+      loadAll, getRevision, getSettings, saveSettings, getInvoiceCounter, getNextInvoiceNumber,
       commitChanges, restore,
       getMeta, setMeta, getBackupInfo, recordBackup, setBackupInterval,
       migrateLegacy, getMigrationRecord, skipMigration, updateMigrationRecord, removeLegacyData,

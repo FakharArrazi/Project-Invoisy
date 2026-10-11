@@ -66,6 +66,19 @@ Two things follow from that, and both are worth knowing:
 
 Backups from the previous version (`invoisy-data.json`) can also be restored.
 
+## Automatic backup file (Settings, Automatic backup file)
+
+Invoisy can keep one file, `invoisy-data.json`, up to date by itself: after every saved change (a product, stock, a sale, a payment, settings, the invoice counter) the whole database is written to it. You do not have to press Export Backup. The browser database stays the only place Invoisy reads from; the file is a copy.
+
+- **Turning it on:** Settings, Automatic backup file, **Choose backup file**. You pick (or create) the file in the browser's own Save dialog. The browser remembers your choice; after a restart it may ask you to allow writing again (Settings then shows **Grant permission**).
+- **A file that already has something in it is never replaced quietly.** It must be an Invoisy backup (or the previous version's data file). If Invoisy has no data of its own, nothing is written (restore the file first with Import / Restore Backup). If both have data and they differ, you are asked, and a copy of the file as it is now is downloaded first (`invoisy-before-autobackup-YYYY-MM-DD.json`).
+- **The file is never loaded back automatically.** Restoring is only ever Import / Restore Backup, which asks first.
+- **Settings shows** whether the file is connected, its name, the last successful backup, the latest database revision, the last backed-up revision, whether the backup is current or pending, and the last error. "Backup current" is shown only after the file was written *and read back* with the latest revision.
+- **If writing fails** (file moved or deleted, disk full, drive unplugged, access withdrawn) the change you made is still saved in the browser database. The backup stays "pending", is retried three times with growing pauses, and is tried again after the next change, when you come back to the window, or when you press **Retry backup**. A warning also appears in the top bar.
+- **Safe writing:** quick changes are folded into one write; one write at a time (across windows too); the browser writes a temporary copy and swaps it in only when it is complete, so a failed write leaves the previous file as it was. A file that holds a *newer* revision than the database is not overwritten.
+- **Browsers:** needs the File System Access API (Chrome, Edge, Opera on a computer). Firefox and Safari do not have it: Settings says so, nothing is pretended, and Export Backup is the way to back up.
+- The backup file has the same format as Export Backup, plus a `revision` (the database revision it holds). Older Invoisy versions ignore that field.
+
 ## Updating from the previous version
 
 The previous version kept its data in a data file plus a copy in the browser's localStorage. On first start the new version copies that localStorage data into IndexedDB, checks the copy, and leaves the old data exactly where it was (nothing is deleted). Settings explains what happened. If you used a data file, load it with Import / Restore Backup if it has newer data than the browser copy. The old copy can be removed from Settings once you have exported a backup.
@@ -79,6 +92,7 @@ java script/i18n.js, lang/    the language layer and the English / French texts
 java script/calc.js           unit conversion and price maths
 java script/validation.js     the shape and rules of the data; backup file format; reminder rule; old-data reader
 java script/database.js       the IndexedDB layer (the only code that touches IndexedDB)
+java script/autobackup.js     the automatic backup file (file handle, write queue, status)
 java script/script.js         the screens
 ```
 
@@ -86,6 +100,8 @@ Scripts load in that order (see the end of `index.html`). Every message the pers
 
 - Schema version 2, database name `invoisy`. Stores: `products`, `invoices` (unique `invoiceNumber`), `settings`, `counters`, `meta`. Customers and payments are stored inside each invoice.
 - A sale (invoice + stock deduction + invoice counter) is one transaction. Every write also checks the database revision it started from, so a second open window can not overwrite a change it has not seen.
+- Every committed change to business data moves the revision on in one of two places (`commitInTx`, `writeDataset`); both call `markCommit`, and `withTx` emits a `commit` event only after the transaction has really committed. `autobackup.js` listens to that event, so a new feature that saves through `database.js` is covered without touching the backup code. The file handle and backup notes are kept in the `meta` store (no schema change).
+- `tests/autobackup.test.js` covers the commit event and the backup file with a stand-in file handle. `tests/e2e/autobackup_check.py` is an optional real-browser check of it (real IndexedDB and a real `FileSystemFileHandle` from the browser's private file system; only the operating system's Save dialog is replaced).
 - `tests/e2e/browser_check.py` is an optional real-browser check (Playwright + Chromium, opened over `file://`, disposable profile).
 
 ## Known limits
@@ -93,3 +109,5 @@ Scripts load in that order (see the end of `index.html`). Every message the pers
 - Invoisy can not see where a downloaded backup is stored or whether it is kept.
 - Two windows can be open at once; if both change data at the same time, the second save is refused with a message to repeat the action, with the latest data already loaded.
 - Data entered in an old Invoisy window that is still open after updating is not picked up automatically; close old windows before updating.
+- Automatic backup file, not verified in a real browser: the operating system's Save dialog itself, the browser asking again for permission after a restart, and use over `file://` (Chromium does not offer its private file system there, so the real-browser check runs over a local web server). These are covered only by the stand-in tests. Two browsers or profiles pointed at the same file will keep refusing to overwrite each other's newer data; use one.
+- There is no button to switch the automatic backup off; choose a different file, or clear the site data.
