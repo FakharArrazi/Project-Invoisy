@@ -88,8 +88,9 @@ function customerLabel(name) {
 /* ---------- Data model ---------- */
 
 // Units a line on a sale can be sold in. The unit belongs to the sale line, not to the product.
-// m² can be typed when adding to a sale, but it is converted to boxes and never stored on a sale line.
-const SALE_LINE_UNITS = ["piece", "box", "kg", "m"];
+// m² is a real selling unit: a line sold by the m² keeps its area and its price per m²; stock is taken out
+// converted to the product's stock unit by Calc (fractions of a box included).
+const SALE_LINE_UNITS = ["piece", "box", "m2", "kg", "m"];
 // "Box", or "Boxes" when given a quantity other than 1, in the current language; "" for no/unknown unit.
 const unitLabel = Calc.unitLabel;
 
@@ -1024,21 +1025,10 @@ function fitQuantity(product, unit, remaining) {
 function addToSale(productId, rawQty, rawUnit) {
   const product = findProduct(productId);
   if (!product) return { error: t("product.selectFirst") };
-  let qty;
-  let sellingUnit = SALE_LINE_UNITS.includes(rawUnit) ? rawUnit : "piece";
-  let converted = null;
-  if (rawUnit === "m2") {
-    // Typed in m²: work out how many whole boxes cover that area (rounded up).
-    const area = Calc.boxesForArea(product, rawQty);
-    if (area.error) return { error: area.error };
-    converted = { area: area.area, boxes: area.boxes, coverage: area.coverage };
-    qty = area.boxes;
-    sellingUnit = "box";
-  } else {
-    const checked = Calc.validateQuantity(rawQty, sellingUnit);
-    if (checked.error) return { error: checked.error };
-    qty = checked.value;
-  }
+  const sellingUnit = SALE_LINE_UNITS.includes(rawUnit) ? rawUnit : "piece";
+  const checked = Calc.validateQuantity(rawQty, sellingUnit);
+  if (checked.error) return { error: checked.error };
+  const qty = checked.value;
 
   // The price of one unit comes from the selling price and its price unit (1,500 DA per m² -> 2,160 DA per box).
   const priced = Calc.getUnitPrice(product, sellingUnit);
@@ -1052,7 +1042,7 @@ function addToSale(productId, rawQty, rawUnit) {
   const item = state.sale.items.find((i) => i.productId === productId && i.sellingUnit === sellingUnit);
   if (item) item.qty = Calc.cleanNumber(item.qty + qty);
   else state.sale.items.push({ lineId: uid(), productId, qty, sellingUnit, unitPrice: priced.value, listPrice: priced.value, priceOverridden: false });
-  return { ok: true, converted };
+  return { ok: true };
 }
 
 // Changing the unit keeps the quantity typed and works out the price (and stock use) for the new unit.
@@ -1082,11 +1072,13 @@ function updateSaleUnit(lineId, rawUnit) {
     state.sale.items = state.sale.items.filter((i) => i !== item);
     return { merged: true };
   }
-  // A price typed by hand on this line is replaced by the new unit's calculated price.
+  // A price typed by hand on this line was for the old unit, so it is replaced by the new unit's price
+  // (the saved price for that unit, or the conversion of it). The caller tells the person.
+  const priceReset = Boolean(item.priceOverridden);
   item.unitPrice = priced.value;
   item.listPrice = priced.value;
   item.priceOverridden = false;
-  return {};
+  return priceReset ? { priceReset: true } : {};
 }
 
 function removeFromSale(lineId) {
@@ -1119,9 +1111,12 @@ function updateSalePrice(lineId, rawPrice) {
   if (rawPrice === "" || !Number.isFinite(price)) return { error: t("sale.enterPrice") };
   if (price < 0) return { error: t("sale.priceNegative") };
   // A hand-typed price belongs to this sale line only. The product's own price is never touched,
-  // and changing the unit later goes back to the calculated price.
-  item.unitPrice = price;
-  item.priceOverridden = round2(price) !== round2(toNumber(item.listPrice));
+  // and changing the unit later goes back to the calculated price. Money has 2 decimals everywhere
+  // in the app, so the price is kept to 2 decimals: the line, the subtotal and the invoice then agree.
+  const rounded = Calc.roundMoney(price);
+  if (!Number.isFinite(Calc.calculateLineTotal(item.qty, rounded))) return { error: t("sale.enterPrice") };
+  item.unitPrice = rounded;
+  item.priceOverridden = rounded !== round2(toNumber(item.listPrice));
   return {};
 }
 
@@ -1200,6 +1195,17 @@ function validateSale() {
   return errors;
 }
 
+// A product's price can change in Stock while it sits in the sale. A line at the normal price follows the
+// new saved price; a line with a hand-typed price keeps exactly what was typed (only its reference changes).
+function repriceLine(item, product) {
+  const priced = Calc.getUnitPrice(product, item.sellingUnit);
+  if (priced.error) return;
+  item.listPrice = priced.value;
+  if (item.priceOverridden && round2(item.unitPrice) !== round2(priced.value)) return;
+  item.unitPrice = priced.value;
+  item.priceOverridden = false;
+}
+
 // Keeps the sale in line with the inventory (deleted products, stock lowered elsewhere).
 function syncSaleWithProducts() {
   const notes = [];
@@ -1207,6 +1213,7 @@ function syncSaleWithProducts() {
   state.sale.items = state.sale.items.filter((item) => {
     const p = findProduct(item.productId);
     if (!p) { notes.push(t("sale.removedGone")); return false; }
+    repriceLine(item, p);
     const left = Calc.cleanNumber(p.stock - (used.get(p.id) || 0));
     let need = Calc.stockDeduction(p, item.qty, item.sellingUnit);
     if (need.error) { notes.push(t("sale.removedError", { error: need.error })); return false; }
@@ -1261,6 +1268,9 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
       sku: p ? p.sku : "",
       qty: item.qty,
       unitPrice: item.unitPrice,
+      // The unit the charged unitPrice is for (always the unit sold), kept next to the price so the
+      // line never depends on the product's current data to say what the price is per.
+      unitPriceUnit: SELLING_UNITS.includes(item.sellingUnit) ? item.sellingUnit : "piece",
       total: Calc.calculateLineTotal(item.qty, item.unitPrice),
       // What the price was worked out from, kept so the line can be audited later. A saved invoice
       // is never recalculated from the product's current price, size or coverage.
@@ -1499,9 +1509,8 @@ function renderSelected() {
   syncAddUnit(p);
 }
 
-// Can this product be added to a sale in this unit? ("m²" is typed as an area and turned into boxes.)
+// Can this product be added to a sale in this unit? ("" when yes, otherwise the reason.)
 function unitProblem(product, unit) {
-  if (unit === "m2") return Calc.getBoxCoverage(product).error || unitProblem(product, "box");
   return Calc.checkSellable(product, unit).error || "";
 }
 
@@ -1537,13 +1546,19 @@ function unitOptions(selected, product) {
   }).join("");
 }
 
+// "DA/m²", "DA/piece", "DA/box": what the unit price typed on a sale line is for (one selected selling unit).
+function linePriceUnit(item) {
+  const unit = unitLabel(item.sellingUnit, 1).toLowerCase();
+  return t("sell.priceUnit", { currency: state.settings.currency, unit });
+}
+
 // Shows the product's own price and unit from Stock, and how the line's price follows from it:
 // "Product price: 1,500 DA / m² (1 Box = 1.44 m²)". Old products without a price unit show nothing.
 function priceNote(item) {
   const p = findProduct(item.productId);
   const priced = p ? Calc.getUnitPrice(p, item.sellingUnit) : null;
   if (!priced || priced.error) return "";
-  if (item.priceOverridden) return t("sell.customPrice", { price: money(item.listPrice) });
+  if (item.priceOverridden) return t("sell.customPrice", { price: `${numberFormat.format(item.listPrice)} ${linePriceUnit(item)}` });
   if (priced.legacy) return "";
   const params = { price: money(priced.basePrice), priceUnit: unitLabel(priced.priceUnit) };
   if (priced.factor === 1) return t("sell.priceNote", params);
@@ -1561,10 +1576,16 @@ function priceNote(item) {
 // A line whose price was typed by hand, or an old line without a price unit, shows the price that was
 // really charged, per unit sold.
 function invoiceLinePrice(item) {
-  const charged = { price: item.unitPrice, unit: item.sellingUnit || null, qtyInPriceUnit: null };
+  const charged = { price: item.unitPrice, unit: item.unitPriceUnit || item.sellingUnit || null, qtyInPriceUnit: null };
   if (item.priceOverridden || !Calc.isUnit(item.priceUnit)) return charged;
   const base = Number(item.productPrice);
   if (item.productPrice == null || !Number.isFinite(base) || base < 0) return charged;
+  // The product's price is only shown when it really is the price charged: worked out again from this
+  // line's own saved details, it must give the saved unit price. Otherwise the charged price is shown.
+  const perSoldUnit = !item.sellingUnit || item.sellingUnit === item.priceUnit
+    ? { value: 1 }
+    : Calc.convertQuantity(1, item.sellingUnit, item.priceUnit, item);
+  if (perSoldUnit.error || Math.abs(Calc.roundMoney(base * perSoldUnit.value) - toNumber(item.unitPrice)) > 0.005) return charged;
   if (!item.sellingUnit || item.sellingUnit === item.priceUnit) return { price: base, unit: item.priceUnit, qtyInPriceUnit: null };
   const converted = Calc.convertQuantity(item.qty, item.sellingUnit, item.priceUnit, item);
   if (converted.error) return charged;
@@ -1584,7 +1605,8 @@ function renderSale() {
         `<td><div>${esc(name)}</div><div class="muted small">${esc(t("sell.available", { n: p ? stockLabel(p) : 0 }))}</div><div class="error small" data-row-error></div></td>` +
         `<td class="num"><div class="qty-cell"><input class="qty-input" type="number" min="${whole ? 1 : 0}" step="${whole ? 1 : "any"}" value="${item.qty}" data-field="qty" aria-label="${esc(t("sell.qtyAria", { name }))}">` +
         `<select class="unit-select" data-field="unit" aria-label="${esc(t("sell.unitAria", { name }))}">${unitOptions(item.sellingUnit, p)}</select></div></td>` +
-        `<td class="num"><input class="price-input" type="number" min="0" step="any" value="${item.unitPrice}" data-field="price" aria-label="${esc(t("sell.priceAria", { name }))}">` +
+        `<td class="num"><div class="price-cell"><input class="price-input" type="number" min="0" step="any" value="${item.unitPrice}" data-field="price" aria-label="${esc(t("sell.priceAria", { name, unit: linePriceUnit(item) }))}">` +
+        `<span class="price-unit" data-price-unit>${esc(linePriceUnit(item))}</span></div>` +
         `<div class="muted small price-note" data-price-note>${esc(priceNote(item))}</div></td>` +
         `<td class="num" data-line-total>${esc(money(Calc.calculateLineTotal(item.qty, item.unitPrice)))}</td>` +
         `<td class="num"><button type="button" class="btn small danger" data-action="remove" aria-label="${esc(t("sell.removeAria", { name }))}">${esc(t("common.remove"))}</button></td>` +
@@ -1612,6 +1634,7 @@ function refreshLive() {
     if (!item) return;
     row.querySelector("[data-line-total]").textContent = money(Calc.calculateLineTotal(item.qty, item.unitPrice));
     row.querySelector("[data-price-note]").textContent = priceNote(item);
+    row.querySelector("[data-price-unit]").textContent = linePriceUnit(item);
   });
   renderTotals();
   renderInvoice();
@@ -2144,10 +2167,6 @@ function bindEvents() {
     }
     showError("addError", "");
     showError("saleError", "");
-    if (result.converted) {
-      const c = result.converted;
-      notify(tn("sell.converted", c.boxes, { area: numberFormat.format(c.area), coverage: numberFormat.format(c.coverage) }));
-    }
     state.selectedId = null;
     state.previewInvoice = null;
     search.value = "";
@@ -2194,6 +2213,7 @@ function bindEvents() {
       const whole = Calc.isWholeUnit(line.sellingUnit);
       row.querySelector("[data-row-error]").textContent = result.error || "";
       row.querySelector(".price-input").value = line.unitPrice;   // show the price calculated for the new unit
+      if (result.priceReset) notify(t("sell.priceReset", { unit: unitLabel(line.sellingUnit, 1).toLowerCase() }));
       row.querySelector(".qty-input").min = whole ? 1 : 0;
       row.querySelector(".qty-input").step = whole ? 1 : "any";
       state.previewInvoice = null;
@@ -2437,6 +2457,9 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     stockText,
     unitProblem,
     priceNote,
+    linePriceUnit,
+    invoiceLinePrice,
+    renderSale,
     invoiceItemLabel,
     readProductForm,
     startEditProduct,

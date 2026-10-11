@@ -128,16 +128,17 @@ test("invoice line reads: name (60 × 120) manufacturer", () => {
   assert.equal(api.invoiceItemLabel({ name: "Chips", tileSize: "", manufacturer: "" }), "Chips");
 });
 
-test("m² is converted to whole boxes (rounded up); piece and kg stay as entered", () => {
+test("m² is a real selling unit: the area stays as entered; piece and kg stay as entered too", () => {
   const { api } = loadProductApi();
-  const load = () => api.applyData({ products: [api.normalizeProduct(ceramic({ id: "t1", stock: 100, coveragePerBox: 2.88 })), api.normalizeProduct({ id: "k1", name: "Cement", stock: 100, sellingPrice: 5 })], invoices: [], settings: { ...api.DEFAULT_SETTINGS }, counter: 0, lastSaved: "" });
+  const load = () => api.applyData({ products: [api.normalizeProduct(ceramic({ id: "t1", stock: 100, coveragePerBox: 2.88 })), api.normalizeProduct({ id: "k1", name: "Cement", stock: 100, sellingPrice: 5, priceUnit: "kg", stockUnit: "kg" })], invoices: [], settings: { ...api.DEFAULT_SETTINGS }, counter: 0, lastSaved: "" });
   load();
-  const r = api.addToSale("t1", "8", "m2");
-  assert.equal(r.ok, true);
-  assert.deepEqual({ ...r.converted }, { area: 8, boxes: 3, coverage: 2.88 });
-  assert.equal(api.addToSale("t1", "5.76", "m2").converted.boxes, 2);   // exact multiple, no extra box
-  assert.equal(api.addToSale("k1", "2", "kg").converted, null);
-  assert.match(api.addToSale("k1", "3", "m2").error, /no coverage per box/);
+  assert.equal(api.addToSale("t1", "8", "m2").ok, true);
+  const line = api.getSale().items[0];
+  assert.deepEqual([line.qty, line.sellingUnit], [8, "m2"]);          // 8 m², not rounded up to boxes
+  assert.equal(api.addToSale("t1", "5.76", "m2").ok, true);           // same unit: joins the same line
+  assert.equal(api.getSale().items[0].qty, 13.76);
+  assert.equal(api.addToSale("k1", "2", "kg").ok, true);
+  assert.equal(typeof api.addToSale("k1", "3", "m2").error, "string");     // a per-kg product can't be sold by area
 });
 
 test("the same product can be sold as 5 boxes and 2 pieces, sharing one stock pool", () => {
@@ -184,12 +185,12 @@ test("the same m² price gives a per-piece price from the piece size", () => {
   assert.equal(api.getSale().items[0].unitPrice, 288);   // 0.6 x 0.6 m x 800
 });
 
-test("typing an area still sells whole boxes at the box price", () => {
+test("typing an area sells that area at the price per m²", () => {
   const { api } = loadTile();
-  const r = api.addToSale("t1", "3", "m2");               // 3 / 1.44 -> 3 boxes
-  assert.equal(r.converted.boxes, 3);
-  assert.equal(api.getSale().items[0].sellingUnit, "box");
-  assert.equal(api.getSale().items[0].unitPrice, 1152);
+  assert.equal(api.addToSale("t1", "3", "m2").ok, true);
+  const line = api.getSale().items[0];
+  assert.deepEqual([line.qty, line.sellingUnit, line.unitPrice], [3, "m2", 800]);   // 3 m² x 800 DA/m²
+  assert.equal(api.calculateTotals(api.getSale()).total, 2400);
 });
 
 test("a price per box converts to pieces and the unit can be switched on a line", () => {

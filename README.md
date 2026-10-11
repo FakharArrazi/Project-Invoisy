@@ -13,12 +13,27 @@ language files.
 - A product also has a **stock unit**: what its stock quantity is counted in. Selling boxes or
   pieces takes stock out converted to that unit (3 pieces from 20 boxes of 4 pieces leaves 19.25 boxes).
 - kg and meter products can only be sold by kg / meter.
+- **Current Sale unit price.** Each sale line shows its quantity, its selling unit (piece, box, m², kg or
+  meter), an editable unit price with the unit it is for next to it (`DA/m²`, `DA/box`, `DA/piece`) and
+  the line total. The price is always for ONE selected unit: it starts at the saved price of that unit (or
+  the saved price converted with the tile size and coverage per box) and follows the unit when it changes.
+  m² is a real selling unit: 10 m² at 1,000 DA/m² is 10,000 DA, and stock is taken out as the equivalent
+  fraction of a box.
+- **Special price for one sale.** Typing a price on a sale line changes that line only, for this sale only:
+  the line total, subtotal, discount, tax, final total and the live invoice follow at once. The price in
+  Stock, the customer and the settings are never touched, removing and re-adding the product restores the
+  saved price, and the next sale (to the same customer too) starts from the saved prices again. Prices
+  are kept to 2 decimals; blank, negative or non-numeric prices are refused. Changing the unit of a line
+  with a typed price replaces it with the new unit's price (a price per m² is not a price per box), and a
+  price changed in Stock reaches lines at the normal price but never a typed price. Prices never affect stock.
 - An invoice line shows the product's own price and the unit it is priced per (1,500 / m²), the
   quantity as it was sold (2 Boxes) and, when that is a different unit, the same quantity in the
   price unit underneath (2.88 m²), then the line total. Selling by the box never turns the price
   into a per-box price on the invoice. A price typed by hand on the Sell page is the exception: the
-  line then shows the price actually charged, per unit sold.
-- A saved invoice keeps the unit sold, the price charged and the details it was worked out from.
+  line then shows the price actually charged, per unit sold. The product's price is only ever shown when
+  it really is what was charged (checked again from the line's own saved details).
+- A saved invoice keeps the unit sold, the price charged, the unit that price is for (`unitPriceUnit`) and
+  the details it was worked out from.
   It is never recalculated from the product's current data, and a sale never changes the price in Stock.
 
 ## Payments

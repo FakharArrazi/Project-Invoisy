@@ -16,3 +16,7 @@
 
 /* Price shown on an invoice line, and the quantity worked out in that price unit ("2.88 m²"). */
 .inv-sub { font-size: 0.85em; color: var(--muted); }
+
+/* Unit price of a sale line with the unit it is for next to it ("900 DA/m²"). */
+.price-cell { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
+.price-unit { color: var(--muted); font-size: 0.85em; white-space: nowrap; }

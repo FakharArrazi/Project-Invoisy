@@ -232,7 +232,7 @@ test("stock is shown with its unit in French, and the new product-form checks sp
   assert.equal(api.addToSale("t1", "1", "piece").ok, true);
   const line = api.getSale().items[0];
   assert.equal(api.updateSalePrice(line.lineId, "500").error, undefined);
-  assert.equal(api.priceNote(line), "Prix personnalisé (calculé\u00a0: 540 DA)");
+  assert.equal(api.priceNote(line), "Prix personnalisé pour cette vente uniquement (prix enregistré\u00a0: 540 DA/pièce)");
 
   const fill = (extra) => {
     const base = { pName: "Tile", pManufacturer: "", pTileSize: "60*60", pCoveragePerBox: "1.44", pDesc: "", pPrice: "800", pPriceUnit: "m2", pCost: "", pStock: "5", pStockUnit: "box", pSku: "", pCategory: "" };
