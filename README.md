@@ -55,6 +55,40 @@ language files.
 - Products saved before these fields existed keep working: their price is used as typed and their
   stock goes down one-for-one until a price unit and stock unit are set in the Stock form.
 
+## Outstanding customer debt (Sell page)
+
+When a returning customer is **selected** (suggestion list) or **confirmed** (exact name + phone number, or an
+earlier choice), Invoisy looks up their unpaid invoices and shows a card with the invoice numbers, dates, original
+totals, amounts paid, outstanding balances and the total debt. Nothing is looked up while the name is being typed,
+and never for "Walk-in Customer". A name with no phone number, a similar name or a shared phone number never
+matches silently: the card lists those customers and the person chooses.
+
+- **View Invoice** opens the old invoice in the preview; "Back to current sale" returns to the sale, which is untouched.
+- **Add Outstanding Debt** opens a confirmation dialog (original invoice number, date, unpaid balance, amount to
+  transfer, default = the full balance, partial allowed, the resulting total due). Nothing is saved until the sale is completed.
+- **Remind Me Later** hides the card for this sale only (a small reminder stays next to the customer fields); it
+  shows again for the next sale.
+
+### Accounting model (why a debt is never counted twice)
+
+- Customers still live inside invoices; a customer is recognized by an optional `customer.id` (added only when a
+  returning customer is confirmed) or by normalized name + phone.
+- Carrying debt forward writes **one ledger record** in the new `debtTransfers` store (source invoice, target
+  invoice, amount, date, and a snapshot of the source's total, payments and balance before/after) and a
+  **"carried forward" line** on the new invoice. The line is not a product: no stock, no price or quantity, and
+  discount and tax apply to the products only. The invoice `total` stays the figure of the new purchase;
+  `amount due = total + carried lines`.
+- **Old invoices and their payments are never edited.** Their collectible balance is derived:
+  `amount due - payments - transferred out`. A debt is therefore collectible exactly once (on the new invoice) and
+  an invoice whose balance moved is shown as "transferred", with a "Carried forward to INV-x" line.
+- Payments are not split or copied. A payment on the new invoice settles the carried debts oldest first (calculated,
+  not stored). A payment on an old invoice whose collectible balance is zero is refused with a pointer to the new invoice.
+- One IndexedDB transaction saves the invoice, the stock, the counter and the ledger records; the rule
+  *payments + transferred out <= amount due* for every invoice is re-checked inside that transaction, so two
+  windows or a stale screen can never overdraw a balance. Deleting the invoice that carries a debt removes its ledger
+  records (the balance is collectible on the old invoice again); an invoice with transfers out can not be deleted.
+- If an older invoice is paid while a draft debt is on the screen, the draft amount is lowered or removed and the person is told.
+
 ## Stock form
 
 The form has three sections.
@@ -165,6 +199,10 @@ Two things follow from that, and both are worth knowing:
 
 Backups now also contain suppliers, purchases, supplier payments and purchase attachments (embedded in the file, so the file can become large when attachments are used). The backup format is version 2. Backups made by the earlier format (version 1, no supplier data) can still be restored; restoring one replaces everything, so suppliers and purchases that exist now would be replaced as well (the confirmation says so). An older Invoisy that does not know format 2 will refuse a version 2 backup as coming from a newer version. Backups from the previous version (`invoisy-data.json`) can also be restored.
 
+Backups keep the debt ledger in an optional `data.debtTransfers` list (written only when there is one; the backup
+format version is not changed by this feature). Restoring checks that the ledger agrees with the invoices and refuses an inconsistent file.
+An older Invoisy that opens such a file ignores that list, so use the new version to restore backups that contain transfers.
+
 ## Automatic backup file (Settings, Automatic backup file)
 
 Invoisy can keep one file, `invoisy-data.json`, up to date by itself: after every saved change (a product, stock, a sale, a payment, settings, the invoice counter) the whole database is written to it. You do not have to press Export Backup. The browser database stays the only place Invoisy reads from; the file is a copy.
@@ -191,6 +229,7 @@ java script/i18n.js, lang/    the language layer and the English / French texts
 java script/calc.js           unit conversion and price maths
 java script/purchases.js      suppliers, purchases, stock receipts, supplier payments and reports (logic only, no screens)
 java script/validation.js     the shape and rules of the data; backup file format; reminder rule; old-data reader
+java script/debt.js           customer recognition, outstanding debt and the draft of debt carried onto a sale (pure functions)
 java script/database.js       the IndexedDB layer (the only code that touches IndexedDB)
 java script/autobackup.js     the automatic backup file (file handle, write queue, status)
 java script/purchases-ui.js   the Suppliers and Purchases screens
@@ -199,7 +238,7 @@ java script/script.js         the other screens and the wiring
 
 Scripts load in the order i18n, lang, calc, purchases, validation, database, autobackup, purchases-ui, script (see the end of `index.html`). Every message the persistence code shows or throws comes from `lang/en.js` and `lang/fr.js`.
 
-- Schema version 3, database name `invoisy`. Stores: `products`, `invoices` (unique `invoiceNumber`), `settings`, `counters`, `meta`, and since version 3 `suppliers`, `purchases`, `supplierPayments`, `attachments`. Customers and payments are stored inside each invoice. The upgrade from version 2 only adds stores and a purchase counter; existing data is not touched. Unique indexes on purchases (supplier + normalised invoice number, and internal reference) apply to non-cancelled purchases only.
+- Schema version 4, database name `invoisy`. Stores: `products`, `invoices` (unique `invoiceNumber`), `settings`, `counters`, `meta`, and since version 3 `suppliers`, `purchases`, `supplierPayments`, `attachments`, and since version 4 `debtTransfers` (the customer-debt ledger; indexes `sourceInvoiceId`, `targetInvoiceId`). Customers and payments are stored inside each invoice. The upgrades only add stores (and a purchase counter); existing data is not touched, and version 4 only adds the empty `debtTransfers` store. Unique indexes on purchases (supplier + normalised invoice number, and internal reference) apply to non-cancelled purchases only.
 - A sale (invoice + stock deduction + invoice counter) is one transaction, and so is a purchase confirmation (purchase + new products + stock + payment + purchase counter + attachment). Every write also checks the database revision it started from, so a second open window can not overwrite a change it has not seen.
 - Every committed change to business data moves the revision on in one of two places (`commitInTx`, `writeDataset`); both call `markCommit`, and `withTx` emits a `commit` event only after the transaction has really committed. `autobackup.js` listens to that event, so a new feature that saves through `database.js` is covered without touching the backup code. The file handle and backup notes are kept in the `meta` store (no schema change).
 - `tests/autobackup.test.js` covers the commit event and the backup file with a stand-in file handle. `tests/e2e/autobackup_check.py` is an optional real-browser check of it (real IndexedDB and a real `FileSystemFileHandle` from the browser's private file system; only the operating system's Save dialog is replaced).

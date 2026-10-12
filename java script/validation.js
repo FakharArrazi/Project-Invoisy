@@ -29,8 +29,12 @@
   const P = globalThis.Purchases;        // suppliers, purchases and supplier payments (purchases.js)
   const MIRROR_KEY = "invoisy-data";     // browser copy written by the previous (data file) version
   const LEGACY_KEYS = ["products", "invoices", "settings", "invoiceCounter"];
-  const DERIVED_INVOICE_FIELDS = ["amountPaid", "remaining", "status"];   // calculated from the payments, never trusted
-  const INVOICE_STATUSES = ["paid", "partial", "unpaid"];
+  // Calculated from the payments, the carried-forward lines and the debt transfers, never trusted when read back.
+  // amountDue and transferredOut are only written to a backup when they matter (see withDerived).
+  const DERIVED_INVOICE_FIELDS = ["amountPaid", "remaining", "status", "amountDue", "transferredOut"];
+  // "transferred": nothing is left to collect on this invoice because its unpaid balance was carried forward to a newer invoice.
+  const INVOICE_STATUSES = ["paid", "partial", "unpaid", "transferred"];
+  const WALK_IN = "Walk-in Customer";    // the name saved for a sale without a customer (script.js shows it in the current language)
   const MONEY_TOLERANCE = 0.01;
   const DEFAULT_BACKUP_DAYS = 7;
   const SUPPLIER_LISTS = ["suppliers", "purchases", "supplierPayments", "attachments"];   // the supplier side of a backup
@@ -90,6 +94,215 @@
       if (!sameValue(a[key], b[key])) return false;
     }
     return true;
+  }
+
+  /* ---------- Carried-forward debt ----------
+     A customer's unpaid balance on an older invoice can be CARRIED FORWARD to a NEW invoice. It is then owed once,
+     on the new invoice:
+       - the new invoice lists the amount in carriedForward[] and owes   total (this purchase) + carried amounts.
+         Its own subtotal, discount, tax and total keep describing the products sold: carried debt is not revenue.
+       - one record per carried amount sits in the debtTransfers ledger (which older invoice, which new invoice,
+         how much, and what was available before and after).
+       - the older invoice is never edited. Its total and payments stay exactly as issued; what can still be collected
+         on it is   amount due - payments - transferred out   (calculated from the ledger, never stored).
+     Everything here is pure arithmetic and checking, shared by the screens, the database and backups. */
+
+  const carriedLines = (inv) => (inv && Array.isArray(inv.carriedForward) ? inv.carriedForward : []);
+  const paidTotal = (inv) => round2((inv && Array.isArray(inv.payments) ? inv.payments : []).reduce((sum, p) => sum + toNumber(p && p.amount), 0));
+  const carriedTotal = (inv) => round2(carriedLines(inv).reduce((sum, l) => sum + toNumber(l && l.amount), 0));
+  // What the invoice asks the customer to pay: this purchase plus the debt carried onto it.
+  const amountDue = (inv) => round2(toNumber(inv && inv.total) + carriedTotal(inv));
+  // How much of this invoice's balance was carried forward to other invoices.
+  function transferredOut(inv, transfers) {
+    if (!inv || !Array.isArray(transfers)) return 0;
+    return round2(transfers.reduce((sum, tr) => (tr && tr.sourceInvoiceId === inv.id ? sum + toNumber(tr.amount) : sum), 0));
+  }
+
+  // How the payments received on THIS invoice are applied: oldest debt first, then this purchase.
+  // Pure and derived: payments are never copied or split, so nothing can be counted twice.
+  function carriedBreakdown(inv) {
+    let left = paidTotal(inv);
+    const sorted = [...carriedLines(inv)].sort((a, b) => invoiceSequence(a.sourceInvoiceNumber) - invoiceSequence(b.sourceInvoiceNumber));
+    const lines = sorted.map((l) => {
+      const settled = Math.min(round2(toNumber(l.amount)), left);
+      left = round2(left - settled);
+      return { ...l, settled: round2(settled), remaining: round2(toNumber(l.amount) - settled) };
+    });
+    const total = round2(toNumber(inv && inv.total));
+    const currentPaid = Math.min(left, total);
+    return {
+      lines,
+      carriedPaid: round2(carriedTotal(inv) - lines.reduce((sum, l) => sum + l.remaining, 0)),
+      carriedRemaining: round2(lines.reduce((sum, l) => sum + l.remaining, 0)),
+      currentPaid: round2(currentPaid),
+      currentRemaining: round2(total - currentPaid),
+    };
+  }
+
+  /* ---------- Who is the customer? ----------
+     Invoices keep the customer inside them (name, phone, address), plus an optional id that is added when a
+     returning customer is confirmed on the Sell page. Two invoices are the same customer when they share an id, or
+     the same name AND phone number (both normalized). A name alone is only a weak identity: it is never matched
+     silently, the person has to confirm it. A sale with no name, or the walk-in name, has no identity at all. */
+
+  // "  Ahmed   BENALI " and "ahmed benali" and "Ahmèd Benali" are the same name.
+  function normalizeName(name) {
+    return String(name == null ? "" : name)
+      .normalize("NFD").replace(/[̀-ͯ]/g, "")
+      .replace(/[’‘`´]/g, "'")
+      .toLowerCase().replace(/\s+/g, " ").trim();
+  }
+
+  // Digits only, and the Algerian "+213 555 12 34 56" is the same number as "0555 12 34 56".
+  // Fewer than 6 digits is not a usable phone number.
+  function phoneDigits(phone) {
+    let digits = String(phone == null ? "" : phone).replace(/\D/g, "");
+    if (digits.startsWith("00")) digits = digits.slice(2);
+    if (digits.startsWith("213") && digits.length === 12) digits = "0" + digits.slice(3);
+    return digits.length >= 6 ? digits : "";
+  }
+
+  function isWalkInName(name) {
+    const n = normalizeName(name);
+    return !n || n === normalizeName(WALK_IN) || n === normalizeName(I18n.t("sell.walkIn"));
+  }
+
+  // The identities one customer record can be recognized by, strongest first. [] = no reliable identity.
+  function customerKeys(customer) {
+    const c = customer || {};
+    const name = normalizeName(c.name);
+    if (isWalkInName(name)) return [];
+    const keys = [];
+    if (c.id) keys.push("id:" + c.id);
+    const phone = phoneDigits(c.phone);
+    keys.push(phone ? "np:" + name + "|" + phone : "n:" + name);
+    return keys;
+  }
+
+  // All invoices grouped by customer. Invoices that share any key (an id, or name+phone) end up in one group.
+  // { keys, ids, invoices (oldest first), name, phone, address, lastDate } - name, phone and address are the latest ones.
+  function customerGroups(invoices) {
+    const parent = new Map();
+    const find = (key) => {
+      let root = key;
+      while (parent.get(root) !== root) root = parent.get(root);
+      for (let k = key; parent.get(k) !== root;) { const next = parent.get(k); parent.set(k, root); k = next; }
+      return root;
+    };
+    const entries = [];
+    for (const inv of invoices || []) {
+      const keys = customerKeys(inv && inv.customer);
+      if (!keys.length) continue;
+      for (const k of keys) if (!parent.has(k)) parent.set(k, k);
+      for (let i = 1; i < keys.length; i++) {
+        const a = find(keys[0]);
+        const b = find(keys[i]);
+        if (a !== b) parent.set(b, a);
+      }
+      entries.push({ inv, keys });
+    }
+    const byRoot = new Map();
+    for (const { inv, keys } of entries) {
+      const root = find(keys[0]);
+      if (!byRoot.has(root)) byRoot.set(root, { keys: new Set(), invoices: [] });
+      const group = byRoot.get(root);
+      keys.forEach((k) => group.keys.add(k));
+      group.invoices.push(inv);
+    }
+    return [...byRoot.values()].map((g) => {
+      const latest = g.invoices.reduce((best, inv) => (invoiceSequence(inv.invoiceNumber) >= invoiceSequence(best.invoiceNumber) ? inv : best), g.invoices[0]);
+      const c = latest.customer || {};
+      const keys = [...g.keys];
+      return {
+        keys,
+        ids: keys.filter((k) => k.startsWith("id:")).map((k) => k.slice(3)),
+        invoices: g.invoices,
+        name: String(c.name || "").trim(),
+        phone: String(c.phone || "").trim(),
+        address: String(c.address || "").trim(),
+        lastDate: latest.date,
+      };
+    });
+  }
+
+  const findGroup = (groups, key) => groups.find((g) => g.keys.includes(key)) || null;
+
+  function sameCustomer(a, b, groups) {
+    const keysA = customerKeys(a && a.customer);
+    const keysB = customerKeys(b && b.customer);
+    if (!keysA.length || !keysB.length) return false;
+    const group = findGroup(groups, keysA[0]);
+    return !!group && keysB.some((k) => group.keys.includes(k));
+  }
+
+  /* ---------- The debt-transfer ledger ---------- */
+
+  // One record of the ledger:
+  //   { id, sourceInvoiceId, sourceInvoiceNumber, targetInvoiceId, targetInvoiceNumber, amount, createdAt,
+  //     sourceTotal, sourcePaid, availableBefore, availableAfter }
+  // The last four are a snapshot for the audit trail: what the older invoice asked, what had been paid, and what was
+  // still collectible before and after this transfer. They are informational; balances are always recalculated.
+  function transferProblem(tr) {
+    if (!isObj(tr)) return t("problem.notObject");
+    if (!isStr(tr.id) || !tr.id) return t("problem.noId");
+    for (const key of ["sourceInvoiceId", "targetInvoiceId"]) if (!isStr(tr[key]) || !tr[key]) return t("problem.badTransfer");
+    for (const key of ["sourceInvoiceNumber", "targetInvoiceNumber"]) if (!isStr(tr[key]) || !/^INV-\d+$/.test(tr[key])) return t("problem.badTransfer");
+    if (tr.sourceInvoiceId === tr.targetInvoiceId) return t("problem.badTransfer");
+    if (!isNum(tr.amount) || tr.amount <= 0) return t("problem.badTransferAmount");
+    if (!isDate(tr.createdAt)) return t("problem.badTransfer");
+    for (const key of ["sourceTotal", "sourcePaid", "availableBefore", "availableAfter"]) {
+      if (tr[key] !== undefined && (!isNum(tr[key]) || tr[key] < 0)) return t("problem.badTransfer");
+    }
+    return "";
+  }
+
+  // Checks the whole ledger against the invoices it points at. Returns a list of problems ([] = consistent).
+  // This is the "nothing is owed twice" rule: for every invoice, payments + amounts carried away from it can never
+  // be more than what it asked for, so the same balance can not be carried twice, or carried and also collected.
+  // Run by the database inside the transaction of every change that touches invoices or the ledger, and on every restore.
+  function ledgerProblems(invoices, transfers) {
+    const problems = [];
+    const list = Array.isArray(transfers) ? transfers : [];
+    // The common case, data that never carried any debt, costs nothing.
+    if (!list.length && !(invoices || []).some((inv) => carriedLines(inv).length)) return problems;
+    const byId = new Map((invoices || []).map((inv) => [inv.id, inv]));
+    const groups = customerGroups(invoices || []);
+    const seen = new Set();
+    const seenPairs = new Set();
+    const out = new Map();
+    for (const tr of list) {
+      const label = `${tr.sourceInvoiceNumber} → ${tr.targetInvoiceNumber}`;
+      if (seen.has(tr.id)) { problems.push(t("ledger.duplicateId", { id: tr.id })); continue; }
+      seen.add(tr.id);
+      const pair = tr.sourceInvoiceId + ">" + tr.targetInvoiceId;
+      if (seenPairs.has(pair)) problems.push(t("ledger.duplicateTransfer", { label }));
+      seenPairs.add(pair);
+      const source = byId.get(tr.sourceInvoiceId);
+      const target = byId.get(tr.targetInvoiceId);
+      if (!source) problems.push(t("ledger.sourceMissing", { number: tr.sourceInvoiceNumber }));
+      if (!target) problems.push(t("ledger.targetMissing", { number: tr.targetInvoiceNumber }));
+      if (!source || !target) continue;
+      if (source.invoiceNumber !== tr.sourceInvoiceNumber || target.invoiceNumber !== tr.targetInvoiceNumber) problems.push(t("ledger.numberMismatch", { label }));
+      // Debt only ever moves to a NEWER invoice, so a chain of transfers can never loop back on itself.
+      if (invoiceSequence(target.invoiceNumber) <= invoiceSequence(source.invoiceNumber)) problems.push(t("ledger.order", { label }));
+      const line = carriedLines(target).find((l) => l.transferId === tr.id);
+      if (!line || line.sourceInvoiceId !== tr.sourceInvoiceId || Math.abs(toNumber(line.amount) - tr.amount) > 0.005) problems.push(t("ledger.lineMismatch", { label }));
+      if (!sameCustomer(source, target, groups)) problems.push(t("ledger.otherCustomer", { label }));
+      out.set(source.id, round2((out.get(source.id) || 0) + tr.amount));
+    }
+    const ids = new Set(list.map((tr) => tr && tr.id));
+    for (const inv of invoices || []) {
+      for (const l of carriedLines(inv)) if (!ids.has(l.transferId)) problems.push(t("ledger.lineWithoutTransfer", { number: inv.invoiceNumber, from: l.sourceInvoiceNumber }));
+    }
+    for (const [id, sum] of out) {
+      const inv = byId.get(id);
+      if (!inv) continue;
+      const due = amountDue(inv);
+      if (round2(paidTotal(inv) + sum) > due + MONEY_TOLERANCE) {
+        problems.push(t("ledger.overTransferred", { number: inv.invoiceNumber, due, paid: paidTotal(inv), moved: sum }));
+      }
+    }
+    return problems;
   }
 
   /* ---------- Normalizing (filling in fields an older version did not have) ---------- */
@@ -156,7 +369,8 @@
         .filter((p) => p && Number.isFinite(Number(p.amount)) && Number(p.amount) > 0)
         .map((p) => ({ ...p, amount: Number(p.amount), timestamp: p.timestamp || inv.date }));
     } else {
-      payments = clean.total > 0 ? [{ amount: clean.total, timestamp: inv.date }] : [];
+      const due = amountDue(clean);
+      payments = due > 0 ? [{ amount: due, timestamp: inv.date }] : [];
     }
     return { ...clean, id: String(inv.id || uid()), payments };
   }
@@ -181,13 +395,28 @@
     return settings;
   }
 
-  // Total paid, remaining balance and status are always calculated from the payments list.
+  // Total paid, remaining balance and status are always calculated from the payments list, the debt carried onto the
+  // invoice and (when the ledger is given) the balance carried away from it to newer invoices.
   // (script.js adds the wording of the status in the current language.)
-  function paymentSummary(inv) {
+  //   remaining = what can still be collected on THIS invoice = amount due - paid - transferred out
+  //   cls "transferred" = nothing is left to collect here, but only because the unpaid balance moved to a newer invoice.
+  //   An invoice is never "paid" just because its debt was carried forward.
+  // paymentSummary keeps the four fields every screen and test already knows { payments, paid, remaining, cls };
+  // paymentDetail adds what the debt features need: due (amount due), transferredOut and carried.
+  function paymentDetail(inv, transfers) {
     const payments = Array.isArray(inv.payments) ? inv.payments : [];
     const paid = round2(payments.reduce((sum, p) => sum + toNumber(p.amount), 0));
-    const remaining = Math.max(0, round2(toNumber(inv.total) - paid));
-    const cls = remaining <= 0 ? "paid" : paid > 0 ? "partial" : "unpaid";
+    const due = amountDue(inv);
+    const moved = transferredOut(inv, transfers);
+    const remaining = Math.max(0, round2(due - paid - moved));
+    let cls;
+    if (remaining > 0) cls = paid > 0 ? "partial" : "unpaid";
+    else cls = moved > 0 && round2(due - paid) > 0 ? "transferred" : "paid";
+    return { payments, paid, remaining, cls, due, transferredOut: moved, carried: carriedTotal(inv) };
+  }
+
+  function paymentSummary(inv, transfers) {
+    const { payments, paid, remaining, cls } = paymentDetail(inv, transfers);
     return { payments, paid, remaining, cls };
   }
 
@@ -246,6 +475,17 @@
     if (!Array.isArray(inv.payments)) return t("problem.noPayments");
     if (inv.payments.some((p) => !isObj(p) || !isNum(p.amount) || p.amount <= 0 || !isDate(p.timestamp))) return t("problem.badPayment");
     if (inv.customer != null && !isObj(inv.customer)) return t("problem.badCustomer");
+    if (inv.carriedForward !== undefined) {
+      if (!Array.isArray(inv.carriedForward)) return t("problem.badCarried");
+      const seenTransfers = new Set();
+      for (const l of inv.carriedForward) {
+        const ok = isObj(l) && isStr(l.transferId) && l.transferId && isStr(l.sourceInvoiceId) && l.sourceInvoiceId &&
+          isStr(l.sourceInvoiceNumber) && /^INV-\d+$/.test(l.sourceInvoiceNumber) && isDate(l.sourceDate) && isNum(l.amount) && l.amount > 0;
+        if (!ok || seenTransfers.has(l.transferId)) return t("problem.badCarried");
+        if (l.sourceInvoiceId === inv.id) return t("problem.carriedSelf");
+        seenTransfers.add(l.transferId);
+      }
+    }
     return "";
   }
 
@@ -257,7 +497,7 @@
     const number = inv.invoiceNumber;
     const payments = Array.isArray(inv.payments) ? inv.payments : [];
     const paid = round2(payments.reduce((sum, p) => sum + toNumber(p && p.amount), 0));
-    if (isNum(inv.total) && paid > round2(inv.total) + MONEY_TOLERANCE) {
+    if (isNum(inv.total) && paid > amountDue(inv) + MONEY_TOLERANCE) {
       warnings.push(t("warn.paidMoreThanTotal", { number }));
     }
     if (isNum(inv.subtotal) && isNum(inv.discount) && isNum(inv.tax) && isNum(inv.total)) {
@@ -449,6 +689,25 @@
       problems.push(...P.linkProblems({ suppliers, purchases, supplierPayments, attachments }));
     }
 
+    // The debt-transfer ledger. Optional: data saved before debt could be carried forward has none. Whatever is
+    // there must agree with the invoices (nothing owed twice), so a file that does not is refused, never repaired.
+    const transfers = [];
+    if (raw.debtTransfers !== undefined) {
+      if (!Array.isArray(raw.debtTransfers)) return { error: t("data.badTransfers") };
+      raw.debtTransfers.forEach((tr, i) => {
+        const why = transferProblem(tr);
+        if (why) {
+          problems.push(t("problem.entry", { label: t("problem.label.transfer"), n: i + 1, why }));
+          rejected.push({ kind: "transfer", index: i, reason: why, raw: tr });
+        } else {
+          transfers.push({ ...tr, amount: Number(tr.amount) });
+        }
+      });
+      const dupTransfer = firstDuplicate(transfers.map((tr) => tr.id));
+      if (dupTransfer && !lenient) return { error: t("data.dupTransfer", { id: dupTransfer }) };
+    }
+    problems.push(...ledgerProblems(invoices, transfers));
+
     // The counter never goes backwards: if it is lower than an invoice already issued, it is raised.
     const stored = Math.max(0, Math.floor(toNumber(raw.invoiceCounter)));
     const highest = highestInvoiceNumber(invoices);
@@ -460,6 +719,8 @@
       data: {
         products,
         invoices,
+        // Only present when something was carried forward, so data without any debt transfer keeps its exact shape.
+        ...(transfers.length ? { debtTransfers: transfers } : {}),
         settings: normalizeSettings(raw.settings),
         counter: Math.max(stored, highest),
         counterRecovered: highest > stored,
@@ -500,9 +761,14 @@
     return `${prefix || "invoisy-backup"}-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.json`;
   }
 
-  function withDerived(inv) {
-    const pay = paymentSummary(inv);
-    return { ...inv, amountPaid: pay.paid, remaining: pay.remaining, status: pay.cls };
+  // The calculated fields written next to an invoice in a backup, for people reading the file. amountDue and
+  // transferredOut are only added when debt was carried onto / away from the invoice, so other invoices look as before.
+  function withDerived(inv, transfers) {
+    const pay = paymentDetail(inv, transfers);
+    const derived = { amountPaid: pay.paid, remaining: pay.remaining, status: pay.cls };
+    if (carriedLines(inv).length) derived.amountDue = pay.due;
+    if (pay.transferredOut > 0) derived.transferredOut = pay.transferredOut;
+    return { ...inv, ...derived };
   }
 
   // How many records of each kind a snapshot or a parsed backup holds.
@@ -520,8 +786,12 @@
   // Purchases from suppliers, their payments and the scanned supplier invoices have lists of their own.
   // `revision` (the database revision the snapshot was read at) is optional and only written when the snapshot
   // has one. The automatic backup file uses it to know which state of the database the file holds.
+  // Debt carried forward between invoices is saved as data.debtTransfers (only when there is any, inside the same
+  // format version). A version that does not know the field ignores it, so a backup that carries debt should only be
+  // restored into this version or a newer one.
   function buildBackup(snapshot, now) {
     const revision = Number.isInteger(snapshot.revision) && snapshot.revision >= 0 ? { revision: snapshot.revision } : {};
+    const transfers = Array.isArray(snapshot.debtTransfers) ? snapshot.debtTransfers : [];
     return {
       application: APP_NAME,
       formatVersion: BACKUP_FORMAT_VERSION,
@@ -530,7 +800,8 @@
       counts: countsOf(snapshot),
       data: {
         products: snapshot.products,
-        invoices: snapshot.invoices.map(withDerived),
+        invoices: snapshot.invoices.map((inv) => withDerived(inv, transfers)),
+        ...(transfers.length ? { debtTransfers: transfers } : {}),
         settings: snapshot.settings,
         invoiceCounter: snapshot.counter,
         suppliers: snapshot.suppliers || [],
@@ -556,7 +827,8 @@
     if (check.error) return { error: t("backup.safetyFailed", { error: check.error }) };
     const wanted = countsOf(snapshot);
     const got = countsOf(check.data);
-    if (Object.keys(wanted).some((key) => wanted[key] !== got[key])) {
+    const savedTransfers = Array.isArray(snapshot.debtTransfers) ? snapshot.debtTransfers.length : 0;
+    if (Object.keys(wanted).some((key) => wanted[key] !== got[key]) || (check.data.debtTransfers || []).length !== savedTransfers) {
       return { error: t("backup.safetyFailed", { error: t("backup.safetyCounts") }) };
     }
     return { text, name: backupFileName(when, prefix), counts: wanted };
@@ -589,7 +861,7 @@
       inner = {
         version: DATA_VERSION, products: raw.data.products, invoices: raw.data.invoices, settings: raw.data.settings, invoiceCounter: raw.data.invoiceCounter,
         suppliers: raw.data.suppliers, purchases: raw.data.purchases, supplierPayments: raw.data.supplierPayments, attachments: raw.data.attachments,
-        purchaseCounter: raw.data.purchaseCounter,
+        purchaseCounter: raw.data.purchaseCounter, debtTransfers: raw.data.debtTransfers,
       };
       format = "backup";
       exportedAt = isDate(raw.exportedAt) ? raw.exportedAt : "";
@@ -744,10 +1016,13 @@
 
   globalThis.Validation = {
     APP_NAME, CURRENCY, DATA_VERSION, BACKUP_FORMAT_VERSION, MIRROR_KEY, LEGACY_KEYS, DEFAULT_BACKUP_DAYS,
-    DEFAULT_SETTINGS, SELLING_UNITS, INVOICE_STATUSES, DERIVED_INVOICE_FIELDS,
+    DEFAULT_SETTINGS, SELLING_UNITS, INVOICE_STATUSES, DERIVED_INVOICE_FIELDS, WALK_IN,
     isObj, isStr, isNum, isDate, round2, toNumber, uid, sameValue,
     formatInvoiceNumber, invoiceSequence, highestInvoiceNumber,
-    isTileSize, normalizeTileSize, normalizeProduct, normalizeInvoice, normalizeSettings, paymentSummary, stripDerived,
+    carriedLines, paidTotal, carriedTotal, amountDue, transferredOut, carriedBreakdown,
+    normalizeName, phoneDigits, isWalkInName, customerKeys, customerGroups, findGroup, sameCustomer,
+    transferProblem, ledgerProblems,
+    isTileSize, normalizeTileSize, normalizeProduct, normalizeInvoice, normalizeSettings, paymentSummary, paymentDetail, stripDerived,
     productProblem, invoiceProblem, invoiceWarnings, settingsProblem, legacyProductIssue, legacyInvoiceIssue,
     buildData, hasMeaningfulData, countsOf, buildBackup, prepareBackupFile, parseBackup, backupFileName,
     readLegacyStorage, prepareLegacyCopy, backupReminder,

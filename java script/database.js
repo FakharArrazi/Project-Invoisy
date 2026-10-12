@@ -23,11 +23,19 @@
      supplierPayments one record per payment made to a supplier       key: id   index: purchaseId, supplierId, date
      attachments      the scanned supplier invoice files (data URLs)  key: id   index: purchaseId
 
+   Added in version 4 (customer debt carried forward from an older invoice to a newer one)
+     debtTransfers    the debt-transfer ledger: one record per amount of an older invoice's unpaid balance carried
+                      to a newer invoice (the invoice itself holds the printed "carried forward" line)
+                      key: id   index: sourceInvoiceId, targetInvoiceId
+
    Rules this file enforces
      - A change touching several records is ONE transaction: it is saved completely or not at all.
        A purchase, the stock it adds and its payments are such a change.
      - History is never deleted here: only a DRAFT purchase can be removed, a supplier with purchases or
        payments can not be removed, and a payment can not be removed at all (it is voided instead).
+     - After any change that touches invoices or the ledger, the whole ledger is checked against the invoices INSIDE
+       that transaction (Validation.ledgerProblems): payments + balance carried away can never exceed what an invoice
+       asked for. A violation (a balance carried twice, or paid in another window meanwhile) aborts the transaction.
      - A save is only reported as done after the transaction has committed.
      - Every record is validated here before it is written, not only in the forms.
      - Every write checks a revision number, so a window that is out of date cannot overwrite newer data.
@@ -46,9 +54,10 @@
   const t = (key, params) => I18n.t(key, params);
 
   const DB_NAME = "invoisy";
-  const DB_VERSION = 3;
+  const DB_VERSION = 4;
   const PRODUCTS = "products";
   const INVOICES = "invoices";
+  const DEBT_TRANSFERS = "debtTransfers";
   const SETTINGS = "settings";
   const COUNTERS = "counters";
   const META = "meta";
@@ -57,8 +66,8 @@
   const SUPPLIER_PAYMENTS = "supplierPayments";
   const ATTACHMENTS = "attachments";
   const LEGACY_FILE_STORE = "kv";
-  const DATA_STORES = [PRODUCTS, INVOICES, SETTINGS, COUNTERS];
-  const ALL_STORES = [PRODUCTS, INVOICES, SETTINGS, COUNTERS, META, SUPPLIERS, PURCHASES, SUPPLIER_PAYMENTS, ATTACHMENTS];
+  const DATA_STORES = [PRODUCTS, INVOICES, DEBT_TRANSFERS, SETTINGS, COUNTERS];
+  const ALL_STORES = [PRODUCTS, INVOICES, SETTINGS, COUNTERS, META, SUPPLIERS, PURCHASES, SUPPLIER_PAYMENTS, ATTACHMENTS, DEBT_TRANSFERS];
   const SETTINGS_KEY = "app";
   const COUNTER_NAME = "invoice";
   const PURCHASE_COUNTER_NAME = "purchase";
@@ -178,7 +187,14 @@
       const attachments = db.createObjectStore(ATTACHMENTS, { keyPath: "id" });
       attachments.createIndex("purchaseId", "purchaseId");
     }
-    // Later versions: add `if (oldVersion < 4) { ... }` here. Never delete or rewrite existing stores in place.
+    if (oldVersion < 4) {
+      // The debt-transfer ledger. A new, empty store: no existing record is read, changed or moved, so a database
+      // made by an earlier version upgrades without touching a single invoice, product, purchase or payment.
+      const transfers = db.createObjectStore(DEBT_TRANSFERS, { keyPath: "id" });
+      transfers.createIndex("sourceInvoiceId", "sourceInvoiceId");
+      transfers.createIndex("targetInvoiceId", "targetInvoiceId");
+    }
+    // Later versions: add `if (oldVersion < 5) { ... }` here. Never delete or rewrite existing stores in place.
   }
 
   /* ---------- Validation of what is about to be written ---------- */
@@ -228,11 +244,26 @@
 
   const putsOf = (changes, key) => (changes && changes[key] && changes[key].put) || undefined;
 
+  // The shape of ledger records. Whether the ledger agrees with the invoices needs the whole dataset, so that is
+  // checked inside the transaction (commitInTx) and on restore (see ledgerProblems in validation.js).
+  function validateTransfers(transfers) {
+    const problems = [];
+    const seen = new Set();
+    for (const tr of transfers || []) {
+      const why = V.transferProblem(tr);
+      if (why) problems.push(`Debt transfer "${(tr && tr.id) || "?"}" ${why}.`);
+      else if (seen.has(tr.id)) problems.push(`Two debt transfers share the id ${tr.id}.`);
+      else seen.add(tr.id);
+    }
+    return problems;
+  }
+
   function validateChanges(changes) {
     const c = changes || {};
     const problems = validateRecords(c.products && c.products.put, c.invoices && c.invoices.put, c.settings, {
       suppliers: putsOf(c, "suppliers"), purchases: putsOf(c, "purchases"), supplierPayments: putsOf(c, "supplierPayments"), attachments: putsOf(c, "attachments"),
     });
+    problems.push(...validateTransfers(c.debtTransfers && c.debtTransfers.put));
     if (c.counter && (!Number.isInteger(c.counter.next) || c.counter.next < 0)) problems.push(t("data.badCounter"));
     if (c.purchaseCounter && (!Number.isInteger(c.purchaseCounter.next) || c.purchaseCounter.next < 0)) problems.push(t("db.badPurchaseCounter"));
     return problems;
@@ -257,8 +288,8 @@
     return { put, remove };
   }
 
-  // What changed between two copies of { products, invoices, settings, counter, suppliers, purchases,
-  // supplierPayments, purchaseCounter }. Only this is written. The supplier lists may be missing (older callers).
+  // What changed between two copies of { products, invoices, debtTransfers, settings, counter, suppliers,
+  // purchases, supplierPayments, purchaseCounter }. Only this is written. The supplier lists and debtTransfers may be missing (older callers): they then count as empty.
   // Attached files are not compared (they are not kept in memory): the caller passes them in `after.attachments`
   // as { put: [records], remove: [ids] } and they are written as given.
   function diff(before, after) {
@@ -266,6 +297,7 @@
     return {
       products: diffList(before.products, after.products),
       invoices: diffList(before.invoices, after.invoices),
+      debtTransfers: diffList(before.debtTransfers || [], after.debtTransfers || []),
       settings: V.sameValue(before.settings, after.settings) ? null : after.settings,
       counter: after.counter === before.counter ? null : { next: after.counter },
       suppliers: diffList(before.suppliers || [], after.suppliers || []),
@@ -279,7 +311,7 @@
   function isEmptyChange(c) {
     const none = (x) => !x || (!(x.put && x.put.length) && !(x.remove && x.remove.length));
     return none(c.products) && none(c.invoices) && !c.settings && !c.counter &&
-      none(c.suppliers) && none(c.purchases) && none(c.supplierPayments) && none(c.attachments) && !c.purchaseCounter;
+      none(c.debtTransfers) && none(c.suppliers) && none(c.purchases) && none(c.supplierPayments) && none(c.attachments) && !c.purchaseCounter;
   }
 
   /* ---------- The database ---------- */
@@ -415,16 +447,19 @@
       return withTx([storeName], "readonly", (tx) => req(tx.objectStore(storeName).count()));
     }
 
-    function assemble(products, invoices, settingsRecord, counterRecord, stateRecord, supplierSide) {
+    function assemble(products, invoices, settingsRecord, counterRecord, stateRecord, supplierSide, transfers) {
       const side = supplierSide || {};
       // Invoices come back in the order they were issued (not in id order), as the screens expect.
       const sorted = [...invoices].sort((a, b) => V.invoiceSequence(a.invoiceNumber) - V.invoiceSequence(b.invoiceNumber) || String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
+      // The ledger in the order the debt was carried forward.
+      const ledger = [...(transfers || [])].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id)));
       const stored = counterRecord ? counterRecord.value : 0;
       const highest = V.highestInvoiceNumber(sorted);
       const state = (stateRecord && stateRecord.value) || { revision: 0, lastSaved: "" };
       return {
         products,
         invoices: sorted,
+        debtTransfers: ledger,
         settings: V.normalizeSettings(settingsRecord && settingsRecord.value),
         counter: Math.max(stored, highest),
         revision: state.revision,
@@ -444,7 +479,7 @@
     async function loadAll(loadOptions) {
       const withAttachments = Boolean(loadOptions && loadOptions.withAttachments);
       return withTx(ALL_STORES, "readonly", async (tx) => {
-        const [products, invoices, settingsRecord, counterRecord, stateRecord, suppliers, purchases, supplierPayments, purchaseCounterRecord, attachments] = await Promise.all([
+        const [products, invoices, settingsRecord, counterRecord, stateRecord, suppliers, purchases, supplierPayments, purchaseCounterRecord, attachments, transfers] = await Promise.all([
           req(tx.objectStore(PRODUCTS).getAll()),
           req(tx.objectStore(INVOICES).getAll()),
           req(tx.objectStore(SETTINGS).get(SETTINGS_KEY)),
@@ -455,10 +490,11 @@
           req(tx.objectStore(SUPPLIER_PAYMENTS).getAll()),
           req(tx.objectStore(COUNTERS).get(PURCHASE_COUNTER_NAME)),
           withAttachments ? req(tx.objectStore(ATTACHMENTS).getAll()) : Promise.resolve(null),
+          req(tx.objectStore(DEBT_TRANSFERS).getAll()),
         ]);
         const all = assemble(products, invoices, settingsRecord, counterRecord, stateRecord, {
           suppliers, purchases, supplierPayments, purchaseCounter: purchaseCounterRecord ? purchaseCounterRecord.value : 0,
-        });
+        }, transfers);
         if (attachments) all.attachments = attachments;
         return all;
       });
@@ -536,6 +572,8 @@
       const attachmentChanges = changes.attachments || {};
       const products = tx.objectStore(PRODUCTS);
       const invoices = tx.objectStore(INVOICES);
+      const transferChanges = changes.debtTransfers || {};
+      const transfers = tx.objectStore(DEBT_TRANSFERS);
 
       await guardSupplierSide(tx, { supplierChanges, purchaseChanges, paymentChanges });
 
@@ -543,10 +581,30 @@
       for (const p of productChanges.put || []) products.put(p);
       for (const id of invoiceChanges.remove || []) invoices.delete(id);
       for (const inv of invoiceChanges.put || []) invoices.put(V.stripDerived(inv));
+      // Removing an invoice also removes the ledger records that carried debt INTO it: that balance can be collected
+      // on the older invoice again, so it is never lost and never owed twice. (An invoice whose own balance was carried
+      // to a newer one can not be removed: the check below reports it.)
+      for (const id of invoiceChanges.remove || []) {
+        const keys = await req(transfers.index("targetInvoiceId").getAllKeys(id));
+        for (const key of keys) transfers.delete(key);
+      }
+      for (const id of transferChanges.remove || []) transfers.delete(id);
+      for (const tr of transferChanges.put || []) transfers.put(tr);
       if (changes.settings) tx.objectStore(SETTINGS).put({ key: SETTINGS_KEY, value: changes.settings });
 
       writeSupplierSide(tx, { supplierChanges, purchaseChanges, paymentChanges, attachmentChanges });
       await checkSupplierLinks(tx, { purchaseChanges, paymentChanges, attachmentChanges });
+      // The nothing-owed-twice check. It runs on the data as it will be AFTER this change, inside the same transaction,
+      // so a payment recorded in another window a moment ago, or a second carry of the same balance, is caught here.
+      const touchesLedger = (invoiceChanges.put || []).length || (invoiceChanges.remove || []).length || (transferChanges.put || []).length || (transferChanges.remove || []).length;
+      if (touchesLedger) {
+        const carries = (invoiceChanges.put || []).some((inv) => V.carriedLines(inv).length);
+        if (carries || (await req(transfers.count())) > 0) {
+          const [allInvoices, allTransfers] = await Promise.all([req(invoices.getAll()), req(transfers.getAll())]);
+          const problems = V.ledgerProblems(allInvoices, allTransfers);
+          if (problems.length) throw invalid(problems);
+        }
+      }
 
       const counters = tx.objectStore(COUNTERS);
       const counterRecord = await req(counters.get(COUNTER_NAME));
@@ -736,10 +794,13 @@
     function writeDataset(tx, data, counter, state, purchaseCounter) {
       const products = tx.objectStore(PRODUCTS);
       const invoices = tx.objectStore(INVOICES);
+      const transfers = tx.objectStore(DEBT_TRANSFERS);
       products.clear();
       invoices.clear();
+      transfers.clear();
       for (const p of data.products) products.put(p);
       for (const inv of data.invoices) invoices.put(V.stripDerived(inv));
+      for (const tr of data.debtTransfers || []) transfers.put(tr);
       tx.objectStore(SETTINGS).put({ key: SETTINGS_KEY, value: data.settings });
       tx.objectStore(COUNTERS).put({ name: COUNTER_NAME, value: counter });
       tx.objectStore(META).put({ key: STATE_KEY, value: state });
@@ -760,7 +821,7 @@
     // Reads back, inside the same transaction, what was just written. If anything differs the
     // transaction is aborted by the caller, so a bad write never commits.
     async function verifyDataset(tx, data, counter, purchaseCounter) {
-      const [products, invoices, settingsRecord, counterRecord, suppliers, purchases, payments, attachments, purchaseCounterRecord] = await Promise.all([
+      const [products, invoices, settingsRecord, counterRecord, suppliers, purchases, payments, attachments, purchaseCounterRecord, transfers] = await Promise.all([
         req(tx.objectStore(PRODUCTS).getAll()),
         req(tx.objectStore(INVOICES).getAll()),
         req(tx.objectStore(SETTINGS).get(SETTINGS_KEY)),
@@ -770,10 +831,15 @@
         req(tx.objectStore(SUPPLIER_PAYMENTS).getAll()),
         req(tx.objectStore(ATTACHMENTS).getAll()),
         req(tx.objectStore(COUNTERS).get(PURCHASE_COUNTER_NAME)),
+        req(tx.objectStore(DEBT_TRANSFERS).getAll()),
       ]);
       const fail = (what) => new DbError("VERIFY", t("db.verifyFailed", { what: t("db.what." + what) }));
       if (products.length !== data.products.length) throw fail("products");
       if (invoices.length !== data.invoices.length) throw fail("invoices");
+      const wantedTransfers = data.debtTransfers || [];
+      if (transfers.length !== wantedTransfers.length) throw fail("transfers");
+      const transferById = new Map(transfers.map((tr) => [tr.id, tr]));
+      for (const tr of wantedTransfers) if (!V.sameValue(transferById.get(tr.id), tr)) throw fail("transfer");
       const byId = new Map(products.map((p) => [p.id, p]));
       for (const p of data.products) if (!V.sameValue(byId.get(p.id), p)) throw fail("product");
       const invById = new Map(invoices.map((i) => [i.id, i]));
@@ -803,7 +869,10 @@
     async function restore(data, restoreOptions) {
       const extra = { suppliers: data.suppliers, purchases: data.purchases, supplierPayments: data.supplierPayments, attachments: data.attachments };
       const problems = validateRecords(data.products, data.invoices, data.settings, extra);
+      problems.push(...validateTransfers(data.debtTransfers));
       if (!problems.length) problems.push(...P.linkProblems(extra, { checkAttachmentData: true }));
+      // The ledger has to agree with the invoices it points at, or a balance could be owed twice after the restore.
+      if (!problems.length) problems.push(...V.ledgerProblems(data.invoices, data.debtTransfers || []));
       if (problems.length) throw invalid(problems);
       const expected = restoreOptions && restoreOptions.expectedRevision;
       const result = await withTx(ALL_STORES, "readwrite", async (tx) => {
@@ -823,7 +892,7 @@
       });
       // After the commit, read it all back once more through a fresh transaction.
       const after = await loadAll({ withAttachments: true });
-      const same = after.products.length === data.products.length && after.invoices.length === data.invoices.length && after.counter === result.counter &&
+      const same = after.products.length === data.products.length && after.invoices.length === data.invoices.length && after.debtTransfers.length === (data.debtTransfers || []).length && after.counter === result.counter &&
         after.suppliers.length === (data.suppliers || []).length && after.purchases.length === (data.purchases || []).length &&
         after.supplierPayments.length === (data.supplierPayments || []).length && after.attachments.length === (data.attachments || []).length;
       if (!same) throw new DbError("VERIFY", t("db.restoreVerify"));
@@ -1039,7 +1108,7 @@
   }
 
   globalThis.InvoisyDB = {
-    DB_NAME, DB_VERSION, STORES: { PRODUCTS, INVOICES, SETTINGS, COUNTERS, META, SUPPLIERS, PURCHASES, SUPPLIER_PAYMENTS, ATTACHMENTS }, DATA_STORES, ALL_STORES,
+    DB_NAME, DB_VERSION, STORES: { PRODUCTS, INVOICES, SETTINGS, COUNTERS, META, SUPPLIERS, PURCHASES, SUPPLIER_PAYMENTS, ATTACHMENTS, DEBT_TRANSFERS }, DATA_STORES, ALL_STORES,
     DbError, MSG, create, diff, isEmptyChange, validateChanges,
   };
 })();

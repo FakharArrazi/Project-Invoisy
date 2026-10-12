@@ -403,6 +403,76 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 .toast.show { opacity: 1; }
 .toast.error { background: var(--danger); }
 
+/* ---------- Outstanding customer debt ---------- */
+
+.cust-field { position: relative; }
+.cust-suggest {
+  position: absolute; z-index: 20; left: 0; right: 0; top: 100%; margin: 2px 0 0; padding: 4px 0; list-style: none;
+  background: var(--panel); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  max-height: 240px; overflow-y: auto;
+}
+.cust-suggest li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 10px; cursor: pointer; }
+.cust-suggest li:hover, .cust-suggest li.active { background: var(--accent-tint); }
+.cust-suggest .owes { color: var(--danger); font-weight: 600; white-space: nowrap; }
+
+.debt-notice { margin: 16px 0 0; padding: 14px 16px; background: #fff7e6; border: 1px solid #e0b252; border-left: 5px solid #c98a00; border-radius: 6px; }
+.debt-head { display: flex; gap: 10px; align-items: flex-start; }
+.debt-head h3 { margin: 0; font-size: 15px; }
+.debt-head p { margin: 2px 0 0; }
+.debt-icon { color: #8a5a00; flex: none; margin-top: 1px; }
+.debt-customer { margin: 10px 0 6px; }
+.debt-list, .debt-candidates { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.debt-invoice, .debt-candidate { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
+.debt-candidate { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.debt-candidates { margin-top: 10px; }
+.debt-invoice-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.debt-invoice-title { font-weight: 600; }
+.debt-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 6px 14px; margin: 8px 0 0; }
+.debt-figures dt { font-size: 12px; color: var(--muted); }
+.debt-figures dd { margin: 0; font-variant-numeric: tabular-nums; }
+.debt-outstanding dd { font-weight: 700; color: var(--danger); }
+.debt-insale { margin: 6px 0 0; color: #1b6e3c; font-weight: 600; }
+.debt-total { display: flex; justify-content: space-between; gap: 12px; margin: 12px 0 0; padding-top: 10px; border-top: 1px solid #e0b252; font-size: 15px; }
+.debt-total strong { color: var(--danger); font-variant-numeric: tabular-nums; }
+.debt-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.debt-reminder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 0; color: #8a5a00; font-weight: 600; }
+
+.sale-debts { margin: 14px 0 0; padding: 10px 12px; border: 1px dashed var(--border-strong); border-radius: 6px; background: #fafbfc; }
+.sale-debts h3 { margin: 0 0 6px; font-size: 13px; }
+.sale-debts ul { list-style: none; margin: 0; padding: 0; }
+.sale-debts li { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
+.sale-debts li > div { flex: 1; min-width: 0; }
+.sale-debts .debt-amount { font-variant-numeric: tabular-nums; font-weight: 600; }
+.sale-debts p { margin: 6px 0 0; }
+
+.debt-dialog { width: min(560px, calc(100vw - 24px)); max-height: calc(100vh - 24px); padding: 18px 20px; border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); background: var(--panel); }
+.debt-dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+.debt-dialog h2 { margin-bottom: 6px; }
+.debt-dialog-row { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; }
+.debt-dialog-pick { display: flex; align-items: center; gap: 8px; margin: 0; }
+.debt-dialog-figs { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; margin: 6px 0 8px 26px; font-size: 13px; }
+.debt-dialog-figs span:nth-child(odd) { color: var(--muted); }
+.debt-dialog-amount { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 0 26px; }
+.debt-dialog-amount input { width: 140px; text-align: right; }
+.debt-dialog-totals { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+.debt-dialog-totals > div { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-variant-numeric: tabular-nums; }
+.debt-dialog-totals .grand { font-size: 16px; font-weight: 700; }
+.debt-dialog .actions { justify-content: flex-end; margin-top: 12px; }
+
+.badge.transferred { color: #5b3fa0; }
+.inv-status .transferred { color: #5b3fa0; }
+.inv-carried { margin-top: 14px; }
+.inv-carried h3 { margin: 0 0 4px; font-size: 12px; letter-spacing: 1px; }
+.inv-carried-table td:first-child { font-style: italic; }
+.inv-totals .purchase td { border-top: 1px solid #ddd; }
+.inv-totals .moved td { color: #5b3fa0; }
+.totals .debt-row { color: #8a5a00; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .debt-notice { animation: debt-in 0.18s ease-out; }
+}
+@keyframes debt-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
 /* ---------- Smaller screens ---------- */
 
 @media (max-width: 1180px) {
@@ -420,6 +490,12 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
   main { padding: 14px; }
   .sale-fields, .grid-2, .restock { grid-template-columns: 1fr; }
   .invoice { padding: 18px 14px; }
+  .debt-notice { padding: 12px; }
+  .debt-candidate { flex-direction: column; align-items: stretch; }
+  .debt-actions .btn { flex: 1 1 100%; }
+  .debt-dialog-amount { flex-direction: column; align-items: stretch; margin-left: 0; }
+  .debt-dialog-amount input { width: 100%; }
+  .debt-dialog-figs { margin-left: 0; }
 }
 
 /* ---------- Print: only the invoice ---------- */
@@ -436,7 +512,7 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
   .inv-biz-name { font-size: 15pt; }
   .inv-title { font-size: 20pt; }
   .inv-table th, .inv-table td { font-size: 10.5pt; }
-  .inv-table tr, .inv-totals, .inv-status, .inv-payments { page-break-inside: avoid; }
+  .inv-table tr, .inv-totals, .inv-status, .inv-payments, .inv-carried { page-break-inside: avoid; }
   html[data-paper="a5"] .invoice { padding: 10mm; font-size: 10pt; }
   html[data-paper="a5"] .inv-biz-name { font-size: 13pt; }
   html[data-paper="a5"] .inv-title { font-size: 17pt; }

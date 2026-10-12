@@ -154,12 +154,15 @@ function newSale() {
     discountType: "amount", discountValue: "",
     taxType: "amount", taxValue: "",
     paidValue: "",                          // amount paid now; empty = 0 (nothing paid yet)
+    identity: null,                         // the returning customer the person confirmed: { key, name, phone } (see debt.js)
+    debts: [],                              // old debt to carry onto this invoice: [{ sourceInvoiceId, amount }]. Draft only until the sale is saved.
   };
 }
 
 const state = {
   products: [],
   invoices: [],
+  debtTransfers: [],      // the debt-transfer ledger: which unpaid balance of an older invoice was carried to which new invoice
   settings: { ...DEFAULT_SETTINGS },
   counter: 0,
   suppliers: [],          // who the shop buys from (purchases.js); purchases are never mixed with sales
@@ -176,11 +179,13 @@ const state = {
   editingId: null,        // product being edited in the Stock form
   priceRows: [],          // the selling price rows of the Stock form, as typed: { rowId, unit, price }
   addUnitFor: null,       // product the Sell page unit list was last set up for
+  debtUi: { armed: false, dismissedKey: null, suggestions: [], suggestIndex: -1 },   // screen-only: never saved
 };
 
 function applyData(d) {
   state.products = d.products;
   state.invoices = d.invoices;
+  state.debtTransfers = d.debtTransfers || [];
   state.settings = d.settings;
   state.counter = d.counter;
   state.suppliers = d.suppliers || [];
@@ -195,7 +200,7 @@ function applyData(d) {
 
 function draftFromState() {
   const draft = structuredClone({
-    products: state.products, invoices: state.invoices, settings: state.settings, counter: state.counter,
+    products: state.products, invoices: state.invoices, debtTransfers: state.debtTransfers, settings: state.settings, counter: state.counter,
     suppliers: state.suppliers, purchases: state.purchases, supplierPayments: state.supplierPayments, purchaseCounter: state.purchaseCounter,
   });
   // Scanned supplier invoices are not kept in memory. A change that adds or removes one lists it here, and
@@ -279,7 +284,7 @@ async function describeSaveFailure(e) {
 async function persistData(draft) {
   const changes = InvoisyDB.diff(
     {
-      products: state.products, invoices: state.invoices, settings: state.settings, counter: state.counter,
+      products: state.products, invoices: state.invoices, debtTransfers: state.debtTransfers, settings: state.settings, counter: state.counter,
       suppliers: state.suppliers, purchases: state.purchases, supplierPayments: state.supplierPayments, purchaseCounter: state.purchaseCounter,
     },
     draft
@@ -567,7 +572,7 @@ function importBackup(file) {
 // Is what a file holds the same data as the database? Both sides went through the same reader, so they compare directly.
 function sameBackupData(a, b) {
   const pick = (d) => ({
-    products: d.products, invoices: d.invoices, settings: d.settings, counter: d.counter,
+    products: d.products, invoices: d.invoices, debtTransfers: d.debtTransfers || [], settings: d.settings, counter: d.counter,
     suppliers: d.suppliers || [], purchases: d.purchases || [], supplierPayments: d.supplierPayments || [],
     attachments: d.attachments || [], purchaseCounter: d.purchaseCounter || 0,
   });
@@ -1275,6 +1280,29 @@ function calculateTotals(sale) {
   return { subtotal, discount, tax, total };
 }
 
+// Old debt carried onto this sale (a draft until the sale is saved) is NOT part of calculateTotals: those totals
+// describe the products sold, and discount and tax apply to them only. What the customer owes on this invoice is
+// the total of this purchase plus the carried-forward debt.
+function saleCarried(sale) {
+  return round2((sale.debts || []).reduce((sum, d) => sum + toNumber(d.amount), 0));
+}
+
+function saleDue(sale) {
+  return round2(calculateTotals(sale).total + saleCarried(sale));
+}
+
+// The carried-forward lines a sale will print, worked out from its draft debts (the ids are replaced by real
+// transfer ids when the sale is saved, see applySale).
+function draftCarriedLines(sale, data = state) {
+  const lines = [];
+  for (const d of sale.debts || []) {
+    const source = data.invoices.find((i) => i.id === d.sourceInvoiceId);
+    if (!source) continue;
+    lines.push({ transferId: "draft-" + source.id, sourceInvoiceId: source.id, sourceInvoiceNumber: source.invoiceNumber, sourceDate: source.date, amount: round2(toNumber(d.amount)) });
+  }
+  return lines.sort((a, b) => invoiceSequence(a.sourceInvoiceNumber) - invoiceSequence(b.sourceInvoiceNumber));
+}
+
 // Amount received with the sale. An empty field means nothing was paid (never "paid in full").
 function salePaid(sale, total) {
   if (String(sale.paidValue).trim() === "") return 0;
@@ -1285,16 +1313,27 @@ function salePaid(sale, total) {
 // Total paid, remaining balance and status are always calculated from the payments list
 // (the sums are in validation.js; the status is worded here in the current language).
 function paymentInfo(inv) {
-  const { payments, paid, remaining, cls } = Validation.paymentSummary(inv);
-  const status = t({ paid: "inv.status.paid", partial: "inv.status.partial", unpaid: "inv.status.unpaid" }[cls]);
-  return { payments, paid, remaining, status, cls };
+  const { payments, paid, remaining, cls, due, transferredOut, carried } = Validation.paymentDetail(inv, state.debtTransfers);
+  const status = t({ paid: "inv.status.paid", partial: "inv.status.partial", unpaid: "inv.status.unpaid", transferred: "inv.status.transferred" }[cls]);
+  return { payments, paid, remaining, status, cls, due, transferredOut, carried };
 }
+// "INV-000030" or "INV-000030, INV-000031": where an invoice's balance was carried forward to.
+function carriedToNumbers(inv, transfers = state.debtTransfers) {
+  return [...new Set(Debt.carriedTo(inv, transfers).map((x) => x.number))].join(", ");
+}
+
+// What the debt rules need to know about the sale on screen: the invoices, the ledger and the confirmed customer.
+function debtContext(sale = state.sale) {
+  const resolved = Debt.resolve(sale.customer, Debt.directory(state.invoices, state.debtTransfers), sale.identity);
+  return { invoices: state.invoices, transfers: state.debtTransfers, group: resolved.status === "confirmed" ? resolved.group : null, money: (n) => money(n) };
+}
+
 function paidError() {
   const raw = String(state.sale.paidValue).trim();
   if (raw === "") return "";
   const v = Number(raw);
   if (!Number.isFinite(v) || v < 0) return t("sale.paidNegative");
-  if (round2(v) > calculateTotals(state.sale).total) return t("sale.paidTooMuch");
+  if (round2(v) > saleDue(state.sale)) return t("sale.paidTooMuch");
   return "";
 }
 
@@ -1333,6 +1372,7 @@ function validateSale() {
   const adj = adjustmentError() || paidError();
   if (adj) errors.push(adj);
   if (!Number.isFinite(calculateTotals(state.sale).total)) errors.push(t("sale.totalInvalid"));
+  errors.push(...Debt.draftProblems(state.sale.debts, debtContext()));
   return errors;
 }
 
@@ -1386,8 +1426,10 @@ function clearSale() {
   showError("saleError", "");
   showError("addError", "");
   state.previewInvoice = null;
+  state.debtUi = { armed: false, dismissedKey: null, suggestions: [], suggestIndex: -1 };   // the next sale starts with a clean slate: the warning shows again
   renderSale();
   renderInvoice();
+  renderDebtUi();
 }
 
 /* ==========================================================================
@@ -1396,7 +1438,8 @@ function clearSale() {
 
 function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
   const totals = calculateTotals(sale);
-  const paid = salePaid(sale, totals.total);
+  const carried = draftCarriedLines(sale, data);
+  const paid = salePaid(sale, round2(totals.total + round2(carried.reduce((sum, l) => sum + l.amount, 0))));
   const items = sale.items.map((item) => {
     const p = findProduct(item.productId, data);
     const taken = p ? Calc.stockDeduction(p, item.qty, item.sellingUnit) : { error: true };
@@ -1437,6 +1480,9 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
       address: sale.customer.address.trim(),
     },
     items,
+    // Debt carried forward from older invoices: its own lines, never products. subtotal, discount, tax and total
+    // above stay the figures of this purchase; what the customer owes is total + the carried lines.
+    ...(carried.length ? { carriedForward: carried } : {}),
     subtotal: totals.subtotal,
     discount: totals.discount,
     tax: totals.tax,
@@ -1455,7 +1501,12 @@ function draftInvoice() {
 
 // Turns a sale into a saved invoice on the data draft `d`: checks the stock again, takes the stock out
 // (converted to each product's stock unit) and moves the invoice counter on. { invoice } or { error }.
+//
+// A sale that carries old debt forward also adds its ledger records to the same draft, so the invoice, the stock,
+// the counter and the debt transfers are saved in ONE transaction (see persistData / database.js): all or nothing.
+// The debt is checked again here against the latest data, and once more inside the database transaction.
 function applySale(d, sale) {
+  d.debtTransfers = d.debtTransfers || [];
   if (sale.items.some((i) => !findProduct(i.productId, d))) return { error: t("sale.productMissing") };
   const needs = stockNeeds(sale.items, d);
   if (needs.errors.length) return { error: needs.errors[0] };
@@ -1463,7 +1514,19 @@ function applySale(d, sale) {
     const p = findProduct(productId, d);
     if (!Calc.hasEnoughStock(p.stock, total)) return { error: t("sale.nameMessage", { name: p.name, message: stockMessage(p) }) };
   }
-  const invoice = { id: uid(), ...buildInvoiceData(sale, formatInvoiceNumber(d.counter + 1), new Date().toISOString(), d) };
+  const createdAt = new Date().toISOString();
+  const invoice = { id: uid(), ...buildInvoiceData(sale, formatInvoiceNumber(d.counter + 1), createdAt, d) };
+  // A returning customer (confirmed from the list, or the exact same name and phone) keeps one id from now on.
+  const resolved = Debt.resolve(sale.customer, Debt.directory(d.invoices, d.debtTransfers), sale.identity);
+  const customerId = Debt.customerIdFor(resolved);
+  if (customerId) invoice.customer.id = customerId;
+  if ((sale.debts || []).length) {
+    const ctx = { invoices: d.invoices, transfers: d.debtTransfers, group: resolved.status === "confirmed" ? resolved.group : null, money: (n) => money(n) };
+    const carried = Debt.buildTransfers(sale.debts, invoice, ctx, createdAt);
+    if (carried.error) return { error: carried.error };
+    invoice.carriedForward = carried.lines;
+    d.debtTransfers.push(...carried.transfers);
+  }
   // Stock goes down by what was sold converted to each product's stock unit (never by the typed quantity).
   for (const [productId, total] of needs.totals) {
     const p = findProduct(productId, d);
@@ -1506,10 +1569,23 @@ function completeSale() {
 async function deleteInvoice(id) {
   const inv = state.invoices.find((i) => i.id === id);
   if (!inv) return;
-  if (!confirm(t("invoice.confirmDelete", { number: inv.invoiceNumber }))) return;
-  const r = await commit((d) => { d.invoices = d.invoices.filter((i) => i.id !== id); });
+  // An invoice whose unpaid balance was carried to a newer invoice stays: deleting it would lose that debt.
+  if (Debt.carriedTo(inv, state.debtTransfers).length) {
+    notify(t("invoice.cannotDeleteCarried", { number: inv.invoiceNumber, numbers: carriedToNumbers(inv) }), "error");
+    return;
+  }
+  const carriedFrom = Validation.carriedLines(inv).map((l) => l.sourceInvoiceNumber).join(", ");
+  const question = t("invoice.confirmDelete", { number: inv.invoiceNumber }) + (carriedFrom ? "\n\n" + t("invoice.confirmDeleteRestores", { number: inv.invoiceNumber, from: carriedFrom }) : "");
+  if (!confirm(question)) return;
+  // Deleting a new invoice also removes the ledger records that carried debt into it, so that balance is
+  // collectible on the older invoice again (the database does the same, see commitInTx).
+  const r = await commit((d) => {
+    d.invoices = d.invoices.filter((i) => i.id !== id);
+    d.debtTransfers = (d.debtTransfers || []).filter((tr) => tr.targetInvoiceId !== id);
+  });
   if (r.error) { notify(r.error, "error"); return; }
   renderAll();
+  onDebtDataChanged();
   notify(t("invoice.deleted", { number: inv.invoiceNumber }));
 }
 
@@ -1517,18 +1593,22 @@ async function deleteInvoice(id) {
 async function addPayment(id, rawAmount) {
   const inv = state.invoices.find((i) => i.id === id);
   if (!inv) return { error: t("pay.notFound") };
-  const { remaining } = paymentInfo(inv);
-  if (remaining <= 0) return { error: t("pay.alreadyPaid") };
+  const { remaining, transferredOut } = paymentInfo(inv);
+  // Money owed on a balance that was carried forward is collected on the NEW invoice, never on both.
+  if (remaining <= 0) return { error: transferredOut > 0 ? t("pay.transferredMsg", { numbers: carriedToNumbers(inv) }) : t("pay.alreadyPaid") };
   const amount = Number(rawAmount);
   if (rawAmount === "" || !Number.isFinite(amount) || amount <= 0) return { error: t("pay.enterAmount") };
   if (round2(amount) > remaining) return { error: t("pay.tooMuch") };
 
-  return commit((d) => {
+  const saved = await commit((d) => {
     const target = d.invoices.find((i) => i.id === id);
     if (!target) return { error: t("pay.notFound") };
-    if (round2(amount) > paymentInfo(target).remaining) return { error: t("pay.tooMuch") };
+    if (round2(amount) > Validation.paymentSummary(target, d.debtTransfers).remaining) return { error: t("pay.tooMuch") };
     target.payments.push({ amount: round2(amount), timestamp: new Date().toISOString() });
   });
+  // A payment may lower what can still be carried onto the sale on screen.
+  if (!saved.error) onDebtDataChanged();
+  return saved;
 }
 
 function viewInvoice(id) {
@@ -1760,16 +1840,26 @@ function renderSale() {
         `</tr>`;
     }).join("");
   }
+  renderSaleDebts();
   renderTotals();
 }
 
 function renderTotals() {
-  const t = calculateTotals(state.sale);
-  $("tSubtotal").textContent = money(t.subtotal);
-  $("tDiscount").textContent = money(t.discount);
-  $("tTax").textContent = money(t.tax);
-  $("tTotal").textContent = money(t.total);
-  $("tRemaining").textContent = money(Math.max(0, round2(t.total - salePaid(state.sale, t.total))));
+  const totals = calculateTotals(state.sale);
+  const carried = saleCarried(state.sale);
+  const due = round2(totals.total + carried);
+  $("tSubtotal").textContent = money(totals.subtotal);
+  $("tDiscount").textContent = money(totals.discount);
+  $("tTax").textContent = money(totals.tax);
+  // With debt carried forward the Total is the products only, followed by the carried debt and the total due.
+  $("tTotalLabel").textContent = I18n.t(carried > 0 ? "sell.totalPurchase" : "sell.total");
+  $("tTotalRow").classList.toggle("grand", carried <= 0);
+  $("tTotal").textContent = money(totals.total);
+  $("tCarriedRow").hidden = carried <= 0;
+  $("tCarried").textContent = money(carried);
+  $("tDueRow").hidden = carried <= 0;
+  $("tDue").textContent = money(due);
+  $("tRemaining").textContent = money(Math.max(0, round2(due - salePaid(state.sale, due))));
   $("amountPaid").placeholder = "0";
 }
 
@@ -1809,8 +1899,24 @@ function invoiceHtml(inv) {
 
   const pay = paymentInfo(inv);
   const hasItems = inv.items.length > 0;
+  // Debt carried onto this invoice from older ones: separate lines under the products, never mixed into them.
+  const carried = Validation.carriedLines(inv);
+  const carriedBlock = carried.length
+    ? `<section class="inv-carried"><h3>${esc(t("inv.carriedHeading"))}</h3><table class="inv-table inv-carried-table"><tbody>${
+        carried.map((l) => `<tr><td>${esc(t("inv.carriedLine", { number: l.sourceInvoiceNumber, date: formatDate(l.sourceDate) }))}</td><td class="num">${num(l.amount)}</td></tr>`).join("")
+      }</tbody></table></section>`
+    : "";
+  const totalRows = carried.length
+    ? `<tr class="purchase"><td>${esc(t("inv.totalPurchase"))}</td><td>${esc(money(toNumber(inv.total), cur))}</td></tr>
+      <tr><td>${esc(t("inv.carriedTotal"))}</td><td>${esc(money(pay.carried, cur))}</td></tr>
+      <tr class="grand"><td>${esc(t("inv.totalDue"))}</td><td>${esc(money(pay.due, cur))}</td></tr>`
+    : `<tr class="grand"><td>${esc(t("inv.grandTotal"))}</td><td>${esc(money(toNumber(inv.total), cur))}</td></tr>`;
+  // On an older invoice whose balance moved to a newer one, the original total is untouched and the move is shown as its own line.
+  const movedRow = pay.transferredOut > 0
+    ? `<tr class="moved"><td>${esc(t("inv.transferredOut", { numbers: carriedToNumbers(inv) }))}</td><td>${esc(money(pay.transferredOut, cur))}</td></tr>`
+    : "";
   const paidRows = hasItems
-    ? `<tr><td>${esc(t("inv.totalPaid"))}</td><td>${esc(money(pay.paid, cur))}</td></tr><tr class="due"><td>${esc(t("inv.remaining"))}</td><td>${esc(money(pay.remaining, cur))}</td></tr>`
+    ? `<tr><td>${esc(t("inv.totalPaid"))}</td><td>${esc(money(pay.paid, cur))}</td></tr>${movedRow}<tr class="due"><td>${esc(t("inv.remaining"))}</td><td>${esc(money(pay.remaining, cur))}</td></tr>`
     : "";
   const history = hasItems
     ? `<div class="inv-status"><span class="${pay.cls}">${esc(t("inv.status"))} ${esc(pay.status)}</span></div>
@@ -1833,11 +1939,12 @@ function invoiceHtml(inv) {
       <thead><tr><th>${esc(t("inv.product"))}</th><th class="num">${esc(t("inv.qty"))}</th><th class="num">${esc(t("inv.price", { currency: cur }))}</th><th class="num">${esc(t("inv.lineTotal", { currency: cur }))}</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
+    ${carriedBlock}
     <table class="inv-totals">
       <tr><td>${esc(t("inv.subtotal"))}</td><td>${esc(money(toNumber(inv.subtotal), cur))}</td></tr>
       <tr><td>${esc(t("inv.discount"))}${pct(inv.discountPercent)}</td><td>${esc(money(toNumber(inv.discount), cur))}</td></tr>
       <tr><td>${esc(t("inv.tax"))}${pct(inv.taxPercent)}</td><td>${esc(money(toNumber(inv.tax), cur))}</td></tr>
-      <tr class="grand"><td>${esc(t("inv.grandTotal"))}</td><td>${esc(money(toNumber(inv.total), cur))}</td></tr>
+      ${totalRows}
       ${paidRows}
     </table>
     ${history}
@@ -1853,12 +1960,20 @@ function renderPayBox() {
   const info = paymentInfo(inv);
   const full = info.remaining <= 0;
   $("payNumber").textContent = inv.invoiceNumber;
-  $("payTotal").textContent = money(toNumber(inv.total), cur);
+  $("payTotal").textContent = money(info.due, cur);
   $("payPaid").textContent = money(info.paid, cur);
   $("payRemaining").textContent = money(info.remaining, cur);
+  // How the payments on this invoice are shared with the debt it carries (oldest debt first), and where its own balance went.
+  const breakdown = Validation.carriedBreakdown(inv);
+  $("payCarriedRow").hidden = !(info.carried > 0);
+  $("payCarried").textContent = info.carried > 0 ? `${money(info.carried, cur)} (${t("pay.carriedSettled", { paid: money(breakdown.carriedPaid, cur), total: money(info.carried, cur) })})` : "";
+  $("payTransferredRow").hidden = !(info.transferredOut > 0);
+  $("payTransferred").textContent = info.transferredOut > 0 ? `${money(info.transferredOut, cur)} (${carriedToNumbers(inv)})` : "";
   $("payAmount").disabled = full;
   $("payBtn").disabled = full;
-  $("payAmount").placeholder = full ? t("pay.fullyPaid") : t("pay.max", { n: numberFormat.format(info.remaining) });
+  $("payAmount").placeholder = full
+    ? t(info.cls === "transferred" ? "pay.carriedTo" : "pay.fullyPaid", { numbers: carriedToNumbers(inv) })
+    : t("pay.max", { n: numberFormat.format(info.remaining) });
 }
 
 function renderInvoice() {
@@ -1944,12 +2059,16 @@ function renderInvoices() {
     : `<p><strong>${esc(t("invoices.none"))}</strong></p><p class="muted">${esc(t("invoices.noneHint"))}</p>`;
   $("invoiceBody").innerHTML = list.map((inv) => {
     const pay = paymentInfo(inv);
-    const label = t({ paid: "badge.paid", partial: "badge.partial", unpaid: "badge.unpaid" }[pay.cls]);
+    const label = t({ paid: "badge.paid", partial: "badge.partial", unpaid: "badge.unpaid", transferred: "badge.transferred" }[pay.cls]);
+    // Total is what the invoice asks for (this purchase + debt carried onto it). The notes say where the figure comes from.
+    const notes = [];
+    if (pay.carried > 0) notes.push(t("invoices.inclCarried", { amount: money(pay.carried, inv.currency) }));
+    if (pay.transferredOut > 0) notes.push(t("invoices.carriedTo", { amount: money(pay.transferredOut, inv.currency), numbers: carriedToNumbers(inv) }));
     return `<tr data-id="${esc(inv.id)}">` +
       `<td>${esc(inv.invoiceNumber)}</td>` +
       `<td>${esc(formatDate(inv.date))}</td>` +
       `<td>${esc(customerLabel(inv.customer && inv.customer.name))}</td>` +
-      `<td class="num">${esc(money(toNumber(inv.total), inv.currency))}</td>` +
+      `<td class="num">${esc(money(pay.due, inv.currency))}${notes.length ? `<div class="muted small">${notes.map(esc).join("<br>")}</div>` : ""}</td>` +
       `<td class="num">${esc(money(pay.paid, inv.currency))}</td>` +
       `<td class="num">${esc(money(pay.remaining, inv.currency))}</td>` +
       `<td><span class="badge ${pay.cls}">${esc(label)}</span></td>` +
@@ -2208,6 +2327,7 @@ function refreshAfterLoad() {
   renderAll();
   renderStorage();
   if (notes.length) notify(notes.join(" "), "error");
+  onDebtDataChanged();
 }
 
 function renderAll() {
@@ -2223,6 +2343,311 @@ function renderAll() {
   renderInvoices();
   renderInvoice();
   PurchasesUI.render();
+  renderDebtUi();
+}
+
+/* ==========================================================================
+   OUTSTANDING CUSTOMER DEBT (Sell page)
+   Recognizes a returning customer, shows what they still owe, and lets the person carry it onto the sale.
+   Everything here is a draft on the screen: nothing is written until the sale is completed (see applySale).
+   ========================================================================== */
+
+const BELL_ICON = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>';
+
+let debtNoticeCache = "";
+let debtDialogReturnFocus = null;
+
+const debtDirectory = () => Debt.directory(state.invoices, state.debtTransfers);
+
+// How much of an older invoice is already on the sale being prepared.
+function draftAmountFor(invoiceId) {
+  const entry = (state.sale.debts || []).find((d) => d.sourceInvoiceId === invoiceId);
+  return entry ? round2(toNumber(entry.amount)) : 0;
+}
+
+// What the notice has to show for the customer on the sale right now (null until the customer is confirmed/selected,
+// so nothing appears while the name is still being typed).
+//   { kind: "confirmed", key, group, owed }  or  { kind: "choose", key, candidates: [{ group, owed }] }
+function debtView() {
+  if (!state.debtUi.armed) return null;
+  const resolved = Debt.resolve(state.sale.customer, debtDirectory(), state.sale.identity);
+  if (resolved.status === "confirmed") {
+    const owed = Debt.outstanding(resolved.group, state.debtTransfers);
+    return owed.count ? { kind: "confirmed", key: resolved.group.keys[0], group: resolved.group, owed } : null;
+  }
+  if (resolved.status === "choose") {
+    const candidates = resolved.candidates
+      .map((group) => ({ group, owed: Debt.outstanding(group, state.debtTransfers) }))
+      .filter((c) => c.owed.count);
+    return candidates.length ? { kind: "choose", key: "choose:" + candidates.map((c) => c.group.keys[0]).join("|"), candidates } : null;
+  }
+  return null;
+}
+
+const debtDismissed = (view) => !!view && state.debtUi.dismissedKey === view.key;
+
+function debtInvoiceCard(row) {
+  const inv = row.invoice;
+  const cur = inv.currency;
+  const inSale = draftAmountFor(inv.id);
+  const transferred = row.transferred > 0 ? `<div><dt>${esc(t("debt.row.transferred"))}</dt><dd>${esc(money(row.transferred, cur))}</dd></div>` : "";
+  return `<li class="debt-invoice">` +
+    `<div class="debt-invoice-head"><span class="debt-invoice-title">${esc(t("debt.invoiceHeading", { number: inv.invoiceNumber, date: formatDate(inv.date) }))}</span>` +
+    `<button type="button" class="btn small" data-debt-view="${esc(inv.id)}" aria-label="${esc(t("debt.viewAria", { number: inv.invoiceNumber }))}">${esc(t("debt.viewInvoice"))}</button></div>` +
+    `<dl class="debt-figures">` +
+    `<div><dt>${esc(t("debt.row.total"))}</dt><dd>${esc(money(row.due, cur))}</dd></div>` +
+    `<div><dt>${esc(t("debt.row.paid"))}</dt><dd>${esc(money(row.paid, cur))}</dd></div>` +
+    transferred +
+    `<div class="debt-outstanding"><dt>${esc(t("debt.row.outstanding"))}</dt><dd>${esc(money(row.available, cur))}</dd></div>` +
+    `</dl>` +
+    (inSale > 0 ? `<p class="debt-insale small">${esc(t("debt.inSale", { amount: money(inSale, cur) }))}</p>` : "") +
+    `</li>`;
+}
+
+function debtNoticeHtml(view) {
+  if (!view) return "";
+  const head = (title, subtitle) => `<div class="debt-head"><span class="debt-icon">${BELL_ICON}</span><div><h3 id="debtNoticeTitle">${esc(title)}</h3><p class="muted small">${esc(subtitle)}</p></div></div>`;
+  const later = `<button type="button" class="btn" data-debt-action="later">${esc(t("debt.later"))}</button>`;
+
+  if (view.kind === "choose") {
+    const items = view.candidates.map(({ group, owed }) => {
+      const label = group.name + (group.phone ? " · " + group.phone : " · " + t("debt.noPhone"));
+      return `<li class="debt-candidate"><div><strong>${esc(label)}</strong><div class="muted small">${esc(tn("debt.unpaidCount", owed.count))} · ${esc(t("debt.chooseOwed", { amount: money(owed.total) }))}</div></div>` +
+        `<button type="button" class="btn small primary" data-debt-pick="${esc(group.keys[0])}" aria-label="${esc(t("debt.chooseAria", { name: group.name }))}">${esc(t("debt.chooseBtn"))}</button></li>`;
+    }).join("");
+    return head(t("debt.chooseTitle"), t("debt.chooseText")) + `<ul class="debt-candidates">${items}</ul><div class="debt-actions">${later}</div>`;
+  }
+
+  const { group, owed } = view;
+  const available = owed.rows.filter((row) => draftAmountFor(row.invoice.id) <= 0);
+  const addBtn = available.length ? `<button type="button" class="btn primary" data-debt-action="add">${esc(t("debt.add"))}</button>` : "";
+  return head(t("debt.title"), t("debt.subtitle")) +
+    `<p class="debt-customer"><strong>${esc(t("debt.customer", { name: group.name }))}</strong> · ${esc(tn("debt.unpaidCount", owed.count))}</p>` +
+    `<ul class="debt-list">${owed.rows.map(debtInvoiceCard).join("")}</ul>` +
+    `<p class="debt-total"><span>${esc(t("debt.totalOutstanding"))}</span><strong>${esc(money(owed.total))}</strong></p>` +
+    `<div class="debt-actions">${addBtn}${later}</div>`;
+}
+
+function renderDebtUi() {
+  const view = debtView();
+  const hidden = !view || debtDismissed(view);
+  const notice = $("debtNotice");
+  const html = hidden ? "" : debtNoticeHtml(view);
+  notice.hidden = hidden;
+  // Only touch the card when it changed, so a screen reader does not re-read it and focus is not lost.
+  if (html !== debtNoticeCache) { notice.innerHTML = html; debtNoticeCache = html; }
+
+  // After "Remind Me Later" a small reminder stays beside the customer fields.
+  const reminder = $("debtReminder");
+  const reminded = !!view && view.kind === "confirmed" && debtDismissed(view);
+  reminder.hidden = !reminded;
+  $("debtReminderText").textContent = reminded ? t("debt.reminder", { amount: money(view.owed.total) }) : "";
+  renderSuggestions();
+}
+
+function renderSuggestions() {
+  const list = $("custSuggest");
+  const input = $("custName");
+  const items = state.debtUi.suggestions;
+  const open = items.length > 0;
+  list.hidden = !open;
+  list.innerHTML = items.map((group, i) =>
+    `<li role="option" id="custSuggest-${i}" data-debt-pick="${esc(group.keys[0])}" aria-selected="${i === state.debtUi.suggestIndex}"${i === state.debtUi.suggestIndex ? ' class="active"' : ""}>` +
+    `<span>${esc(group.name)}${group.phone ? " · " + esc(group.phone) : ""}</span>` +
+    (group.debt > 0 ? `<span class="owes">${esc(t("debt.suggestOwes", { amount: money(group.debt) }))}</span>` : "") + `</li>`).join("");
+  input.setAttribute("aria-expanded", String(open));
+  if (open && state.debtUi.suggestIndex >= 0) input.setAttribute("aria-activedescendant", "custSuggest-" + state.debtUi.suggestIndex);
+  else input.removeAttribute("aria-activedescendant");
+}
+
+// The carried-forward lines of the sale on screen (with a button to take one out again).
+function renderSaleDebts() {
+  const box = $("saleDebts");
+  const lines = draftCarriedLines(state.sale);
+  box.hidden = lines.length === 0;
+  if (!lines.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<h3>${esc(t("debt.draftTitle"))}</h3><ul>` + lines.map((l) =>
+    `<li><div><strong>${esc(t("debt.draftLine", { number: l.sourceInvoiceNumber }))}</strong><div class="muted small">${esc(formatDate(l.sourceDate))}</div></div>` +
+    `<span class="debt-amount">${esc(money(l.amount))}</span>` +
+    `<button type="button" class="btn small danger" data-debt-remove="${esc(l.sourceInvoiceId)}" aria-label="${esc(t("debt.removeAria", { number: l.sourceInvoiceNumber }))}">${esc(t("common.remove"))}</button></li>`).join("") +
+    `</ul><p class="muted small">${esc(t("debt.draftNote"))}</p>`;
+}
+
+// The customer fields were typed in: nothing is looked up until the person settles on a customer.
+function onCustomerTyped(field) {
+  const ui = state.debtUi;
+  ui.armed = false;
+  ui.dismissedKey = null;
+  ui.suggestIndex = -1;
+  ui.suggestions = field === "name" ? Debt.suggest(state.sale.customer.name, debtDirectory()) : [];
+  dropDebtsIfCustomerChanged();
+  renderDebtUi();
+}
+
+// Debt on the sale belongs to ONE customer: when the name or phone no longer identifies them, it comes off.
+function dropDebtsIfCustomerChanged() {
+  if (!state.sale.debts.length) return;
+  const ctx = debtContext();
+  const theirs = ctx.group && state.sale.debts.every((d) => ctx.group.invoices.some((i) => i.id === d.sourceInvoiceId));
+  if (theirs) return;
+  state.sale.debts = [];
+  notify(t("debt.customerChanged"), "error");
+}
+
+// The person finished with the customer fields (left them, pressed Enter): now their debt may be looked up.
+function onCustomerSettled() {
+  const ui = state.debtUi;
+  ui.armed = true;
+  ui.suggestions = [];
+  ui.suggestIndex = -1;
+  renderDebtUi();
+  scrollDebtNoticeIntoView();
+}
+
+function scrollDebtNoticeIntoView() {
+  const notice = $("debtNotice");
+  if (!notice.hidden && typeof notice.scrollIntoView === "function") notice.scrollIntoView({ block: "nearest" });
+}
+
+// The person chose a customer from the suggestions or from the "is this the customer?" list.
+function pickCustomer(key) {
+  const group = debtDirectory().find((g) => g.keys.includes(key));
+  if (!group) return;
+  const c = state.sale.customer;
+  c.name = group.name;
+  c.phone = group.phone || "";
+  if (!String(c.address).trim()) c.address = group.address || "";
+  $("custName").value = c.name;
+  $("custPhone").value = c.phone;
+  $("custAddress").value = c.address;
+  state.sale.identity = Debt.identityOf(group, c);
+  Object.assign(state.debtUi, { armed: true, dismissedKey: null, suggestions: [], suggestIndex: -1 });
+  dropDebtsIfCustomerChanged();
+  refreshLive();
+  renderSaleDebts();
+  renderDebtUi();
+  scrollDebtNoticeIntoView();
+}
+
+function dismissDebtNotice() {
+  const view = debtView();
+  if (!view) return;
+  state.debtUi.dismissedKey = view.key;
+  renderDebtUi();
+  const field = $("custName");
+  if (field && field.focus) field.focus();
+}
+
+function showDebtNoticeAgain() {
+  state.debtUi.dismissedKey = null;
+  renderDebtUi();
+  const first = $("debtNotice").querySelector && $("debtNotice").querySelector("button");
+  if (first && first.focus) first.focus();
+}
+
+// Adds [{ sourceInvoiceId, amount }] to the sale (all or nothing). { ok } or { error }.
+function addDebtToSale(picks) {
+  const result = Debt.addToDraft(state.sale.debts, picks, debtContext());
+  if (result.error) return { error: result.error };
+  state.sale.debts = result.draft;
+  const numbers = picks.map((p) => (state.invoices.find((i) => i.id === p.sourceInvoiceId) || {}).invoiceNumber).filter(Boolean).join(", ");
+  showError("saleError", paidError());
+  refreshLive();
+  renderSaleDebts();
+  renderDebtUi();
+  notify(t("debt.added", { numbers }));
+  return { ok: true };
+}
+
+function removeDebtFromSale(invoiceId) {
+  const source = state.invoices.find((i) => i.id === invoiceId);
+  state.sale.debts = Debt.removeFromDraft(state.sale.debts, invoiceId);
+  showError("saleError", paidError());
+  refreshLive();
+  renderSaleDebts();
+  renderDebtUi();
+  if (source) notify(t("debt.removed", { number: source.invoiceNumber }));
+}
+
+// Called when saved data changed under the sale on screen (a payment, a deletion, a restored backup, another window):
+// the draft amounts are checked against the new balances and lowered or removed when they no longer fit.
+function onDebtDataChanged() {
+  if (state.sale.debts.length) {
+    const { draft, notes } = Debt.syncDraft(state.sale.debts, debtContext());
+    if (notes.length) {
+      state.sale.debts = draft;
+      notify(notes.join(" "), "error");
+    }
+  }
+  renderSaleDebts();
+  renderTotals();
+  renderInvoice();
+  renderDebtUi();
+}
+
+/* ---------- Confirmation dialog ---------- */
+
+function debtDialogRowsData() {
+  const view = debtView() || {};
+  const owed = view.kind === "confirmed" ? view.owed : Debt.outstanding({ invoices: [] }, state.debtTransfers);
+  return owed.rows.filter((row) => draftAmountFor(row.invoice.id) <= 0);
+}
+
+function openDebtDialog() {
+  const rows = debtDialogRowsData();
+  if (!rows.length) return false;
+  debtDialogReturnFocus = typeof document.activeElement !== "undefined" ? document.activeElement : null;
+  $("debtDialogRows").innerHTML = rows.map((row) => {
+    const inv = row.invoice;
+    const n = esc(inv.invoiceNumber);
+    return `<div class="debt-dialog-row" data-id="${esc(inv.id)}" data-available="${row.available}">` +
+      `<label class="debt-dialog-pick"><input type="checkbox" data-debt-include${rows.length === 1 ? " checked" : ""} aria-label="${esc(t("debt.dialogPick", { number: inv.invoiceNumber }))}"> <strong>${esc(t("debt.dialogInvoice"))}: ${n}</strong></label>` +
+      `<div class="debt-dialog-figs"><span>${esc(t("debt.dialogDate"))}</span><span>${esc(formatDate(inv.date))}</span>` +
+      `<span>${esc(t("debt.dialogRemaining"))}</span><span>${esc(money(row.available, inv.currency))}</span></div>` +
+      `<label class="debt-dialog-amount"><span>${esc(t("debt.dialogAmount"))}</span>` +
+      `<input type="number" inputmode="decimal" min="0.01" step="0.01" max="${row.available}" value="${row.available}" data-debt-amount aria-label="${esc(t("debt.dialogAmountAria", { number: inv.invoiceNumber }))}"${rows.length === 1 ? "" : " disabled"}></label>` +
+      `</div>`;
+  }).join("");
+  showError("debtDialogError", "");
+  updateDebtDialogTotals();
+  const dialog = $("debtDialog");
+  if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
+  const first = $("debtDialogRows").querySelector && $("debtDialogRows").querySelector("input");
+  if (first && first.focus) first.focus();
+  return true;
+}
+
+function closeDebtDialog() {
+  const dialog = $("debtDialog");
+  if (typeof dialog.close === "function") dialog.close(); else dialog.removeAttribute("open");
+  if (debtDialogReturnFocus && typeof debtDialogReturnFocus.focus === "function") debtDialogReturnFocus.focus();
+  debtDialogReturnFocus = null;
+}
+
+// What the person ticked in the dialog: [{ sourceInvoiceId, amount }] (the amount as typed, checked later).
+function collectDebtPicks() {
+  const picks = [];
+  for (const row of $("debtDialogRows").querySelectorAll(".debt-dialog-row")) {
+    if (!row.querySelector("[data-debt-include]").checked) continue;
+    picks.push({ sourceInvoiceId: row.dataset.id, amount: row.querySelector("[data-debt-amount]").value.trim() });
+  }
+  return picks;
+}
+
+function updateDebtDialogTotals() {
+  const adding = round2(collectDebtPicks().reduce((sum, p) => { const n = Number(p.amount); return sum + (Number.isFinite(n) && n > 0 ? n : 0); }, 0));
+  const current = saleDue(state.sale);
+  $("debtDialogAdding").textContent = money(adding);
+  $("debtDialogCurrent").textContent = money(current);
+  $("debtDialogNew").textContent = money(round2(current + adding));
+}
+
+function confirmDebtDialog() {
+  const picks = collectDebtPicks();
+  if (!picks.length) { showError("debtDialogError", t("debt.dialogNone")); return; }
+  const result = addDebtToSale(picks);
+  if (result.error) { showError("debtDialogError", result.error); return; }
+  closeDebtDialog();
 }
 
 /* ==========================================================================
@@ -2398,9 +2823,82 @@ function bindEvents() {
   for (const [id, key] of Object.entries(customerFields)) {
     $(id).addEventListener("input", () => {
       state.sale.customer[key] = $(id).value;
+      if (key !== "address") onCustomerTyped(key);       // a changed name or phone may change who the customer is
       refreshLive();
+      if (key !== "address") renderSaleDebts();
     });
   }
+  // The debt of a returning customer is looked up when the person settles on them (leaves the field, Enter, or picks
+  // a suggestion), never while they are still typing.
+  for (const id of ["custName", "custPhone"]) {
+    $(id).addEventListener("change", onCustomerSettled);
+  }
+  $("custName").addEventListener("keydown", (e) => {
+    const ui = state.debtUi;
+    const count = ui.suggestions.length;
+    if (e.key === "ArrowDown" && count) {
+      e.preventDefault();
+      ui.suggestIndex = (ui.suggestIndex + 1) % count;
+      renderSuggestions();
+    } else if (e.key === "ArrowUp" && count) {
+      e.preventDefault();
+      ui.suggestIndex = (ui.suggestIndex - 1 + count) % count;
+      renderSuggestions();
+    } else if (e.key === "Enter") {
+      if (count && ui.suggestIndex >= 0) { e.preventDefault(); pickCustomer(ui.suggestions[ui.suggestIndex].keys[0]); }
+      else onCustomerSettled();
+    } else if (e.key === "Escape" && count) {
+      e.preventDefault();
+      ui.suggestions = [];
+      ui.suggestIndex = -1;
+      renderSuggestions();
+    }
+  });
+  $("custName").addEventListener("blur", () => {
+    if (!state.debtUi.suggestions.length) return;
+    state.debtUi.suggestions = [];
+    state.debtUi.suggestIndex = -1;
+    renderSuggestions();
+  });
+  $("custPhone").addEventListener("keydown", (e) => { if (e.key === "Enter") onCustomerSettled(); });
+  // mousedown (not click) so the name field keeps focus and its blur does not close the list before the choice is made
+  $("custSuggest").addEventListener("mousedown", (e) => {
+    const item = e.target.closest("[data-debt-pick]");
+    if (!item) return;
+    e.preventDefault();
+    pickCustomer(item.dataset.debtPick);
+  });
+  $("debtNotice").addEventListener("click", (e) => {
+    const view = e.target.closest("[data-debt-view]");
+    if (view) {
+      viewInvoice(view.dataset.debtView);
+      const preview = document.querySelector(".preview-panel");
+      if (preview && typeof preview.scrollIntoView === "function") preview.scrollIntoView({ block: "start" });
+      return;
+    }
+    const pick = e.target.closest("[data-debt-pick]");
+    if (pick) { pickCustomer(pick.dataset.debtPick); return; }
+    const action = e.target.closest("[data-debt-action]");
+    if (!action) return;
+    if (action.dataset.debtAction === "add") openDebtDialog();
+    else if (action.dataset.debtAction === "later") dismissDebtNotice();
+  });
+  $("debtNotice").addEventListener("keydown", (e) => { if (e.key === "Escape") dismissDebtNotice(); });
+  $("debtReminderShow").addEventListener("click", showDebtNoticeAgain);
+  $("saleDebts").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-debt-remove]");
+    if (btn) removeDebtFromSale(btn.dataset.debtRemove);
+  });
+  $("debtForm").addEventListener("submit", (e) => { e.preventDefault(); confirmDebtDialog(); });
+  $("debtDialogCancel").addEventListener("click", closeDebtDialog);
+  $("debtDialog").addEventListener("cancel", (e) => { e.preventDefault(); closeDebtDialog(); });
+  $("debtDialogRows").addEventListener("change", (e) => {
+    const row = e.target.closest(".debt-dialog-row");
+    if (row && e.target.matches("[data-debt-include]")) row.querySelector("[data-debt-amount]").disabled = !e.target.checked;
+    showError("debtDialogError", "");
+    updateDebtDialogTotals();
+  });
+  $("debtDialogRows").addEventListener("input", () => { showError("debtDialogError", ""); updateDebtDialogTotals(); });
   const adjustFields = { discountValue: "discountValue", discountType: "discountType", taxValue: "taxValue", taxType: "taxType" };
   for (const [id, key] of Object.entries(adjustFields)) {
     $(id).addEventListener("input", () => {
@@ -2674,6 +3172,13 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     normalizeSettings: Validation.normalizeSettings,
     settingsProblem: Validation.settingsProblem,
     Validation,
+    Debt,
+    debtView, debtNoticeHtml, renderDebtUi, renderSaleDebts, renderSuggestions, onCustomerTyped, onCustomerSettled, pickCustomer,
+    dismissDebtNotice, showDebtNoticeAgain, addDebtToSale, removeDebtFromSale, onDebtDataChanged, debtContext,
+    openDebtDialog, closeDebtDialog, confirmDebtDialog, collectDebtPicks, updateDebtDialogTotals, debtDialogRowsData,
+    saleDue, saleCarried, draftCarriedLines, carriedToNumbers,
+    viewInvoice, clearSale, draftInvoice, refreshAfterLoad, renderInvoices, renderInvoice, refreshLive,
+    getDebtUi: () => state.debtUi,
   });
 } else {
   bindEvents();

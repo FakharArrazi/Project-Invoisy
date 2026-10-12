@@ -104,13 +104,18 @@
           </table>
         </div>
 
+        <!-- Old debt the person chose to carry onto this invoice (a draft until the sale is completed) -->
+        <div class="sale-debts" id="saleDebts" hidden></div>
+
         <div class="sale-fields">
           <fieldset>
             <legend data-i18n="sell.customerLegend">Customer (optional)</legend>
             <div class="grid-2">
-              <div class="field">
+              <div class="field cust-field">
                 <label for="custName" data-i18n="sell.name">Name</label>
-                <input type="text" id="custName" placeholder="Walk-in Customer" data-i18n-placeholder="sell.walkIn" autocomplete="off">
+                <input type="text" id="custName" placeholder="Walk-in Customer" data-i18n-placeholder="sell.walkIn" autocomplete="off"
+                       role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="custSuggest">
+                <ul class="cust-suggest no-print" id="custSuggest" role="listbox" aria-label="Matching customers" data-i18n-aria-label="debt.suggestAria" hidden></ul>
               </div>
               <div class="field">
                 <label for="custPhone" data-i18n="sell.phone">Phone</label>
@@ -121,6 +126,10 @@
               <label for="custAddress" data-i18n="sell.address">Address</label>
               <input type="text" id="custAddress" autocomplete="off">
             </div>
+            <p class="debt-reminder no-print" id="debtReminder" hidden>
+              <span id="debtReminderText"></span>
+              <button type="button" class="btn small" id="debtReminderShow" data-i18n="debt.showAgain">Show details</button>
+            </p>
           </fieldset>
 
           <fieldset>
@@ -148,11 +157,16 @@
           </fieldset>
         </div>
 
+        <!-- Warning about the customer's unpaid invoices. It appears here, next to the customer fields, and never replaces the sale. -->
+        <section class="debt-notice no-print" id="debtNotice" aria-labelledby="debtNoticeTitle" aria-live="polite" hidden></section>
+
         <div class="totals">
           <div><span data-i18n="sell.subtotal">Subtotal</span><span id="tSubtotal"></span></div>
           <div><span data-i18n="sell.discount">Discount</span><span id="tDiscount"></span></div>
           <div><span data-i18n="sell.tax">Tax</span><span id="tTax"></span></div>
-          <div class="grand"><span data-i18n="sell.total">Total</span><span id="tTotal"></span></div>
+          <div class="grand" id="tTotalRow"><span id="tTotalLabel">Total</span><span id="tTotal"></span></div>
+          <div id="tCarriedRow" hidden><span data-i18n="sell.carried">Carried-forward debt</span><span id="tCarried"></span></div>
+          <div class="grand" id="tDueRow" hidden><span data-i18n="sell.totalDue">Total due</span><span id="tDue"></span></div>
           <div class="pay-input"><label for="amountPaid" data-i18n="sell.amountPaid">Amount Paid</label><input type="number" id="amountPaid" min="0" step="any"></div>
           <div class="due"><span data-i18n="sell.remaining">Remaining</span><span id="tRemaining"></span></div>
           <p class="muted small pay-hint" data-i18n="sell.payHint">Leave Amount Paid empty or 0 if the customer pays nothing now. Add payments later from Invoices.</p>
@@ -480,6 +494,8 @@
         <div><span data-i18n="pay.invoice">Invoice</span><strong id="payNumber"></strong></div>
         <div><span data-i18n="pay.total">Total</span><span id="payTotal"></span></div>
         <div><span data-i18n="pay.paid">Paid</span><span id="payPaid"></span></div>
+        <div id="payCarriedRow" hidden><span data-i18n="pay.carried">Includes carried-forward debt</span><span id="payCarried"></span></div>
+        <div id="payTransferredRow" hidden><span data-i18n="pay.transferred">Carried to other invoices</span><span id="payTransferred"></span></div>
         <div class="grand"><span data-i18n="pay.remaining">Remaining</span><span id="payRemaining"></span></div>
       </div>
       <form id="payForm" novalidate>
@@ -498,6 +514,25 @@
 
 <!-- What is printed from the Suppliers and Purchases screens (hidden on screen, shown only when printing) -->
 <article class="invoice purchase-print" id="purchasePrint"></article>
+<!-- Confirmation before old debt is added to the sale being prepared. Nothing is saved from here. -->
+<dialog class="debt-dialog no-print" id="debtDialog" aria-labelledby="debtDialogTitle">
+  <form id="debtForm" novalidate>
+    <h2 id="debtDialogTitle" data-i18n="debt.dialogTitle">Add outstanding debt to this sale</h2>
+    <p class="muted small" data-i18n="debt.dialogIntro">Choose which unpaid balances to carry forward onto the invoice you are preparing. Nothing is saved until you complete the sale.</p>
+    <div id="debtDialogRows"></div>
+    <p class="muted small" data-i18n="debt.dialogHint">The amount can be lower than the balance: the rest stays collectible on the original invoice.</p>
+    <div class="debt-dialog-totals">
+      <div><span data-i18n="debt.dialogAdding">Amount added to this invoice</span><strong id="debtDialogAdding"></strong></div>
+      <div><span data-i18n="debt.dialogCurrentTotal">Total due now</span><span id="debtDialogCurrent"></span></div>
+      <div class="grand"><span data-i18n="debt.dialogNewTotal">Total due after adding</span><strong id="debtDialogNew"></strong></div>
+    </div>
+    <p class="error" id="debtDialogError" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="btn" id="debtDialogCancel" data-i18n="common.cancel">Cancel</button>
+      <button type="submit" class="btn primary" id="debtDialogConfirm" data-i18n="debt.dialogConfirm">Add to sale</button>
+    </div>
+  </form>
+</dialog>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -507,6 +542,7 @@
 <script src="java script/calc.js"></script>
 <script src="java script/purchases.js"></script>
 <script src="java script/validation.js"></script>
+<script src="java script/debt.js"></script>
 <script src="java script/database.js"></script>
 <script src="java script/autobackup.js"></script>
 <script src="java script/purchases-ui.js"></script>
