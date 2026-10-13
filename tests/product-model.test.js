@@ -184,12 +184,16 @@ test("the same m² price gives a per-piece price from the piece size", () => {
   assert.equal(api.getSale().items[0].unitPrice, 288);   // 0.6 x 0.6 m x 800
 });
 
-test("typing an area sells that area at the price per m²", () => {
+test("typing an area on a product supplied in boxes sells whole boxes at the price per m²", () => {
   const { api } = loadTile();
-  assert.equal(api.addToSale("t1", "3", "m2").ok, true);
+  const added = api.addToSale("t1", "3", "m2");                    // 3 / 1.44 = 2.08 boxes: the 0.08 is under 0.10
+  assert.equal(added.ok, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(added.converted)), { requested: 3, exact: 2.08333333333, boxes: 2, area: 2.88 });
   const line = api.getSale().items[0];
-  assert.deepEqual([line.qty, line.sellingUnit, line.unitPrice], [3, "m2", 800]);   // 3 m² x 800 DA/m²
-  assert.equal(api.calculateTotals(api.getSale()).total, 2400);
+  assert.deepEqual([line.qty, line.sellingUnit, line.unitPrice], [2, "box", 1152]);   // 2 boxes x (1.44 m² x 800 DA/m²)
+  assert.equal(line.catalog.unit, "m2");
+  assert.equal(line.catalog.price, 800, "the product's price is still the price per m²");
+  assert.equal(api.calculateTotals(api.getSale()).total, 2304);   // 2.88 m² x 800
 });
 
 test("a price per box converts to pieces and the unit can be switched on a line", () => {

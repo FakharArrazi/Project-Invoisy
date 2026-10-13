@@ -307,6 +307,9 @@ I18n.register("en", "English", {
   "sale.removedOut": "{name} was removed from the sale: out of stock.",
   "sale.reduced": "{name} was reduced to the available stock ({stock}).",
   "sale.removedError": "{error} It was removed from the sale.",
+  "sale.areaInBoxes": "{name} is supplied in whole boxes, so a line can't be switched to m². Type the area in m² in the add form and it is converted to boxes.",
+  "sale.areaToBoxes.one": "{requested} m² needs {exact} boxes: 1 box ({area} m²) was added to the sale.",
+  "sale.areaToBoxes.other": "{requested} m² needs {exact} boxes: {n} boxes ({area} m²) were added to the sale.",
 
   // ----- Units, prices and conversions (calc.js) -----
   "calc.thisProduct": "This product",

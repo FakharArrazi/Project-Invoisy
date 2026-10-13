@@ -197,6 +197,21 @@ test("price conversion messages use the unit names of the language", () => {
   assert.equal(api.addToSale("c1", "1", "piece").error, "Ciment est tarifé par kg\u00a0: il ne peut pas être vendu par pièce.");
 });
 
+test("the message about an area turned into boxes follows the language and its plural rule", () => {
+  const { api, I18n } = loadApp();
+  const tile = { id: "t1", name: "Carrelage", tileSize: "60*60", coveragePerBox: 1.44, sellingPrice: 1500, priceUnit: "m2", stockUnit: "box", stock: 20 };
+  api.applyData({ products: [api.normalizeProduct(tile)], invoices: [], settings: { ...api.DEFAULT_SETTINGS }, counter: 0, lastSaved: "" });
+  const params = { requested: "25", exact: "17.36", area: "25.92" };
+  assert.equal(I18n.tn("sale.areaToBoxes", 18, params), "25 m² needs 17.36 boxes: 18 boxes (25.92 m²) were added to the sale.");
+  assert.equal(I18n.tn("sale.areaToBoxes", 1, { ...params, area: "1.44" }), "25 m² needs 17.36 boxes: 1 box (1.44 m²) was added to the sale.");
+  api.addToSale("t1", "2", "box");
+  assert.match(api.lineUnitProblem(api.getProducts()[0], "m2"), /supplied in whole boxes/);
+  api.applyData({ products: [api.normalizeProduct(tile)], invoices: [], settings: { ...api.DEFAULT_SETTINGS, language: "fr" }, counter: 0, lastSaved: "" });
+  assert.equal(I18n.tn("sale.areaToBoxes", 18, params), "25 m² nécessitent 17.36 cartons\u00a0: 18 cartons (25.92 m²) ont été ajoutés à la vente.");
+  assert.equal(I18n.tn("sale.areaToBoxes", 1, { ...params, area: "1.44" }), "25 m² nécessitent 17.36 cartons\u00a0: 1 carton (1.44 m²) a été ajouté à la vente.");
+  assert.match(api.lineUnitProblem(api.getProducts()[0], "m2"), /fourni par cartons entiers/);
+});
+
 test("unit names, plurals and conversion messages of calc.js follow the language", () => {
   const { Calc, useLanguage } = loadApp();
   const tile = { id: "t1", name: "Carrelage", tileSize: "60*60", coveragePerBox: 1.44, sellingPrice: 1500, priceUnit: "m2", stockUnit: "box", stock: 20 };

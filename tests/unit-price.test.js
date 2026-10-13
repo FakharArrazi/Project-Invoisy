@@ -29,7 +29,7 @@ const line = (api, index = 0) => api.getSale().items[index];
 const near = (a, b) => Math.abs(a - b) < 1e-9;
 
 test("1. a new sale line starts at the saved price of the selected unit, with its price-unit label", () => {
-  const api = load();
+  const api = load({ stockUnit: "piece", stock: 400 });   // stock counted in pieces: an area is sold as typed (see 1c for boxes)
   api.addToSale("t1", "2", "box");
   api.addToSale("t1", "4", "piece");
   api.addToSale("t1", "10", "m2");
@@ -48,10 +48,18 @@ test("1. a new sale line starts at the saved price of the selected unit, with it
   assert.equal(perPiece.calculateTotals(perPiece.getSale()).total, 1200);     // 4 pieces x 300 DA/piece
 });
 
+test("1c. on a product supplied in boxes an area typed in m² becomes a box line: box label, price worked out from the m² price", () => {
+  const api = load();
+  api.addToSale("t1", "10", "m2");                                           // 10 / 1.44 = 6.94 boxes -> 7
+  assert.deepEqual(plain([line(api).qty, line(api).sellingUnit, line(api).unitPrice, line(api).priceOverridden]), [7, "box", 1152, false]);
+  assert.equal(api.linePriceUnit(line(api)), "DA/box");
+  assert.equal(api.calculateTotals(api.getSale()).total, 8064);               // 7 boxes = 10.08 m² x 800 DA/m²
+});
+
 test("1b. the Current Sale row shows the price-unit label next to the price input", () => {
   const { api, field } = (() => {
     const loaded = loadProductApi();
-    loaded.api.applyData({ products: [loaded.api.normalizeProduct({ id: "t1", name: "Ceramic Tile", tileSize: "60*60", coveragePerBox: 1.44, sellingPrice: 800, priceUnit: "m2", stockUnit: "box", stock: 10 })], invoices: [], settings: { ...loaded.api.DEFAULT_SETTINGS }, counter: 0, lastSaved: "" });
+    loaded.api.applyData({ products: [loaded.api.normalizeProduct({ id: "t1", name: "Ceramic Tile", tileSize: "60*60", coveragePerBox: 1.44, sellingPrice: 800, priceUnit: "m2", stockUnit: "piece", stock: 40 })], invoices: [], settings: { ...loaded.api.DEFAULT_SETTINGS }, counter: 0, lastSaved: "" });
     return loaded;
   })();
   api.addToSale("t1", "10", "m2");
@@ -63,8 +71,8 @@ test("1b. the Current Sale row shows the price-unit label next to the price inpu
 });
 
 test("2. editing the unit price updates the line, subtotal, discount, tax and final total", () => {
-  const api = load({ sellingPrice: 1000, priceUnit: "m2" });
-  api.addToSale("t1", "10", "m2");
+  const api = load({ sellingPrice: 1000, priceUnit: "box" });
+  api.addToSale("t1", "10", "box");
   const sale = api.getSale();
   sale.discountType = "percent"; sale.discountValue = "10";
   sale.taxType = "amount"; sale.taxValue = "50";
@@ -78,7 +86,7 @@ test("2. editing the unit price updates the line, subtotal, discount, tax and fi
 
   // the live invoice (draft) shows the charged price and unit
   const html = api.invoiceHtml(api.buildInvoiceData(sale, "INV-000001", new Date().toISOString()));
-  assert.match(html, /900 <span class="inv-unit">\/ m²<\/span>/);
+  assert.match(html, /900 <span class="inv-unit">\/ Box<\/span>/);
   assert.doesNotMatch(html, /1,000 <span/);
   assert.match(html, /<td class="num">9,000<\/td>/);
 });
@@ -125,7 +133,7 @@ test("5. a later sale to the same customer does not inherit the override", async
 });
 
 test("6. changing the unit selects that unit's price and label; the quantity is not converted or priced twice", () => {
-  const api = load();
+  const api = load({ stockUnit: "piece", stock: 400 });   // stock counted in pieces, so m² is a direct unit (a box-counted product refuses it, see sales.test.js)
   api.addToSale("t1", "3", "box");
   const l = line(api);
   assert.deepEqual([l.unitPrice, api.linePriceUnit(l)], [1152, "DA/box"]);
@@ -227,8 +235,8 @@ test("9. stock deduction depends on quantity and unit, never on the price", asyn
   for (const price of [undefined, "0", "1", "99999"]) {
     assert.deepEqual(plain(await sold("3", "box", price)), { stock: 97, deducted: 3 });
     assert.deepEqual(plain(await sold("4", "piece", price)), { stock: 99, deducted: 1 });          // 4 pieces = 1 box
-    const area = await sold("5", "m2", price);                                                     // 5 m² / 1.44 m² per box
-    assert.ok(near(area.deducted, 5 / 1.44) && near(area.stock, 100 - 5 / 1.44));
+    const area = await sold("5", "m2", price);                                                     // 5 m² / 1.44 = 3.47 boxes -> 4 whole boxes
+    assert.deepEqual(plain(area), { stock: 96, deducted: 4 });
   }
 });
 
@@ -255,7 +263,7 @@ test("10. invalid prices are rejected and the line keeps its last valid price", 
 
 test("11. discount, tax and payment still work with a special price", async () => {
   const api = load();
-  api.addToSale("t1", "10", "m2");
+  api.addToSale("t1", "10", "box");
   api.updateSalePrice(line(api).lineId, "700");                                // 7,000
   const sale = api.getSale();
   sale.discountType = "percent"; sale.discountValue = "10";                    // -700

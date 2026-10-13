@@ -137,13 +137,128 @@ test("a hand-typed price stays on its own line and never changes the product", (
   assert.equal(line.priceOverridden, false);
 });
 
-test("area sold in m² keeps its area and its price per m²; stock follows the coverage per box", async () => {
+test("area typed in m² is sold as whole boxes at the price per m²; stock takes out those boxes", async () => {
   const { api } = load();
-  assert.equal(api.addToSale("t1", "3", "m2").ok, true);
+  assert.equal(api.addToSale("t1", "3", "m2").ok, true);        // 3 / 1.44 = 2.08 boxes: the 0.08 is under 0.10, so 2
   const invoice = await complete(api);
-  assert.deepEqual(plain([invoice.items[0].sellingUnit, invoice.items[0].qty, invoice.items[0].unitPrice, invoice.items[0].total]), ["m2", 3, 1500, 4500]);
-  assert.ok(Math.abs(invoice.items[0].stockDeducted - 3 / 1.44) < 1e-9);   // 3 m² / 1.44 m² per box
-  assert.ok(Math.abs(product(api).stock - (20 - 3 / 1.44)) < 1e-9);
+  const item = invoice.items[0];
+  assert.deepEqual(plain([item.sellingUnit, item.qty, item.unitPrice, item.total]), ["box", 2, 2160, 4320]);
+  assert.deepEqual(plain([item.priceUnit, item.productPrice, item.unitPriceUnit]), ["m2", 1500, "box"]);
+  assert.equal(item.stockDeducted, 2);
+  assert.equal(product(api).stock, 18, "whole boxes leave the stock, never 17.9166 boxes");
+});
+
+test("Boston Gray: 25 m² requested -> 18 boxes at 1,700 DA/m² = 44,064 DA, the same on the sale, preview, saved invoice and stock", async () => {
+  const { api, field } = load({ name: "Boston Gray", sellingPrice: 1700, stock: 20 });
+  const added = api.addToSale("t1", "25", "m2");
+  assert.equal(added.ok, true);
+  assert.deepEqual(plain(added.converted), { requested: 25, exact: 17.3611111111, boxes: 18, area: 25.92 });
+
+  // the Sell page: 18 boxes, never 25 m² or 17.36 boxes
+  const sale = api.getSale();
+  assert.deepEqual(plain([sale.items.length, sale.items[0].qty, sale.items[0].sellingUnit, sale.items[0].unitPrice]), [1, 18, "box", 2448]);
+  api.renderSale();
+  const row = field("saleBody").innerHTML;
+  assert.match(row, /class="qty-input"[^>]*value="18"/);
+  assert.match(row, /<option value="box" selected>Box<\/option>/);
+  assert.match(row, /data-line-total>44,064 DA</);
+  assert.match(row, /Product price: 1,700 DA \/ m² \(1 Box = 1\.44 m²\)/);
+  assert.doesNotMatch(row, /value="25"|17\.36/);
+  assert.deepEqual(plain(api.calculateTotals(sale)), { subtotal: 44064, discount: 0, tax: 0, total: 44064 });
+
+  // what the invoice shows (live preview, then the saved invoice, then the page that is printed)
+  const shows = (html, label) => {
+    assert.match(html, /<td>Boston Gray \(60 × 60\)<\/td>/, label);
+    assert.match(html, /<td class="num">18 Boxes<div class="inv-sub">25\.92 m²<\/div><\/td>/, label);    // supplied boxes, and the m² they cover
+    assert.match(html, /<td class="num">1,700 <span class="inv-unit">\/ m²<\/span><\/td>/, label);       // the price stays per m²
+    assert.match(html, /<td class="num">44,064<\/td>/, label);
+    assert.doesNotMatch(html, /(?<![\d.,])25 m²|17\.36|2,448/, label + ": no requested area, fractional boxes or per-box price");
+  };
+  shows(api.invoiceHtml(api.buildInvoiceData(sale, "INV-000001", new Date().toISOString())), "live preview");
+  api.renderInvoice();
+  shows(field("invoice").innerHTML, "preview on the page");
+
+  const invoice = await complete(api);
+  assert.deepEqual(plain([invoice.items[0].qty, invoice.items[0].sellingUnit, invoice.items[0].unitPrice, invoice.items[0].total, invoice.total]), [18, "box", 2448, 44064, 44064]);
+  assert.deepEqual(plain([invoice.items[0].priceUnit, invoice.items[0].productPrice, invoice.items[0].priceSource]), ["m2", 1700, "calculated"]);
+  shows(api.invoiceHtml(invoice), "saved invoice");
+  api.getState().previewInvoice = invoice;                      // what the Print button does first: show this invoice in the page...
+  api.renderInvoice();                                          // ...which is exactly what window.print() then prints
+  shows(field("invoice").innerHTML, "printed invoice");
+
+  // stock: 18 whole boxes, once
+  assert.equal(invoice.items[0].stockDeducted, 18);
+  assert.equal(product(api).stock, 2);
+  assert.equal(product(api).sellingPrice, 1700, "the product's own price and price unit are untouched");
+  assert.equal(product(api).priceUnit, "m2");
+});
+
+test("an area that needs more boxes than the stock has is refused and adds nothing", () => {
+  const { api } = load({ stock: 17 });
+  assert.match(api.addToSale("t1", "25", "m2").error, /Not enough stock/);   // 25 m² is 18 boxes, 17 are left
+  assert.equal(api.getSale().items.length, 0);
+  assert.equal(api.addToSale("t1", "24.48", "m2").ok, true);                  // exactly 17 boxes
+  assert.equal(api.getSale().items[0].qty, 17);
+});
+
+test("a special price and a discount apply to the supplied boxes; the area is converted only once", async () => {
+  const { api } = load({ name: "Boston Gray", sellingPrice: 1700, stock: 20 });
+  api.addToSale("t1", "25", "m2");
+  const line = api.getSale().items[0];
+  assert.equal(api.updateSalePrice(line.lineId, "2400").error, undefined);   // a special price per box, this sale only
+  Object.assign(api.getSale(), { discountType: "percent", discountValue: "10" });
+  assert.deepEqual(plain([line.qty, line.sellingUnit]), [18, "box"]);        // still 18 boxes after the price edit
+  assert.deepEqual(plain(api.calculateTotals(api.getSale())), { subtotal: 43200, discount: 4320, tax: 0, total: 38880 });
+  const invoice = await complete(api);
+  assert.deepEqual(plain([invoice.items[0].qty, invoice.items[0].unitPrice, invoice.items[0].total, invoice.items[0].priceSource, invoice.total]), [18, 2400, 43200, "custom", 38880]);
+  assert.equal(invoice.items[0].stockDeducted, 18);
+  assert.equal(product(api).stock, 2, "stock is taken out once");
+  assert.equal(product(api).sellingPrice, 1700, "a special price never changes the product");
+  // adding the same area again joins the same box line (each request is rounded on its own)
+  const again = load({ stock: 40 }).api;
+  again.addToSale("t1", "25", "m2");
+  again.addToSale("t1", "25", "m2");
+  assert.deepEqual(plain(again.getSale().items.map((i) => [i.qty, i.sellingUnit])), [[36, "box"]]);
+});
+
+test("a line of a product supplied in boxes can't be switched to m²; box and piece still switch", () => {
+  const { api, field } = load();
+  api.addToSale("t1", "3", "box");
+  const l = api.getSale().items[0];
+  const refused = api.updateSaleUnit(l.lineId, "m2");
+  assert.equal(refused.revert, true);
+  assert.match(refused.error, /supplied in whole boxes/);
+  assert.deepEqual(plain([l.qty, l.sellingUnit, l.unitPrice]), [3, "box", 2160], "the line is untouched");
+  assert.match(api.lineUnitProblem(product(api), "m2"), /whole boxes/);
+  api.renderSale();
+  assert.match(field("saleBody").innerHTML, /<option value="m2" disabled title="[^"]*whole boxes[^"]*">m²<\/option>/);
+  assert.equal(api.updateSaleUnit(l.lineId, "piece").error, undefined);
+  assert.deepEqual(plain([l.qty, l.sellingUnit, l.unitPrice]), [3, "piece", 540]);
+});
+
+test("a product not supplied in boxes keeps selling an area as entered, at the price per m²", async () => {
+  for (const [stockUnit, stock, left] of [["piece", 100, 100 - 10 / 0.36], ["m2", 100, 90]]) {
+    const { api } = load({ stockUnit, stock });
+    assert.equal(api.addToSale("t1", "10", "m2").converted, undefined);
+    const invoice = await complete(api);
+    assert.deepEqual(plain([invoice.items[0].sellingUnit, invoice.items[0].qty, invoice.items[0].unitPrice, invoice.items[0].total]), ["m2", 10, 1500, 15000], `stock in ${stockUnit}`);
+    assert.ok(Math.abs(product(api).stock - left) < 1e-9, `stock in ${stockUnit}`);
+  }
+});
+
+test("other units keep their own price unit: per piece stays per piece, per kg stays per kg", async () => {
+  const { api } = load({ sellingPrice: 300, priceUnit: "piece", stockUnit: "piece", stock: 100 }, [
+    { id: "k1", name: "Cement", sellingPrice: 5, priceUnit: "kg", stockUnit: "kg", stock: 100 },
+  ]);
+  assert.equal(api.addToSale("t1", "4", "piece").converted, undefined);
+  assert.equal(api.addToSale("k1", "2.5", "kg").converted, undefined);
+  const invoice = await complete(api);
+  assert.deepEqual(plain(invoice.items.map((i) => [i.qty, i.sellingUnit, i.unitPrice, i.unitPriceUnit, i.total])), [[4, "piece", 300, "piece", 1200], [2.5, "kg", 5, "kg", 12.5]]);
+  const html = api.invoiceHtml(invoice);
+  assert.match(html, /<td class="num">4 Pieces<\/td><td class="num">300 <span class="inv-unit">\/ Piece<\/span>/);
+  assert.match(html, /<td class="num">2\.5 kg<\/td><td class="num">5 <span class="inv-unit">\/ kg<\/span>/);
+  assert.equal(product(api).stock, 96);
+  assert.equal(product(api, "k1").stock, 97.5);
 });
 
 test("kg and meter products: fractional quantities, own units only", async () => {
@@ -233,20 +348,23 @@ test("the invoice shows the product's own price and unit (1,500 / m²) while the
   const { api } = load();
   api.addToSale("t1", "2", "box");
   api.addToSale("t1", "3", "piece");
-  api.addToSale("t1", "1", "m2");                               // 1 m², its own line
+  api.addToSale("t1", "1", "m2");                               // 1 m² is 0.69 box: supplied as 1 box, which joins the box line
   const invoice = await complete(api);
+  assert.deepEqual(plain(invoice.items.map((i) => [i.qty, i.sellingUnit])), [[3, "box"], [3, "piece"]]);
   const html = api.invoiceHtml(invoice);
-  // quantity: what was sold, with the same amount in the price unit underneath
+  // quantity: what was supplied, with the same amount in the price unit underneath
   assert.match(html, /3 Pieces<div class="inv-sub">1\.08 m²<\/div>/);
-  assert.match(html, /2 Boxes<div class="inv-sub">2\.88 m²<\/div>/);
-  assert.match(html, /<td class="num">1 m²<\/td>/);                     // sold by the m²: no second line under it
+  assert.match(html, /3 Boxes<div class="inv-sub">4\.32 m²<\/div>/);
   // price: the configured price and unit, for every line, never a per-box or per-piece price
-  assert.equal((html.match(/1,500 <span class="inv-unit">\/ m²<\/span>/g) || []).length, 3);
+  assert.equal((html.match(/1,500 <span class="inv-unit">\/ m²<\/span>/g) || []).length, 2);
   assert.doesNotMatch(html, /2,160|540 <span/);
-  // totals are still worked out per unit sold: 2 x 2,160, 3 x 540 and 1 x 1,500
-  assert.deepEqual(plain(invoice.items.map((i) => i.total)), [4320, 1620, 1500]);
-  // the saved line is untouched: it still holds the price per unit sold and the details it came from
-  assert.deepEqual(plain(invoice.items.map((i) => [i.sellingUnit, i.unitPrice, i.priceUnit, i.productPrice])), [["box", 2160, "m2", 1500], ["piece", 540, "m2", 1500], ["m2", 1500, "m2", 1500]]);
+  // totals are still worked out per unit supplied: 3 x 2,160 and 3 x 540
+  assert.deepEqual(plain(invoice.items.map((i) => i.total)), [6480, 1620]);
+  // the saved line is untouched: it still holds the price per unit supplied and the details it came from
+  assert.deepEqual(plain(invoice.items.map((i) => [i.sellingUnit, i.unitPrice, i.priceUnit, i.productPrice])), [["box", 2160, "m2", 1500], ["piece", 540, "m2", 1500]]);
+  // an older saved invoice can still hold a line sold by the m²: it prints exactly as it was saved
+  const older = api.invoiceHtml({ ...invoice, items: [{ ...invoice.items[0], sellingUnit: "m2", qty: 1, unitPrice: 1500, unitPriceUnit: "m2", total: 1500 }] });
+  assert.match(older, /<td class="num">1 m²<\/td><td class="num">1,500 <span class="inv-unit">\/ m²<\/span><\/td><td class="num">1,500<\/td>/);
   const single = api.invoiceHtml({ ...invoice, items: [{ ...invoice.items[0], qty: 1 }] });
   assert.match(single, /1 Box<div class="inv-sub">1\.44 m²<\/div>/);
 });

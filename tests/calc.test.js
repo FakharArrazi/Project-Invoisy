@@ -178,11 +178,67 @@ test("quantities: boxes and pieces must be whole, kg and m may be fractions", ()
   }
 });
 
-test("area typed in m² becomes whole boxes, rounded up", () => {
-  assert.equal(Calc.boxesForArea(tile(), 3).boxes, 3);      // 2.08 -> 3
+test("box rounding: a fraction under 0.10 keeps the lower box, 0.10 or more goes up, a whole number is unchanged", () => {
+  const cases = [[17, 17], [17.0, 17], [17.01, 17], [17.09, 17], [17.1, 18], [17.36, 18], [17.99, 18]];
+  for (const [calculated, boxes] of cases) assert.equal(Calc.roundBoxes(calculated), boxes, `${calculated} -> ${boxes}`);
+  assert.equal(Calc.roundBoxes(25 / 1.44), 18, "25 m² / 1.44 = 17.3611 -> 18");
+  assert.equal(Calc.roundBoxes(0), 0);
+});
+
+test("box rounding: floating-point noise never moves a number across a boundary", () => {
+  // exact whole numbers that the division leaves a hair above or below
+  assert.equal(Calc.roundBoxes(4.32 / 1.44), 3, "3.0000000000000004 is 3, not 4");
+  assert.equal(Calc.roundBoxes(2.9999999999999996), 3);
+  assert.equal(Calc.roundBoxes(17.000000000000004), 17);
+  assert.equal(Calc.roundBoxes(0.1 + 0.2 + 16.7), 17);
+  // a fraction of exactly 0.10 that floating point stores just under it (5.1 - 5 = 0.0999999999999996)
+  for (const whole of [0, 1, 5, 17, 100, 1234]) {
+    assert.equal(Calc.roundBoxes(whole + 0.1), whole + 1, `${whole}.10 goes up`);
+    assert.equal(Calc.roundBoxes(whole + 0.09), whole, `${whole}.09 stays`);
+  }
+  // it is not Math.ceil: 17.01 and 17.09 keep 17 where a plain ceiling would give 18
+  assert.notEqual(Calc.roundBoxes(17.05), Math.ceil(17.05));
+});
+
+test("area typed in m² becomes whole boxes with the box-rounding rule", () => {
+  assert.equal(Calc.boxesForArea(tile(), 3).boxes, 2);      // 2.08 boxes: the 0.08 is under 0.10, so 2
+  assert.equal(Calc.boxesForArea(tile(), 3.3).boxes, 3);    // 2.29 boxes -> 3
   assert.equal(Calc.boxesForArea(tile(), 2.88).boxes, 2);   // exact multiple, no extra box
+  assert.equal(Calc.boxesForArea(tile(), 4.32).boxes, 3);   // exact multiple that floats as 3.0000000000000004
   assert.equal(Calc.boxesForArea(tile(), 0.5).boxes, 1);
+  assert.equal(Calc.boxesForArea(tile(), 0.05).boxes, 1, "never 0 boxes");
   assert.equal(Calc.boxesForArea(tile({ coveragePerBox: 2.88 }), 5.76).boxes, 2);
+  const r = Calc.boxesForArea(tile(), 25);
+  assert.deepEqual([r.boxes, r.exact, r.area, r.coverage, r.suppliedArea], [18, 17.3611111111, 25, 1.44, 25.92]);
+});
+
+test("Boston Gray: 25 m² at 1,700 DA/m², 1.44 m² per box -> 18 boxes, 25.92 m² supplied, 44,064 DA", () => {
+  const boston = tile({ name: "Boston Gray", sellingPrice: 1700 });
+  const supplied = Calc.toSuppliedQuantity(boston, 25, "m2");
+  assert.deepEqual([supplied.qty, supplied.unit, supplied.converted, supplied.requested, supplied.area], [18, "box", true, 25, 25.92]);
+  const boxPrice = price(boston, "box");
+  assert.deepEqual([boxPrice.value, boxPrice.basePrice, boxPrice.priceUnit, boxPrice.source], [2448, 1700, "m2", "calculated"]);
+  assert.equal(Calc.calculateLineTotal(supplied.qty, boxPrice.value), 44064);
+  assert.equal(Calc.roundMoney(supplied.area * 1700), 44064, "the same total from the area supplied x the price per m²");
+});
+
+test("only a product supplied in boxes has its area turned into boxes; every other unit is left as typed", () => {
+  const boston = tile();
+  assert.equal(Calc.suppliesInBoxes(boston), true);
+  assert.deepEqual(Calc.toSuppliedQuantity(boston, 5, "box"), { qty: 5, unit: "box" });
+  assert.deepEqual(Calc.toSuppliedQuantity(boston, 3, "piece"), { qty: 3, unit: "piece" });
+  for (const stockUnit of ["piece", "m2", null, undefined]) {
+    const other = tile({ stockUnit });
+    assert.equal(Calc.suppliesInBoxes(other), false);
+    assert.deepEqual(Calc.toSuppliedQuantity(other, 25, "m2"), { qty: 25, unit: "m2" }, `stock counted in ${stockUnit}`);
+  }
+  const perKg = { name: "Cement", sellingPrice: 5, priceUnit: "kg", stockUnit: "kg", stock: 100 };
+  assert.deepEqual(Calc.toSuppliedQuantity(perKg, 2.5, "kg"), { qty: 2.5, unit: "kg" });
+  const perPiece = tile({ sellingPrice: 300, priceUnit: "piece" });
+  assert.deepEqual(Calc.toSuppliedQuantity(perPiece, 4, "piece"), { qty: 4, unit: "piece" });
+  assert.equal(price(perPiece, "piece").value, 300, "a per-piece price stays per piece");
+  // a box product with no coverage can't turn an area into boxes: the reason is reported, nothing is guessed
+  assert.match(Calc.toSuppliedQuantity(tile({ coveragePerBox: null }), 25, "m2").error, /coverage per box/);
 });
 
 test("full precision inside, rounding only on money", () => {

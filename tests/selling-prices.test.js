@@ -471,26 +471,33 @@ test("a price can be edited after pieces were sold from box-counted stock; a new
 
 /* ---------- Working with the m² sale lines and the sale re-pricing ---------- */
 
-test("a line sold by the m² uses the saved m² price; with no m² price it is worked out from the box price", async () => {
+test("an area typed in m² is supplied in whole boxes, priced with the saved box price or worked out from the m² price", async () => {
   const app = await startedApp();
-  const product = await addThroughForm(app);
-  assert.equal(app.api.addToSale(product.id, "10", "m2").ok, true);
+  const product = await addThroughForm(app);                    // 1,000 DA/m², 300 DA/piece and 1,440 DA/box saved, stock counted in boxes
+  assert.equal(app.api.addToSale(product.id, "10", "m2").ok, true);   // 10 / 1.44 = 6.94 boxes -> 7
   let line = app.api.getSale().items[0];
-  assert.equal(line.unitPrice, 1000);
-  assert.equal(line.catalog.source, "explicit");
-  assert.equal(Calc.calculateLineTotal(line.qty, line.unitPrice), 10000);
+  assert.deepEqual(plain([line.qty, line.sellingUnit, line.unitPrice, line.catalog.source]), [7, "box", 1440, "explicit"]);
+  assert.equal(Calc.calculateLineTotal(line.qty, line.unitPrice), 10080);   // 7 boxes = 10.08 m² x 1,000 DA/m²
 
   const invoice = await sell(app, [], null);
-  assert.equal(invoice.items[0].unitPriceUnit, "m2");
+  assert.equal(invoice.items[0].unitPriceUnit, "box");
   assert.equal(invoice.items[0].priceSource, "explicit");
-  assert.equal(invoice.total, 10000);
-  assert.equal(app.api.getState().products[0].stock, Calc.cleanNumber(20 - 10 / 1.44), "stock is taken out as the equivalent part of a box");
+  assert.equal(invoice.items[0].stockDeducted, 7);
+  assert.equal(invoice.total, 10080);
+  assert.equal(app.api.getState().products[0].stock, 13, "7 whole boxes leave the stock");
 
-  const boxOnly = await addThroughForm(app, { pSku: "EV-2", priceRows: [{ unit: "box", price: "1440" }] });
-  app.api.addToSale(boxOnly.id, "1", "m2");
+  // only an m² price saved: the box price is worked out from it, and the invoice keeps showing the price per m²
+  const m2Only = await addThroughForm(app, { pSku: "EV-2", priceRows: [{ unit: "m2", price: "1000" }] });
+  app.api.addToSale(m2Only.id, "10", "m2");
   line = app.api.getSale().items[0];
-  assert.equal(line.unitPrice, 1000, "1,440 DA a box over 1.44 m² a box");
-  assert.equal(line.catalog.source, "calculated");
+  assert.deepEqual(plain([line.qty, line.sellingUnit, line.unitPrice, line.catalog.source, line.catalog.unit, line.catalog.price]), [7, "box", 1440, "calculated", "m2", 1000]);
+  app.api.getSale().items = [];
+
+  // only a box price saved
+  const boxOnly = await addThroughForm(app, { pSku: "EV-3", priceRows: [{ unit: "box", price: "1440" }] });
+  app.api.addToSale(boxOnly.id, "1", "m2");                     // 0.69 box -> 1 box
+  line = app.api.getSale().items[0];
+  assert.deepEqual(plain([line.qty, line.sellingUnit, line.unitPrice, line.catalog.source]), [1, "box", 1440, "explicit"]);
 });
 
 test("a price changed in Stock reaches sale lines at the normal price (also a newly saved price for that unit), never a typed one", async () => {

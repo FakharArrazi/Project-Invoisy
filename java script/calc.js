@@ -10,6 +10,8 @@
 
   const PIECES_TOLERANCE = 1e-6;   // how close coverage / piece area must be to a whole number
   const STOCK_EPSILON = 1e-9;      // floating-point slack when comparing stock quantities
+  const BOX_ROUND_FROM = 0.1;      // a box fraction of at least this goes up to the next box, a smaller one is dropped
+  const BOX_SCALE = 1e9;           // box fractions are compared in billionths of a box (see roundBoxes)
 
   const UNIT_ALIASES = {
     piece: "piece", pieces: "piece", pc: "piece", pcs: "piece",
@@ -170,14 +172,52 @@
     return factor.error ? factor : { value: cleanNumber(qty * factor.value) };
   }
 
-  // Typed in m²: how many whole boxes cover it (rounded up). { boxes, area, coverage } or { error }.
+  // Whole boxes to supply for a calculated number of boxes. This is the box-rounding rule, written out on purpose
+  // (it is not a plain Math.ceil):
+  //   - a whole number stays as it is                  17.00 -> 17
+  //   - a fraction under 0.10 keeps the lower number   17.01 -> 17, 17.09 -> 17
+  //   - a fraction of 0.10 or more goes up             17.10 -> 18, 17.36 -> 18, 17.99 -> 18
+  // Floating-point noise must not decide anything, so the fraction is counted in whole billionths of a box (an integer):
+  //   - an exact whole number is never pushed up: 4.32 / 1.44 = 3.0000000000000004 stays 3, and 2.9999999999999996 is 3;
+  //   - a fraction that is really 0.10 is never read as 0.0999999999999996: 5.1 - 5, and 1234.1 - 1234 = 0.09999999999991.
+  // (Noise is about 1e-13 for hundreds of boxes, far below one billionth.)
+  function roundBoxes(boxes) {
+    const n = Number(boxes);
+    const lower = Math.floor(n + 1 / BOX_SCALE);                 // a hair under a whole number is that whole number
+    const fraction = Math.round((n - lower) * BOX_SCALE);        // billionths of a box above `lower`
+    if (fraction <= 0) return lower;
+    return fraction < Math.round(BOX_ROUND_FROM * BOX_SCALE) ? lower : lower + 1;
+  }
+
+  // Typed in m²: how many whole boxes to supply for it (roundBoxes, at least 1: nothing is supplied as 0 boxes).
+  //   { boxes, exact, area, coverage, suppliedArea } or { error }
+  //   exact = the calculated, unrounded number of boxes; suppliedArea = the m² the boxes really cover.
   function boxesForArea(product, area) {
     const coverage = getBoxCoverage(product);
     if (coverage.error) return coverage;
     const m2 = Number(area);
     if (isBlank(area) || !Number.isFinite(m2) || m2 <= 0) return { error: say("calc.enterArea") };
-    const boxes = Math.max(1, Math.ceil(cleanNumber(m2 / coverage.value)));
-    return { boxes, area: m2, coverage: coverage.value };
+    const exact = cleanNumber(m2 / coverage.value);
+    const boxes = Math.max(1, roundBoxes(exact));
+    return { boxes, exact, area: m2, coverage: coverage.value, suppliedArea: cleanNumber(boxes * coverage.value) };
+  }
+
+  // A product whose stock is counted in boxes is handed over in complete boxes.
+  const suppliesInBoxes = (product) => Boolean(product) && product.stockUnit === "box";
+
+  // What is really supplied for a quantity typed in `unit`. This is the one place that turns an area into boxes:
+  // for a product supplied in boxes, an area typed in m² becomes a whole number of boxes (boxesForArea), and the price,
+  // the stock and the invoice all work from those boxes, so they can't disagree. The price stays the product's own
+  // (per m²): a box is priced like any box sale (see getUnitPrice). Anything else is returned as it was typed.
+  //   { qty, unit }                                                  nothing to convert
+  //   { qty, unit: "box", converted: true, requested, exact, area }   area typed -> boxes; requested = the m² typed,
+  //                                                                   exact = the unrounded boxes, area = m² supplied
+  //   { error }
+  function toSuppliedQuantity(product, qty, unit) {
+    if (unit !== "m2" || !suppliesInBoxes(product)) return { qty, unit };
+    const result = boxesForArea(product, qty);
+    if (result.error) return result;
+    return { qty: result.boxes, unit: "box", converted: true, requested: result.area, exact: result.exact, area: result.suppliedArea };
   }
 
   /* ---------- Prices ---------- */
@@ -350,7 +390,7 @@
     isUnit, unitLabel, normalizeUnit, unitFamily, isWholeUnit, validateQuantity,
     parseTileSize, isTileSize, normalizeTileSize,
     getPieceArea, getBoxCoverage, getPiecesPerBox, getAreaOf,
-    getUnitFactor, convertQuantity, boxesForArea,
+    getUnitFactor, convertQuantity, roundBoxes, boxesForArea, suppliesInBoxes, toSuppliedQuantity,
     getSellingPrices, getExplicitPrice, priceFields, checkSellingPrices,
     getUnitPrice, calculateLineTotal, calculateSubtotal,
     defaultStockUnit, inferStockUnit, defaultSellingUnit,

@@ -1169,10 +1169,18 @@ const catalogOf = (priced) => ({ unit: priced.priceUnit, price: priced.basePrice
 function addToSale(productId, rawQty, rawUnit) {
   const product = findProduct(productId);
   if (!product) return { error: t("product.selectFirst") };
-  const sellingUnit = SALE_LINE_UNITS.includes(rawUnit) ? rawUnit : "piece";
-  const checked = Calc.validateQuantity(rawQty, sellingUnit);
+  const typedUnit = SALE_LINE_UNITS.includes(rawUnit) ? rawUnit : "piece";
+  const checked = Calc.validateQuantity(rawQty, typedUnit);
   if (checked.error) return { error: checked.error };
-  const qty = checked.value;
+
+  // What is really supplied. A product counted in boxes is handed over in whole boxes, so an area typed in m² becomes
+  // boxes here, once (25 m² -> 18 boxes with 1.44 m² per box, see Calc.roundBoxes). From this point the line is a box
+  // line: its price, the stock check, the stock taken out, the invoice preview and the print all read the same boxes,
+  // and nothing converts or rounds them again. Every other unit is added as typed.
+  const supplied = Calc.toSuppliedQuantity(product, checked.value, typedUnit);
+  if (supplied.error) return { error: supplied.error };
+  const sellingUnit = supplied.unit;
+  const qty = supplied.qty;
 
   // The price of one unit: the price saved for that unit when there is one, else worked out from the main price
   // (1,500 DA per m² -> 2,160 DA per box). Nothing is saved to the product either way.
@@ -1187,7 +1195,16 @@ function addToSale(productId, rawQty, rawUnit) {
   const item = state.sale.items.find((i) => i.productId === productId && i.sellingUnit === sellingUnit);
   if (item) item.qty = Calc.cleanNumber(item.qty + qty);
   else state.sale.items.push({ lineId: uid(), productId, qty, sellingUnit, unitPrice: priced.value, listPrice: priced.value, priceOverridden: false, catalog: catalogOf(priced) });
-  return { ok: true };
+  // `converted` tells the caller an area was turned into boxes, so the person is told what was added to the sale.
+  return supplied.converted ? { ok: true, converted: { requested: supplied.requested, exact: supplied.exact, boxes: qty, area: supplied.area } } : { ok: true };
+}
+
+// Why a line already on the sale can't be switched to this unit ("" when it can). A product supplied in boxes is never
+// switched to m²: that would bring back an area that is not a whole number of boxes. The area is typed in the add form
+// (unit m²), which turns it into boxes. Other problems are the ones the Sell page already reports (unitProblem).
+function lineUnitProblem(product, unit) {
+  if (unit === "m2" && Calc.suppliesInBoxes(product)) return t("sale.areaInBoxes", { name: product.name });
+  return unitProblem(product, unit);
 }
 
 // Changing the unit keeps the quantity typed and works out the price (and stock use) for the new unit.
@@ -1202,6 +1219,7 @@ function updateSaleUnit(lineId, rawUnit) {
   const newQty = twin ? Calc.cleanNumber(twin.qty + item.qty) : item.qty;
   let priced = { value: item.unitPrice };
   if (product) {
+    if (rawUnit === "m2" && rawUnit !== item.sellingUnit && Calc.suppliesInBoxes(product)) return { error: lineUnitProblem(product, rawUnit), revert: true };
     priced = Calc.getUnitPrice(product, rawUnit);
     if (priced.error) return { error: priced.error, revert: true };
     const checked = Calc.validateQuantity(newQty, rawUnit);
@@ -1768,7 +1786,7 @@ function boxPriceNote(p) {
 
 function unitOptions(selected, product) {
   return SALE_LINE_UNITS.map((u) => {
-    const problem = product && u !== selected ? unitProblem(product, u) : "";
+    const problem = product && u !== selected ? lineUnitProblem(product, u) : "";
     return `<option value="${u}"${u === selected ? " selected" : ""}${problem ? ` disabled title="${esc(problem)}"` : ""}>${esc(unitLabel(u))}</option>`;
   }).join("");
 }
@@ -2762,6 +2780,11 @@ function bindEvents() {
     }
     showError("addError", "");
     showError("saleError", "");
+    // An area was turned into whole boxes: say what was added (what was asked, the boxes, and the m² they cover).
+    if (result.converted) {
+      const c = result.converted;
+      notify(I18n.tn("sale.areaToBoxes", c.boxes, { requested: numberFormat.format(c.requested), exact: numberFormat.format(c.exact), area: numberFormat.format(c.area) }));
+    }
     state.selectedId = null;
     state.previewInvoice = null;
     search.value = "";
@@ -3120,6 +3143,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     formatTileSize,
     isTileSize,
     addToSale,
+    lineUnitProblem,
     updateSaleQuantity,
     updateSaleUnit,
     updateSalePrice,

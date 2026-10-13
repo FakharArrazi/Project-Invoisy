@@ -311,6 +311,9 @@
     "sale.removedOut": "{name} a été retiré de la vente : rupture de stock.",
     "sale.reduced": "La quantité de {name} a été réduite au stock disponible ({stock}).",
     "sale.removedError": "{error} L’article a été retiré de la vente.",
+    "sale.areaInBoxes": "{name} est fourni par cartons entiers : une ligne ne peut pas passer en m². Saisissez la surface en m² dans le formulaire d’ajout, elle sera convertie en cartons.",
+    "sale.areaToBoxes.one": "{requested} m² nécessitent {exact} cartons : 1 carton ({area} m²) a été ajouté à la vente.",
+    "sale.areaToBoxes.other": "{requested} m² nécessitent {exact} cartons : {n} cartons ({area} m²) ont été ajoutés à la vente.",
 
     // ----- Units, prices and conversions (calc.js) -----
     "calc.thisProduct": "Ce produit",
