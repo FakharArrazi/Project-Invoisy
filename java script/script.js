@@ -2654,6 +2654,21 @@ function confirmDebtDialog() {
    NAVIGATION
    ========================================================================== */
 
+// The open page is remembered for this browser tab only (sessionStorage), so if the page is ever reloaded
+// (a browser refresh, a development server reloading on a file change) it comes back on the same page
+// instead of Sell. This is screen position only; no business data is kept there.
+const VIEW_KEY = "invoisy-view";
+function rememberView(name) {
+  try { sessionStorage.setItem(VIEW_KEY, name); } catch { /* storage blocked: the page just opens on Sell */ }
+}
+function rememberedView() {
+  try {
+    const name = sessionStorage.getItem(VIEW_KEY);
+    if (name && document.querySelector('.nav-btn[data-view="' + name + '"]')) return name;
+  } catch { /* storage blocked */ }
+  return "sell";
+}
+
 function showView(name, options) {
   const keepPreview = options && options.keepPreview;
   const previous = state.view;
@@ -2665,6 +2680,7 @@ function showView(name, options) {
     else b.removeAttribute("aria-current");
   });
   $("app").dataset.view = name;
+  rememberView(name);
 
   let notes = [];
   if (name === "sell") {
@@ -3183,7 +3199,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
 } else {
   bindEvents();
   resetProductForm();
-  showView("sell");
+  showView(rememberedView());
   renderStorage();
   startStorage();
 }
