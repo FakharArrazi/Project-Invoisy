@@ -153,12 +153,18 @@ apart from sales: purchases never create customer invoices, and sales never touc
 - **Cancelling** needs a reason, is refused while active payments exist (void them first) and reverses
   the stock that was received. A cancelled purchase keeps its record, counts nowhere in the totals, and frees
   its supplier invoice number.
+- **Deleting** (Delete button in the Purchases list, and on the purchase page) removes a purchase for good, as if
+  it had never been entered, unlike cancelling, which keeps the record. After a confirmation that lists what will go,
+  it takes the goods received out of stock, and removes the purchase, all its payments (voided ones too) and its
+  attached files in one transaction. Suppliers, products and other purchases are untouched. It is refused, changing
+  nothing, when that stock was already sold. Deleting again does nothing, and a window with out-of-date data is
+  refused. The internal reference counter never goes backwards, so the deleted number is not reused.
 - After confirmation the lines, prices, totals and supplier are locked. Invoice number, dates, reference
   and notes can still be edited.
 - **Supplier payments**: any number of separate payments per purchase. Outstanding = total minus
   payments not voided. Status: Unpaid, Partially Paid, Paid. An empty initial payment means 0. Amounts must
   be positive, may not exceed what is outstanding (overpayment is refused) and may not be dated in the
-  future. A payment is never deleted: editing keeps its history and voiding keeps the record with a reason.
+  future. A payment is never deleted on its own: editing keeps its history and voiding keeps the record with a reason.
 - **Reports** (Purchases page): purchases in a period, outstanding balances, overdue purchases, totals by
   supplier, purchase history per product and payments made in a period. Cancelled purchases and voided
   payments are excluded, so nothing is counted twice. The totals add amounts as they are, so they assume

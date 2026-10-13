@@ -704,7 +704,7 @@ test("db: payments are never deleted, a confirmed purchase is never deleted or t
   const all = await db.loadAll();
   const pay = all.supplierPayments[0];
   await assert.rejects(db.commitChanges({ supplierPayments: { put: [], remove: [pay.id] } }, { expectedRevision: all.revision }), /never deleted/);
-  await assert.rejects(db.commitChanges({ purchases: { put: [], remove: [all.purchases[0].id] } }, { expectedRevision: all.revision }), /Only a draft/);
+  await assert.rejects(db.commitChanges({ purchases: { put: [], remove: [all.purchases[0].id] } }, { expectedRevision: all.revision }), /only be deleted together with all its payments/);
   await assert.rejects(db.commitChanges({ purchases: { put: [{ ...all.purchases[0], status: "draft", receipts: [] }], remove: [] } }, { expectedRevision: all.revision }), /draft again/i);
   await assert.rejects(db.commitChanges({ suppliers: { put: [], remove: [all.suppliers[0].id] } }, { expectedRevision: all.revision }), /Archive/);
   await assert.rejects(db.commitChanges({ supplierPayments: { put: [{ ...pay, amount: 999999 }], remove: [] } }, { expectedRevision: all.revision }), /more than its total/);

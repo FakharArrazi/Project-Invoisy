@@ -1245,6 +1245,51 @@
     return { purchase };
   }
 
+  // What deleting a purchase would take out, for the question asked before it is done. Nothing is changed.
+  // Only deliveries still applied count: a reversed delivery already left stock.
+  function deletionPreview(d, id) {
+    const purchase = (d.purchases || []).find((p) => p.id === id);
+    if (!purchase) return null;
+    const goods = new Map();
+    for (const r of (purchase.receipts || []).filter((x) => x.status === "applied")) {
+      for (const x of r.lines) goods.set(x.productId, cleanNumber((goods.get(x.productId) || 0) + x.baseQty));
+    }
+    const stockOut = [];
+    for (const [productId, qty] of goods) {
+      const product = (d.products || []).find((p) => p.id === productId);
+      if (product) stockOut.push({ productId, name: product.name, qty, unit: unitName(product.stockUnit).toLowerCase() });
+    }
+    const payments = (d.supplierPayments || []).filter((x) => x.purchaseId === id);
+    return { purchase, stockOut, paymentCount: payments.length, paid: round2(activePayments(payments).reduce((s, x) => s + toNumber(x.amount), 0)) };
+  }
+
+  // Deletes a purchase for good, as if it had never been entered (cancelPurchase() keeps it as history, this does not).
+  // On the draft `d`: the goods still received are taken out of stock, the purchase, ALL its payments (voided ones
+  // too) and its attached files are removed. Suppliers and products are never touched. Run through commit(), it is
+  // saved in ONE transaction. Refused, changing nothing, if that stock was already sold (stock never goes below 0).
+  // Deleting twice never reverses anything twice: once the purchase is gone the second attempt only reports it.
+  function deletePurchase(d, id, options) {
+    const purchase = (d.purchases || []).find((p) => p.id === id);
+    if (!purchase) return { skip: true, already: true };
+    if (purchase.status === "draft") return deleteDraft(d, id);
+    const ctx = ctxOf(d, options);
+    return allOrNothing(d, () => {
+      // A product deleted from Stock since has no stock left to take goods out of: its lines are skipped.
+      const exists = (productId) => ctx.products.some((p) => p.id === productId);
+      const applied = (purchase.receipts || []).filter((r) => r.status === "applied").map((r) => ({ ...r, lines: r.lines.filter((x) => exists(x.productId)) }));
+      if (applied.length) {
+        const out = takeOutReceipts(d, purchase, applied, ctx);
+        if (out.error) return out;
+      }
+      const removedPayments = (d.supplierPayments || []).filter((x) => x.purchaseId === id).length;
+      d.supplierPayments = (d.supplierPayments || []).filter((x) => x.purchaseId !== id);
+      d.purchases = d.purchases.filter((p) => p.id !== id);
+      if (!d.attachments) d.attachments = { put: [], remove: [] };
+      for (const a of purchase.attachments || []) d.attachments.remove.push(a.id);
+      return { purchase, removedPayments };
+    });
+  }
+
   // What may still be edited on a confirmed purchase. Its lines, prices, totals and supplier are fixed: to change
   // those, cancel it (which reverses the stock) and enter it again.
   const CONFIRMED_EDITABLE = ["supplierInvoiceNumber", "noSupplierInvoice", "invoiceDate", "dueDate", "reference", "notes"];
@@ -1488,7 +1533,7 @@
     normalizePurchase, purchaseProblem, purchaseWarnings, attachmentProblem, attachmentMetaProblem, attachmentMeta, withKeys, stripKeys,
     referenceSequence, formatReference, highestReference,
     normalizePayment, paymentProblem, purchaseSummary, deliveryState, supplierSummary, supplierPayable,
-    saveDraft, deleteDraft, confirmPurchase, creditCheck, receiveDelivery, reverseReceipt, cancelPurchase, updatePurchaseDetails, setAttachmentMeta,
+    saveDraft, deleteDraft, confirmPurchase, creditCheck, receiveDelivery, reverseReceipt, cancelPurchase, deletePurchase, deletionPreview, updatePurchaseDetails, setAttachmentMeta,
     recordPayment, updatePayment, voidPayment,
     linkProblems,
     purchasesInPeriod, periodReport, outstandingReport, purchasesBySupplier, productHistory, supplierProducts, paymentsReport, overview,

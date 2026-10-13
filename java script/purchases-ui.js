@@ -421,7 +421,7 @@
         <td class="num ${confirmed && sum.outstanding > 0 ? "owed" : ""}">${confirmed ? esc(money(sum.outstanding)) : ""}</td>
         <td>${statusBadge(p)}</td>
         <td>${payBadge(p, sum)} ${deliveryBadge(p, sum)}</td>
-        <td class="num"><div class="row-actions"><button type="button" class="btn small" data-act="pur-open" data-id="${esc(p.id)}">${esc(p.status === "draft" ? t("common.edit") : t("common.view"))}</button></div></td>
+        <td class="num"><div class="row-actions"><button type="button" class="btn small" data-act="pur-open" data-id="${esc(p.id)}">${esc(p.status === "draft" ? t("common.edit") : t("common.view"))}</button><button type="button" class="btn small danger" data-act="pur-delete" data-id="${esc(p.id)}">${esc(t("common.delete"))}</button></div></td>
       </tr>`;
     }).join("");
   }
@@ -664,6 +664,31 @@
     if (!sp || !confirm(t("sup.confirmDelete", { name: sp.name }))) return;
     return act((d) => P.deleteSupplier(d, id), {
       done: () => { h.notify(t("sup.deleted", { name: sp.name })); ui.sup.screen = "list"; ui.sup.profileId = null; renderSuppliers(); },
+    });
+  }
+
+  // Deletes a purchase for good (the list's Delete button and the detail page). The question says what will go; the
+  // change itself is one transaction (see Purchases.deletePurchase). A purchase that is already gone is only reported.
+  function removePurchase(id) {
+    const p = purchaseById(id);
+    if (!p) { h.notify(t("pur.alreadyDeleted")); render(); return; }
+    const sp = supplierById(p.supplierId);
+    let question = t("pur.deleteAsk", { ref: p.reference, supplier: sp ? sp.name : "", total: money(p.total) });
+    if (p.status === "draft") {
+      question = t("pur.deleteDraftAsk", { ref: p.reference });
+    } else {
+      const preview = P.deletionPreview(S(), id);
+      if (preview.stockOut.length) question += "\n\n" + t("pur.deleteAskStock") + "\n" + preview.stockOut.map((x) => `- ${x.name}: ${num(x.qty)} ${x.unit}`).join("\n");
+      if (preview.paymentCount) question += "\n\n" + t("pur.deleteAskPayments", { n: preview.paymentCount, amount: money(preview.paid) });
+      question += "\n\n" + t("pur.deleteAskEnd");
+    }
+    if (!confirm(question)) return;
+    return act((d) => P.deletePurchase(d, id), {
+      done: (r) => {
+        h.notify(t(r.already ? "pur.alreadyDeleted" : "pur.deleted", { ref: p.reference }));
+        if (ui.pur.detailId === id) { ui.pur.screen = "list"; ui.pur.detailId = null; ui.pur.open = ""; }
+        render();
+      },
     });
   }
 
@@ -1333,6 +1358,7 @@
     } else if (p.status === "confirmed") {
       actions.push(btn("pur-panel", t("pur.editDetails"), "", 'data-panel="details"'), btn("pur-panel", t("pur.cancelBtn"), "danger", 'data-panel="cancel"'));
     }
+    if (p.status !== "draft") actions.push(btn("pur-delete", t("pur.deleteBtn"), "danger", `data-id="${esc(p.id)}"`));
     actions.push(btn("pur-print", t("sup.print")));
     const info = (label, value) => (value ? `<dt>${esc(label)}</dt><dd>${value}</dd>` : "");
     return `<div class="panel profile-head">
@@ -1548,6 +1574,7 @@
       const p = purchaseById(ui.pur.detailId);
       if (p) $("dp-amount").value = summaryOf(p).outstanding;
     },
+    "pur-delete"(el) { return removePurchase(el.dataset.id); },
     "pur-delete-draft"() {
       const p = purchaseById(ui.pur.detailId);
       if (!p || !confirm(t("pur.deleteDraftAsk", { ref: p.reference }))) return;

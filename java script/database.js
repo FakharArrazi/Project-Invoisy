@@ -31,8 +31,9 @@
    Rules this file enforces
      - A change touching several records is ONE transaction: it is saved completely or not at all.
        A purchase, the stock it adds and its payments are such a change.
-     - History is never deleted here: only a DRAFT purchase can be removed, a supplier with purchases or
-       payments can not be removed, and a payment can not be removed at all (it is voided instead).
+     - History is never deleted here by accident: a DRAFT purchase can be removed; a confirmed or cancelled purchase
+       only together with ALL its payments and attached files (an explicit "delete purchase", one transaction); a payment
+       never on its own (it is voided instead); a supplier with purchases or payments can not be removed.
      - After any change that touches invoices or the ledger, the whole ledger is checked against the invoices INSIDE
        that transaction (Validation.ledgerProblems): payments + balance carried away can never exceed what an invoice
        asked for. A violation (a balance carried twice, or paid in another window meanwhile) aborts the transaction.
@@ -593,6 +594,11 @@
       if (changes.settings) tx.objectStore(SETTINGS).put({ key: SETTINGS_KEY, value: changes.settings });
 
       writeSupplierSide(tx, { supplierChanges, purchaseChanges, paymentChanges, attachmentChanges });
+      // The scanned files of a deleted purchase go with it, whether or not the caller listed them.
+      for (const id of purchaseChanges.remove || []) {
+        const keys = await req(tx.objectStore(ATTACHMENTS).index("purchaseId").getAllKeys(id));
+        for (const key of keys) tx.objectStore(ATTACHMENTS).delete(key);
+      }
       await checkSupplierLinks(tx, { purchaseChanges, paymentChanges, attachmentChanges });
       // The nothing-owed-twice check. It runs on the data as it will be AFTER this change, inside the same transaction,
       // so a payment recorded in another window a moment ago, or a second carry of the same balance, is caught here.
@@ -642,14 +648,22 @@
       const purchases = tx.objectStore(PURCHASES);
       const payments = tx.objectStore(SUPPLIER_PAYMENTS);
 
-      // A payment is never deleted (it is voided), so the history of what was paid can not be lost.
-      if ((paymentChanges.remove || []).length) throw invalid([t("db.cannotDeletePayment")]);
-
-      // Only a draft purchase may be deleted. A confirmed or cancelled purchase is a financial record.
+      // A payment is never deleted on its own (it is voided), so the history of what was paid can not be lost.
+      // It only goes together with the purchase it was made for, when that whole purchase is deleted.
       const removingPurchases = new Set(purchaseChanges.remove || []);
+      const removingPayments = new Set(paymentChanges.remove || []);
+      for (const id of removingPayments) {
+        const stored = await req(payments.get(id));
+        if (stored && !removingPurchases.has(stored.purchaseId)) throw invalid([t("db.cannotDeletePayment")]);
+      }
+
+      // A draft purchase may be deleted. A confirmed or cancelled one is a financial record: it may only be deleted
+      // completely, together with every payment made for it, never leaving a payment without its purchase.
       for (const id of removingPurchases) {
         const stored = await req(purchases.get(id));
-        if (stored && stored.status !== "draft") throw invalid([t("db.cannotDeletePurchase")]);
+        if (!stored || stored.status === "draft") continue;
+        const paymentKeys = await req(payments.index("purchaseId").getAllKeys(id));
+        if (paymentKeys.some((key) => !removingPayments.has(key))) throw invalid([t("db.cannotDeletePurchase")]);
       }
 
       // A supplier with purchases or payments is archived, not deleted.
@@ -695,6 +709,7 @@
       const payments = tx.objectStore(SUPPLIER_PAYMENTS);
       const attachments = tx.objectStore(ATTACHMENTS);
       for (const id of purchaseChanges.remove || []) purchases.delete(id);
+      for (const id of paymentChanges.remove || []) payments.delete(id);
       for (const id of supplierChanges.remove || []) suppliers.delete(id);
       for (const s of supplierChanges.put || []) suppliers.put(s);
       // Purchases that carry no unique keys go first, so a cancelled purchase frees its numbers before another uses them.
