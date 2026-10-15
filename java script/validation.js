@@ -350,6 +350,122 @@
     };
   }
 
+  /* ---------- A product typed into a form (Stock form and the product made while recording a purchase) ---------- */
+
+  const looseKey = (v) => String(v == null ? "" : v).trim().replace(/\s+/g, " ").toLowerCase();
+  const productName = (p) => [p.name, p.tileSize, p.manufacturer].filter(Boolean).join(" — ");
+
+  // The product in `products` that `candidate` would repeat, or null. Two products are the same when they share a SKU,
+  // or when name, manufacturer and tile size all match and the SKUs do not tell them apart (a different SKU on each side
+  // is a different variant). `exceptId` is the product being edited. Returns { product, by: "sku" | "identity" }.
+  function findDuplicateProduct(candidate, products, exceptId) {
+    const sku = looseKey(candidate.sku);
+    const size = (p) => looseKey(Calc.normalizeTileSize(p.tileSize));
+    const others = (products || []).filter((p) => p && (exceptId == null || p.id !== exceptId));
+    for (const p of others) {
+      if (sku && looseKey(p.sku) === sku) return { product: p, by: "sku" };
+    }
+    for (const p of others) {
+      const sameThing = looseKey(p.name) === looseKey(candidate.name) && looseKey(p.manufacturer) === looseKey(candidate.manufacturer) && size(p) === size(candidate);
+      if (sameThing && (!sku || !looseKey(p.sku))) return { product: p, by: "identity" };
+    }
+    return null;
+  }
+
+  // THE one place a product typed into a form is checked, so every way of adding a product follows the same rules:
+  // the Stock form calls it, and so does a purchase that creates a product (again when the draft is confirmed).
+  //   raw  what was typed: { name, manufacturer, tileSize, coveragePerBox, description, sku, category,
+  //        prices: [{ unit, price }], stockUnit, purchasePrice, stock }. A product kept the older way
+  //        ({ sellingPrice, priceUnit } or { sellingPrices }) is read as well.
+  //   ctx  { products: the catalogue (plus any product made earlier in the same purchase),
+  //          editing: the product being edited, stockFromPurchase: stock is not typed: the goods received add to it }
+  // Returns { values } ready to save, or { field, index, error } for the first problem, in the order of the form.
+  // field is one of name, tileSize, coveragePerBox, priceUnit, priceValue (index = the price row), prices, purchasePrice,
+  // stockUnit, stock, sku, duplicate.
+  function readProductInput(raw, ctx) {
+    const input = raw || {};
+    const options = ctx || {};
+    const get = (key) => (input[key] == null ? "" : String(input[key]).trim());
+    const fail = (field, error, index) => ({ field, error, index: index === undefined ? -1 : index });
+
+    const name = get("name");
+    if (!name) return fail("name", t("product.nameRequired"));
+    const tileSizeRaw = get("tileSize");
+    if (tileSizeRaw && !isTileSize(tileSizeRaw)) return fail("tileSize", t("product.tileSizeFormat"));
+    const tileSize = tileSizeRaw ? normalizeTileSize(tileSizeRaw) : "";
+    const coverageRaw = get("coveragePerBox");
+    const coveragePerBox = Number(coverageRaw);
+    if (coverageRaw !== "" && (!Number.isFinite(coveragePerBox) || coveragePerBox <= 0)) return fail("coveragePerBox", t("product.coverageGreater"));
+
+    // Selling prices: one independent price per unit (checked in calc.js, the same rules the database applies).
+    let rows;
+    if (Array.isArray(input.prices)) rows = input.prices;
+    else if (Array.isArray(input.sellingPrices) && input.sellingPrices.length) rows = input.sellingPrices;
+    else rows = [{ unit: input.priceUnit, price: input.sellingPrice }];
+    rows = rows.map((r) => {
+      const row = r || {};
+      return { unit: row.unit, price: row.price == null ? "" : String(row.price).trim() };
+    });
+    const unitless = rows.findIndex((r) => !Calc.isUnit(r.unit));
+    if (unitless >= 0) return fail("priceUnit", t("product.chooseUnit"), unitless);
+    const checked = Calc.checkSellingPrices(rows);
+    if (checked.error) {
+      if (checked.index < 0) return fail("prices", checked.error);
+      return fail(checked.field === "price" ? "priceValue" : "priceUnit", checked.error, checked.index);
+    }
+    const prices = checked.value;
+    if (prices.some((entry) => entry.unit === "m2") && coverageRaw === "") return fail("coveragePerBox", t("product.coverageNeeded"));
+
+    const costRaw = get("purchasePrice");
+    const cost = Number(costRaw);
+    if (costRaw !== "" && (!Number.isFinite(cost) || cost < 0)) return fail("purchasePrice", t("product.costNegative"));
+
+    const stockUnit = get("stockUnit");
+    if (!Calc.isUnit(stockUnit)) return fail("stockUnit", t("product.chooseStockUnit"));
+    if (Calc.unitFamily(stockUnit) !== Calc.unitFamily(prices[0].unit)) {
+      return fail("stockUnit", t("product.stockUnitMismatch", { stock: t("stockunit." + stockUnit), price: t("price." + prices[0].unit) }));
+    }
+
+    // A product made while recording a purchase starts at 0: the goods received add to it (once, in confirmPurchase).
+    let stock = 0;
+    if (!options.stockFromPurchase) {
+      const stockRaw = get("stock");
+      stock = stockRaw === "" ? 0 : Number(stockRaw);
+      // Selling pieces out of box-counted stock leaves part of a box (19.25 boxes). That saved quantity can be kept as it is
+      // while editing (to change a price, say); only a quantity typed in has to be a whole number for a whole unit.
+      const editing = options.editing || null;
+      const unchangedStock = Boolean(editing) && stockRaw !== "" && stock === editing.stock && stockUnit === editing.stockUnit;
+      if (!Number.isFinite(stock) || stock < 0 || (Calc.isWholeUnit(stockUnit) && !Number.isInteger(stock) && !unchangedStock)) {
+        return fail("stock", t(Calc.isWholeUnit(stockUnit) ? "product.stockWhole" : "product.stockNumber"));
+      }
+    }
+
+    const sku = get("sku");
+    const values = {
+      name,
+      manufacturer: get("manufacturer"),
+      tileSize,
+      coveragePerBox: coverageRaw === "" ? null : coveragePerBox,
+      description: get("description"),
+      sku,
+      category: get("category"),
+      ...Calc.priceFields(prices),   // sellingPrices, plus sellingPrice / priceUnit as the first entry
+      stockUnit,
+      purchasePrice: costRaw === "" ? null : cost,
+      stock,
+    };
+
+    const same = findDuplicateProduct(values, options.products, options.editing ? options.editing.id : null);
+    if (same && same.by === "sku") return fail("sku", t("product.skuUsed", { sku, name: same.product.name }));
+    // Editing a product that already has a twin from before (saved when two could be identical) must stay possible:
+    // only changing its name, manufacturer or tile size into someone else's is refused.
+    const editing = options.editing;
+    const identity = (p) => [p.name, p.manufacturer, Calc.normalizeTileSize(p.tileSize)].map(looseKey).join("|");
+    const identityUnchanged = Boolean(editing) && identity(editing) === identity(values);
+    if (same && !identityUnchanged) return fail("duplicate", t("product.duplicate", { label: productName(same.product) }));
+    return { values };
+  }
+
   // Invoices saved before payments existed are treated as fully paid at their sale date.
   function normalizeInvoice(inv) {
     if (!inv || typeof inv !== "object" || !inv.invoiceNumber || !Array.isArray(inv.items)) return null;
@@ -1022,7 +1138,7 @@
     carriedLines, paidTotal, carriedTotal, amountDue, transferredOut, carriedBreakdown,
     normalizeName, phoneDigits, isWalkInName, customerKeys, customerGroups, findGroup, sameCustomer,
     transferProblem, ledgerProblems,
-    isTileSize, normalizeTileSize, normalizeProduct, normalizeInvoice, normalizeSettings, paymentSummary, paymentDetail, stripDerived,
+    isTileSize, normalizeTileSize, normalizeProduct, readProductInput, findDuplicateProduct, normalizeInvoice, normalizeSettings, paymentSummary, paymentDetail, stripDerived,
     productProblem, invoiceProblem, invoiceWarnings, settingsProblem, legacyProductIssue, legacyInvoiceIssue,
     buildData, hasMeaningfulData, countsOf, buildBackup, prepareBackupFile, parseBackup, backupFileName,
     readLegacyStorage, prepareLegacyCopy, backupReminder,

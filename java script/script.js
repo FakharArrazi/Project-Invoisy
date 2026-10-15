@@ -177,7 +177,7 @@ const state = {
   selectedId: null,       // product selected in the picker
   previewInvoice: null,   // saved invoice shown in the preview (null = live sale)
   editingId: null,        // product being edited in the Stock form
-  priceRows: [],          // the selling price rows of the Stock form, as typed: { rowId, unit, price }
+  priceRows: [],          // the selling price rows of the Stock form, as typed: { rowId, unit, price } (kept by stockForm)
   addUnitFor: null,       // product the Sell page unit list was last set up for
   debtUi: { armed: false, dismissedKey: null, suggestions: [], suggestIndex: -1 },   // screen-only: never saved
 };
@@ -785,76 +785,19 @@ function findMatches(query) {
     .map((m) => m.p);
 }
 
+// The Stock form is the shared product form (product-form.js) with its prices kept in this page's state. A product made
+// while recording a purchase uses the same form and the same rules (see purchases-ui.js).
+const stockForm = ProductForm.create({
+  prefix: "p",
+  holder: state,
+  products: () => state.products,
+  editing: () => (state.editingId ? findProduct(state.editingId) : null),
+  onError: (message) => showError("productError", message),
+});
+
+// { values } to save, or { field: id of the box, error }.
 function readProductForm() {
-  const get = (id) => $(id).value.trim();
-  const fail = (field, error) => ({ field, error });
-
-  const name = get("pName");
-  if (!name) return fail("pName", t("product.nameRequired"));
-  const tileSizeRaw = get("pTileSize");
-  if (tileSizeRaw && !isTileSize(tileSizeRaw)) return fail("pTileSize", t("product.tileSizeFormat"));
-  const tileSize = tileSizeRaw ? normalizeTileSize(tileSizeRaw) : "";
-  const coverageRaw = get("pCoveragePerBox");
-  const coveragePerBox = Number(coverageRaw);
-  if (coverageRaw !== "" && (!Number.isFinite(coveragePerBox) || coveragePerBox <= 0)) {
-    return fail("pCoveragePerBox", t("product.coverageGreater"));
-  }
-
-  // Selling prices: one independent price per unit (checked in calc.js, the same rules the database applies).
-  const rows = state.priceRows;
-  const unitless = rows.find((r) => !Calc.isUnit(r.unit));
-  if (unitless) return fail("priceUnit-" + unitless.rowId, t("product.chooseUnit"));
-  const checked = Calc.checkSellingPrices(rows.map((r) => ({ unit: r.unit, price: String(r.price).trim() })));
-  if (checked.error) {
-    const row = rows[checked.index];
-    return fail(row ? (checked.field === "price" ? "priceValue-" : "priceUnit-") + row.rowId : "addPriceRow", checked.error);
-  }
-  const prices = checked.value;
-  if (prices.some((entry) => entry.unit === "m2") && coverageRaw === "") {
-    return fail("pCoveragePerBox", t("product.coverageNeeded"));
-  }
-
-  const costRaw = get("pCost");
-  const cost = Number(costRaw);
-  if (costRaw !== "" && (!Number.isFinite(cost) || cost < 0)) return fail("pCost", t("product.costNegative"));
-
-  const stockUnit = get("pStockUnit");
-  if (!Calc.isUnit(stockUnit)) return fail("pStockUnit", t("product.chooseStockUnit"));
-  if (Calc.unitFamily(stockUnit) !== Calc.unitFamily(prices[0].unit)) {
-    return fail("pStockUnit", t("product.stockUnitMismatch", { stock: t("stockunit." + stockUnit), price: t("price." + prices[0].unit) }));
-  }
-
-  const stockRaw = get("pStock");
-  const stock = stockRaw === "" ? 0 : Number(stockRaw);
-  // Selling pieces out of box-counted stock leaves part of a box (19.25 boxes). That saved quantity can be kept as it is
-  // while editing (to change a price, say); only a quantity typed in has to be a whole number for a whole unit.
-  const editing = state.editingId ? state.products.find((p) => p.id === state.editingId) : null;
-  const unchangedStock = Boolean(editing) && stockRaw !== "" && stock === editing.stock && stockUnit === editing.stockUnit;
-  if (!Number.isFinite(stock) || stock < 0 || (Calc.isWholeUnit(stockUnit) && !Number.isInteger(stock) && !unchangedStock)) {
-    return fail("pStock", t(Calc.isWholeUnit(stockUnit) ? "product.stockWhole" : "product.stockNumber"));
-  }
-
-  const sku = get("pSku");
-  if (sku) {
-    const clash = state.products.find((p) => p.id !== state.editingId && p.sku.toLowerCase() === sku.toLowerCase());
-    if (clash) return fail("pSku", t("product.skuUsed", { sku, name: clash.name }));
-  }
-
-  return {
-    values: {
-      name,
-      manufacturer: get("pManufacturer"),
-      tileSize,
-      coveragePerBox: coverageRaw === "" ? null : coveragePerBox,
-      description: get("pDesc"),
-      sku,
-      category: get("pCategory"),
-      ...Calc.priceFields(prices),   // sellingPrices, plus sellingPrice / priceUnit as the first entry
-      stockUnit,
-      purchasePrice: costRaw === "" ? null : cost,
-      stock,
-    },
-  };
+  return stockForm.read();
 }
 
 async function addProduct(values) {
@@ -930,135 +873,17 @@ function startEditProduct(id) {
   const p = findProduct(id);
   if (!p) return;
   state.editingId = id;
-  $("pName").value = p.name;
-  $("pManufacturer").value = p.manufacturer || "";   // empty for products saved without one
-  $("pTileSize").value = p.tileSize;
-  $("pCoveragePerBox").value = p.coveragePerBox == null ? "" : p.coveragePerBox;
-  $("pDesc").value = p.description;
-  // Each saved price is its own row. A product saved before price units existed has a price but no unit:
-  // its row shows the price with the unit left to choose (never guessed).
-  const saved = Calc.getSellingPrices(p);
-  setPriceRows(saved.length ? saved : [{ unit: "", price: p.sellingPrice }]);
-  $("pCost").value = p.purchasePrice == null ? "" : p.purchasePrice;
-  $("pStock").value = p.stock;
-  $("pStockUnit").value = p.stockUnit || "";   // empty for products saved before stock units
-  $("pStockUnit").dataset.touched = "1";       // an edit never changes the unit on its own
-  $("pSku").value = p.sku;
-  $("pCategory").value = p.category;
+  stockForm.fill(p);
   renderProductFormMode();
-  syncCoverageMark();
   clearProductErrors();
   $("pName").focus();
 }
 
 function resetProductForm() {
   state.editingId = null;
-  $("productForm").reset();
-  $("pStock").value = 0;
-  delete $("pStockUnit").dataset.touched;
-  setPriceRows([{ unit: "m2", price: "" }]);   // a new product starts with a price per m² (stock counted in boxes)
+  stockForm.blank();   // a new product starts with a price per m² (stock counted in boxes)
   renderProductFormMode();
-  syncCoverageMark();
   clearProductErrors();
-}
-
-/* ---------- Selling price rows (Stock form) ----------
-   The rows live in state.priceRows (as typed) and the form is drawn from them, so what is saved never depends
-   on what the page happens to hold. Each row is one price for one unit; a unit can only be on one row. */
-
-const PRICE_UNIT_ORDER = ["m2", "piece", "box", "kg", "m"];
-let priceRowSerial = 0;
-
-function newPriceRow(unit, price) {
-  return { rowId: ++priceRowSerial, unit: unit || "", price: price === undefined || price === null ? "" : String(price) };
-}
-
-function findPriceRow(rowId) {
-  return state.priceRows.find((r) => String(r.rowId) === String(rowId));
-}
-
-const unitsTakenByOtherRows = (rowId) => state.priceRows.filter((r) => r.rowId !== rowId).map((r) => r.unit).filter(Boolean);
-
-// The kind of unit the form's prices are in (set by the first row): piece / box / m² together, kg or m alone.
-const priceFamily = () => (state.priceRows[0] && state.priceRows[0].unit ? Calc.unitFamily(state.priceRows[0].unit) : null);
-
-// The unit a new row starts on: the first unit of the same kind that has no price yet (null = none left).
-function nextPriceUnit() {
-  const taken = unitsTakenByOtherRows(null);
-  const family = priceFamily();
-  return PRICE_UNIT_ORDER.find((u) => !taken.includes(u) && (!family || Calc.unitFamily(u) === family)) || null;
-}
-
-function setPriceRows(entries) {
-  state.priceRows = (entries && entries.length ? entries : [{ unit: "m2", price: "" }]).map((e) => newPriceRow(e.unit, e.price));
-  renderPriceRows();
-  syncCoverageMark();
-}
-
-function addPriceRow() {
-  const unit = nextPriceUnit();
-  if (!unit) return null;
-  const row = newPriceRow(unit, "");
-  state.priceRows.push(row);
-  renderPriceRows();
-  syncCoverageMark();
-  const input = $("priceValue-" + row.rowId);
-  if (input) input.focus();
-  return row;
-}
-
-// At least one price always stays.
-function removePriceRow(rowId) {
-  if (state.priceRows.length < 2) return false;
-  state.priceRows = state.priceRows.filter((r) => String(r.rowId) !== String(rowId));
-  renderPriceRows();
-  syncCoverageMark();
-  return true;
-}
-
-function setPriceRowUnit(rowId, unit) {
-  const row = findPriceRow(rowId);
-  if (!row) return;
-  if (unit && unitsTakenByOtherRows(row.rowId).includes(unit)) {
-    showError("productError", t("product.priceRowUnitUsed"));
-    renderPriceRows();
-    return;
-  }
-  row.unit = unit;
-  // The first price decides what a new product is counted in (m² -> boxes), until a stock unit is chosen by hand.
-  if (row === state.priceRows[0] && !$("pStockUnit").dataset.touched) $("pStockUnit").value = Calc.defaultStockUnit(unit) || "";
-  renderPriceRows();
-  syncCoverageMark();
-  const select = $("priceUnit-" + row.rowId);
-  if (select) select.focus();
-}
-
-function renderPriceRows() {
-  const family = priceFamily();
-  const only = state.priceRows.length < 2;
-  $("priceRows").innerHTML = state.priceRows.map((row, index) => {
-    const per = row.unit ? t("price." + row.unit) : "";
-    const taken = unitsTakenByOtherRows(row.rowId);
-    const options = (row.unit ? "" : `<option value="" selected>${esc(t("stock.per"))}</option>`) + PRICE_UNIT_ORDER.map((u) => {
-      const blocked = u !== row.unit && (taken.includes(u) || (index > 0 && family && Calc.unitFamily(u) !== family));
-      return `<option value="${u}"${u === row.unit ? " selected" : ""}${blocked ? " disabled" : ""}>${esc(t("price." + u))}</option>`;
-    }).join("");
-    return `<div class="price-entry" data-row="${row.rowId}">` +
-      `<label for="priceValue-${row.rowId}">${esc(row.unit ? t("stock.priceFor", { per }) : t("stock.sellingPrice"))}${index === 0 ? ' <span class="req" aria-hidden="true">*</span>' : ""}</label>` +
-      `<div class="price-entry-line">` +
-      `<input type="number" id="priceValue-${row.rowId}" data-field="price" min="0" step="any" value="${esc(row.price)}"${index === 0 ? ' aria-required="true"' : ""}>` +
-      `<select id="priceUnit-${row.rowId}" data-field="unit" aria-label="${esc(t("stock.sellingUnit"))}">${options}</select>` +
-      `<button type="button" class="btn small" data-action="remove-price" aria-label="${esc(per ? t("stock.removePriceAria", { per }) : t("stock.removePrice"))}"${only ? " disabled" : ""}>${esc(t("stock.removePrice"))}</button>` +
-      `</div></div>`;
-  }).join("");
-  $("addPriceRow").disabled = nextPriceUnit() === null;
-}
-
-// Coverage per box is mandatory only while one of the prices is per m² (see readProductForm), so its * follows that.
-function syncCoverageMark() {
-  const needed = state.priceRows.some((r) => r.unit === "m2");
-  $("coverageReq").hidden = !needed;
-  $("pCoveragePerBox").setAttribute("aria-required", needed ? "true" : "false");
 }
 
 // The Stock form's title and buttons depend on whether a product is being edited.
@@ -2351,7 +2176,7 @@ function refreshAfterLoad() {
 function renderAll() {
   applyLanguage();
   renderProductFormMode();
-  renderPriceRows();
+  stockForm.renderRows();
   applyPaperSize();
   applyCurrency();
   renderResults();
@@ -2727,6 +2552,11 @@ function selectProduct(id) {
 }
 
 function bindEvents() {
+  // The Stock form's fields are drawn by the shared product form (product-form.js); it handles its own price rows.
+  const productFields = $("productFields");
+  productFields.innerHTML = stockForm.html();
+  for (const type of ["input", "change", "click"]) productFields.addEventListener(type, (e) => stockForm.handle(e));
+
   // Navigation and shared buttons
   document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => {
     if (b.dataset.view === state.view) PurchasesUI.home(b.dataset.view);   // the menu button of the open page returns to its list
@@ -2973,30 +2803,6 @@ function bindEvents() {
       else await addProduct(result.values);
     });
   });
-  // Selling price rows: typing a price only updates the row; a unit change or a removal redraws the rows.
-  const priceRows = $("priceRows");
-  const rowIdOf = (el) => { const row = el.closest("[data-row]"); return row ? row.dataset.row : null; };
-  priceRows.addEventListener("input", (e) => {
-    const input = e.target.closest("input[data-field='price']");
-    const row = input && findPriceRow(rowIdOf(input));
-    if (row) row.price = input.value;
-  });
-  priceRows.addEventListener("change", (e) => {
-    const select = e.target.closest("select[data-field='unit']");
-    if (select) setPriceRowUnit(rowIdOf(select), select.value);
-  });
-  priceRows.addEventListener("click", (e) => {
-    const button = e.target.closest("[data-action='remove-price']");
-    if (!button) return;
-    clearProductErrors();
-    removePriceRow(rowIdOf(button));
-  });
-  $("addPriceRow").addEventListener("click", () => { clearProductErrors(); addPriceRow(); });
-  $("pStockUnit").addEventListener("change", () => { $("pStockUnit").dataset.touched = "1"; });
-  productForm.addEventListener("input", (e) => {
-    e.target.removeAttribute("aria-invalid");
-    showError("productError", "");
-  });
   $("productCancel").addEventListener("click", resetProductForm);
 
   // Stock: add stock
@@ -3177,14 +2983,16 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     renderSale,
     invoiceItemLabel,
     readProductForm,
-    setPriceRows,
-    addPriceRow,
-    removePriceRow,
-    setPriceRowUnit,
-    renderPriceRows,
-    nextPriceUnit,
+    stockForm,
+    ProductForm,
+    setPriceRows: (entries) => stockForm.setRows(entries),
+    addPriceRow: () => stockForm.addRow(),
+    removePriceRow: (rowId) => stockForm.removeRow(rowId),
+    setPriceRowUnit: (rowId, unit) => stockForm.setRowUnit(rowId, unit),
+    renderPriceRows: () => stockForm.renderRows(),
+    nextPriceUnit: () => stockForm.nextUnit(),
     startEditProduct,
-    syncCoverageMark,
+    syncCoverageMark: () => stockForm.syncCoverageMark(),
     buildData,
     applyData,
     commit,

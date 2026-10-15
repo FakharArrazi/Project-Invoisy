@@ -843,12 +843,24 @@
     };
   }
 
+  // The product form of a line's "+ New product" box: the same form as the Stock page, so a product made here gets the
+  // same fields (Manufacturer included) and is checked by the same rules. Its stock starts at 0: what the purchase
+  // receives is the only thing that adds to it. The supplier of the purchase is not part of it: it is the purchase's own.
+  const newProductPrefix = (lineId) => `pl-${lineId}-np-`;
+
+  function newProductForm(lineId) {
+    return ProductForm.create({
+      prefix: newProductPrefix(lineId),
+      stockFromPurchase: true,
+      products: () => S().products,
+      onError: (message) => showErr(`pl-${lineId}-error`, message),
+    });
+  }
+
   function lineHtml(line) {
     const id = line.id;
     const np = line.newProduct;
     const selected = np ? NEW : line.productId;
-    const v = np || {};
-    const unitSel = (cur, key) => `<select id="pl-${id}-np-${key}">${key === "stockUnit" ? option("", t("stock.countedIn"), !cur) : ""}${UNIT_CHOICES.map((u) => option(u, key === "stockUnit" ? stockUnitName(u) : t("price." + u), u === cur)).join("")}</select>`;
     return `<div class="pl-row" data-line="${esc(id)}" data-pid="${esc(np ? line.productId : "")}">
       <div class="pl-main">
         <div class="field pl-product"><label for="pl-${id}-product">${esc(t("col.product"))}</label><select id="pl-${id}-product">${productOptions(selected)}</select></div>
@@ -863,16 +875,7 @@
       <div class="pl-sub"><span class="muted small" id="pl-${id}-hint"></span> <span class="conv" id="pl-${id}-conv"></span></div>
       <div class="pl-new" id="pl-${id}-newbox"${np ? "" : " hidden"}>
         <h4>${esc(t("pur.newProductTitle"))}</h4>
-        <div class="grid-3">
-          ${field(`pl-${id}-np-name`, esc(t("stock.productName")) + " *", `<input type="text" id="pl-${id}-np-name" value="${esc(v.name || "")}" autocomplete="off">`)}
-          ${field(`pl-${id}-np-tile`, esc(t("stock.tileSize")), `<input type="text" id="pl-${id}-np-tile" value="${esc(v.tileSize || "")}" placeholder="60*120" autocomplete="off">`)}
-          ${field(`pl-${id}-np-cover`, esc(t("stock.coverage")), `<input type="number" id="pl-${id}-np-cover" min="0" step="any" value="${v.coveragePerBox ? esc(v.coveragePerBox) : ""}">`)}
-          ${field(`pl-${id}-np-sell`, esc(t("pur.newSelling")), `<input type="number" id="pl-${id}-np-sell" min="0" step="any" value="${v.sellingPrice !== undefined && v.sellingPrice !== "" ? esc(v.sellingPrice) : ""}">`)}
-          ${field(`pl-${id}-np-priceUnit`, esc(t("pur.newSellingUnit")), unitSel(v.priceUnit || "box", "priceUnit"))}
-          ${field(`pl-${id}-np-stockUnit`, esc(t("stock.stockUnit")) + " *", unitSel(v.stockUnit === undefined ? "box" : v.stockUnit, "stockUnit"))}
-          ${field(`pl-${id}-np-sku`, esc(t("stock.sku")), `<input type="text" id="pl-${id}-np-sku" value="${esc(v.sku || "")}" autocomplete="off">`)}
-          ${field(`pl-${id}-np-cat`, esc(t("stock.category")), `<input type="text" id="pl-${id}-np-cat" value="${esc(v.category || "")}" autocomplete="off">`)}
-        </div>
+        <div id="pl-${id}-npHost">${np ? newProductForm(id).html(np) : ""}</div>
         <p class="muted small">${esc(t("pur.newProductNote"))}</p>
       </div>
       <div class="field pl-notes"><label for="pl-${id}-notes">${esc(t("pur.line.notes"))}</label><input type="text" id="pl-${id}-notes" value="${esc(line.notes || "")}" autocomplete="off"></div>
@@ -974,10 +977,8 @@
       const sel = g("product");
       const line = { id, productId: sel === NEW ? row.dataset.pid : sel, newProduct: null, qty: g("qty"), unit: g("unit"), factor: g("factor"), unitPrice: g("price"), discount: g("disc"), notes: g("notes") };
       if (sel === NEW) {
-        line.newProduct = {
-          name: g("np-name"), tileSize: g("np-tile"), coveragePerBox: g("np-cover"), sellingPrice: g("np-sell"),
-          priceUnit: g("np-priceUnit"), stockUnit: g("np-stockUnit"), sku: g("np-sku"), category: g("np-cat"), description: "",
-        };
+        const form = ProductForm.get(newProductPrefix(id));
+        line.newProduct = form ? form.readRaw() : ProductForm.toRaw(null);
       }
       return line;
     });
@@ -994,8 +995,10 @@
   // The product (or the new product being typed) a line is about: only what the unit conversion needs.
   function lineSpec(line) {
     if (line.newProduct) {
-      const cover = Number(line.newProduct.coveragePerBox);
-      return { coveragePerBox: cover > 0 ? cover : null, priceUnit: line.newProduct.priceUnit, tileSize: line.newProduct.tileSize, stockUnit: Calc.isUnit(line.newProduct.stockUnit) ? line.newProduct.stockUnit : null, name: line.newProduct.name };
+      const np = line.newProduct;
+      const cover = Number(np.coveragePerBox);
+      const first = Array.isArray(np.prices) ? np.prices[0] : null;
+      return { coveragePerBox: cover > 0 ? cover : null, priceUnit: first ? first.unit : "", tileSize: np.tileSize, stockUnit: Calc.isUnit(np.stockUnit) ? np.stockUnit : null, name: np.name };
     }
     const p = S().products.find((x) => x.id === line.productId);
     return p ? { ...p, stockUnit: Calc.isUnit(p.stockUnit) ? p.stockUnit : null } : null;
@@ -1106,6 +1109,10 @@
       if (row) {
         const box = $(`pl-${row.dataset.line}-error`);
         if (box) box.textContent = (box.textContent ? box.textContent + "\n" : "") + e.message;
+        // A problem with the new product's form is marked on the box it belongs to.
+        const own = /^newProduct\.(.+)$/.exec(m[2]);
+        const form = own ? ProductForm.get(newProductPrefix(row.dataset.line)) : null;
+        if (form) form.mark(own[1], e.priceIndex);
       }
     }
   }
@@ -1591,7 +1598,7 @@
     },
     "pur-line-remove"(el) {
       const row = el.closest(".pl-row");
-      if (row) row.remove();
+      if (row) { ProductForm.drop(newProductPrefix(row.dataset.line)); row.remove(); }
       if (![...$("pfLines").querySelectorAll(".pl-row")].length) $("pfLines").insertAdjacentHTML("beforeend", lineHtml(blankLine()));
       updatePurchasePreview();
     },
@@ -1635,6 +1642,8 @@
   };
 
   function onClick(e) {
+    // Add or remove a selling price of a new product: the product form handles it, then the conversions are redrawn.
+    if (ProductForm.route(e)) { updatePurchasePreview(); return; }
     const el = e.target.closest("[data-act]");
     if (!el) return;
     const handler = actions[el.dataset.act];
@@ -1658,6 +1667,7 @@
     if (id === "supSearch") { ui.sup.q = el.value; refreshSupplierRows(); return; }
     if (id === "purSearch") { ui.pur.q = el.value; $("purRows").innerHTML = purchaseListRows(); return; }
     if (el.closest && el.closest("#purchaseForm")) {
+      ProductForm.route(e);   // typing in a new product's form (its price rows, its stock unit)
       if (id === "pf-due") ui.pur.form.dueTouched = true;
       if (id === "pf-noInvoice") $("pf-invoiceNo").disabled = el.checked;
       const m = /^pl-(.+)-product$/.exec(id);
@@ -1665,6 +1675,10 @@
         const row = el.closest(".pl-row");
         const isNew = el.value === NEW;
         $(`pl-${m[1]}-newbox`).hidden = !isNew;
+        // "+ New product" shows the product form; any other choice takes it away again.
+        const prefix = newProductPrefix(m[1]);
+        if (isNew && !ProductForm.get(prefix)) $(`pl-${m[1]}-npHost`).innerHTML = newProductForm(m[1]).html();
+        if (!isNew && ProductForm.get(prefix)) { ProductForm.drop(prefix); $(`pl-${m[1]}-npHost`).innerHTML = ""; }
         row.dataset.pid = isNew ? (row.dataset.pid || Validation.uid()) : "";
         const product = S().products.find((p) => p.id === el.value);
         if (product) {

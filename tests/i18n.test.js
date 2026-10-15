@@ -46,7 +46,7 @@ function loadApp() {
     setTimeout, clearTimeout, structuredClone,
   };
   vm.createContext(context);
-  for (const file of LANGUAGE_FILES.concat(["calc.js", "purchases.js", "validation.js", "debt.js", "database.js", "autobackup.js", "purchases-ui.js", "script.js"])) vm.runInContext(read(file), context, { filename: file });
+  for (const file of LANGUAGE_FILES.concat(["calc.js", "purchases.js", "validation.js", "product-form.js", "debt.js", "database.js", "autobackup.js", "purchases-ui.js", "script.js"])) vm.runInContext(read(file), context, { filename: file });
   const api = exports;
   const useLanguage = (language) => api.applyData({
     products: [], invoices: [], settings: { ...api.DEFAULT_SETTINGS, language }, counter: 0, lastSaved: "",
@@ -114,7 +114,7 @@ test("every text key used in the code or in index.html exists in English", () =>
   const literal = new RegExp(`"((?:${namespaces.join("|")})\\.[A-Za-z0-9.]+)"`, "g");
 
   const used = new Map();   // key -> where
-  for (const file of ["script.js", "calc.js", "purchases.js", "purchases-ui.js", "validation.js", "debt.js", "database.js", "autobackup.js"]) {
+  for (const file of ["script.js", "calc.js", "purchases.js", "purchases-ui.js", "validation.js", "product-form.js", "debt.js", "database.js", "autobackup.js"]) {
     for (const m of read(file).matchAll(literal)) used.set(m[1], file);
   }
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");

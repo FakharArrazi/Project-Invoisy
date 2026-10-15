@@ -9,9 +9,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { loadApp } = require("./helpers/app");
 
+// The form's fields are drawn by the shared product form (java script/product-form.js), the one a purchase uses for a
+// new product too: this is exactly the markup the Stock page shows.
 const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
-const formStart = html.indexOf('<form id="productForm"');
-const formHtml = html.slice(formStart, html.indexOf("</form>", formStart));
+const formHtml = loadApp().api.stockForm.html();
 
 // Plain fields of the form (the selling prices are rows, see priceRows below).
 const FIELDS = ["pName", "pManufacturer", "pTileSize", "pDesc", "pCost", "pStock", "pStockUnit", "pSku", "pCoveragePerBox", "pCategory"];

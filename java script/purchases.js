@@ -311,43 +311,20 @@
     return f.error ? f : { value: cleanNumber(f.value) };
   }
 
-  // A product made while recording a purchase follows the same rules as the Stock form.
-  function readNewProduct(raw, ctx, fail) {
-    const get = (key) => text(raw[key]).trim();
-    const name = get("name");
-    if (!name) return fail("name", t("product.nameRequired"));
-    const tileSizeRaw = get("tileSize");
-    if (tileSizeRaw && !Calc.isTileSize(tileSizeRaw)) return fail("tileSize", t("product.tileSizeFormat"));
-    const tileSize = tileSizeRaw ? Calc.normalizeTileSize(tileSizeRaw) : "";
-    const coverage = readNumber(raw.coveragePerBox);
-    if (coverage.invalid || (!coverage.blank && coverage.value <= 0)) return fail("coveragePerBox", t("product.coverageGreater"));
-    const price = readNumber(raw.sellingPrice);
-    if (price.blank || price.invalid) return fail("sellingPrice", t("product.priceRequired"));
-    if (price.value < 0) return fail("sellingPrice", t("product.priceNegative"));
-    const priceUnit = get("priceUnit");
-    if (!Calc.isUnit(priceUnit)) return fail("priceUnit", t("product.chooseUnit"));
-    if (priceUnit === "m2" && coverage.blank) return fail("coveragePerBox", t("product.coverageNeeded"));
-    const stockUnit = get("stockUnit");
-    if (!Calc.isUnit(stockUnit)) return fail("stockUnit", t("product.chooseStockUnit"));
-    if (Calc.unitFamily(stockUnit) !== Calc.unitFamily(Calc.defaultStockUnit(priceUnit))) {
-      return fail("stockUnit", t("product.stockUnitMismatch", { stock: t("stockunit." + stockUnit), price: t("price." + priceUnit) }));
-    }
-    const sku = get("sku");
-    if (sku) {
-      const clash = ctx.products.find((p) => text(p.sku).toLowerCase() === sku.toLowerCase());
-      if (clash) return fail("sku", t("product.skuUsed", { sku, name: clash.name }));
-    }
-    return {
-      name, tileSize, coveragePerBox: coverage.blank ? null : coverage.value, description: get("description"), sku,
-      category: get("category"), sellingPrice: price.value, priceUnit, stockUnit, purchasePrice: null,
-    };
+  // A product made while recording a purchase is checked by the same function as the Stock form (validation.js):
+  // same fields, same rules, same duplicate check. `products` is the catalogue plus the products made by earlier lines of
+  // this purchase. Its stock starts at 0: the goods received add to it, once, when they are received (confirmPurchase).
+  function readNewProduct(raw, products, fail) {
+    const checked = Validation.readProductInput(raw, { products, stockFromPurchase: true });
+    if (checked.error) return fail(checked.field, checked.error, { priceIndex: checked.index });
+    return checked.values;
   }
 
   function readLines(rawLines, ctx, mode, errors) {
     const lines = [];
-    const newSkus = new Map();
+    const known = [...ctx.products];   // the catalogue, and each new product as its line is read, so two lines can not repeat one
     (Array.isArray(rawLines) ? rawLines : []).forEach((raw, index) => {
-      const fail = (field, message) => { errors.push({ field: `line.${index}.${field}`, message, line: index }); return null; };
+      const fail = (field, message, extra) => { errors.push({ field: `line.${index}.${field}`, message, line: index, ...extra }); return null; };
       const row = isObj(raw) ? raw : {};
       const id = isStr(row.id) && row.id ? row.id : uid();
 
@@ -355,13 +332,11 @@
       let newProduct = null;
       let productId = isStr(row.productId) ? row.productId : "";
       if (isObj(row.newProduct)) {
-        newProduct = readNewProduct(row.newProduct, ctx, (field, message) => fail("newProduct." + field, message));
+        newProduct = readNewProduct(row.newProduct, known, (field, message, extra) => fail("newProduct." + field, message, extra));
         if (!newProduct) return;
-        const sku = newProduct.sku.toLowerCase();
-        if (sku && newSkus.has(sku)) { fail("newProduct.sku", t("product.skuUsed", { sku: newProduct.sku, name: newSkus.get(sku) })); return; }
-        if (sku) newSkus.set(sku, newProduct.name);
         // The id is chosen now so the line keeps pointing at the same product after the purchase is confirmed.
         if (!productId || ctx.products.some((p) => p.id === productId)) productId = uid();
+        known.push({ ...newProduct, id: productId });
       } else {
         product = ctx.products.find((p) => p.id === productId);
         if (!product) {
