@@ -66,7 +66,8 @@
       prices = saved.length ? saved : [{ unit: "", price: source.sellingPrice }];
     }
     return {
-      name: text(source.name), productType: text(source.productType), manufacturer: text(source.manufacturer), tileSize: text(source.tileSize), sku: text(source.sku),
+      name: text(source.name), productType: Validation.normalizeProductType(text(source.productType)),   // an old spelling (Daldosol) shows as the current type
+      manufacturer: text(source.manufacturer), tileSize: text(source.tileSize), sku: text(source.sku),
       category: text(source.category), description: text(source.description), stock: text(source.stock),
       stockUnit: text(source.stockUnit), coveragePerBox: text(source.coveragePerBox), purchasePrice: text(source.purchasePrice),
       prices: prices.map((p) => ({ unit: text(p && p.unit), price: text(p && p.price) })),
@@ -192,7 +193,7 @@
       const attr = (key) => (raw[key] === "" ? "" : ` value="${esc(raw[key])}"`);
       const stockUnits = STOCK_UNITS.map((u) => `<option value="${u}"${raw.stockUnit === u ? " selected" : ""}>${esc(t("stockunit." + u))}</option>`).join("");
       const typeOptions = `<option value=""${raw.productType ? "" : " selected"} data-i18n="stock.productTypeNone">${esc(t("stock.productTypeNone"))}</option>` +
-        Validation.PRODUCT_TYPES.map((type) => `<option value="${esc(type)}"${raw.productType === type ? " selected" : ""}>${esc(type)}</option>`).join("");
+        Validation.PRODUCT_TYPES.map((type) => `<option value="${esc(type)}"${raw.productType === type ? " selected" : ""} data-i18n="productType.${esc(type)}">${esc(t("productType." + type))}</option>`).join("");
       const touched = given && raw.stockUnit ? ' data-touched="1"' : "";   // an edit never changes the unit on its own
       const cover = needsCoverage();
       return `<div class="product-fields" data-product-form="${esc(prefix)}">

@@ -142,11 +142,23 @@ function formatTileSize(size) {
 function invoiceItemLabel(item) {
   const size = formatTileSize(item.tileSize);
   const name = item.name === DELETED_PRODUCT ? t("sell.deletedProduct") : item.name;
-  const label = [name, size ? `(${size})` : "", item.manufacturer].filter(Boolean).join(" ");
-  // The product type kept on the line when it was sold goes first: "Daldosol — ACRA Beige". No type (none chosen, or an
-  // invoice saved before the field existed): the label is exactly what it always was.
-  const type = String(item.productType || "").trim();
-  return type ? `${type} — ${label}` : label;
+  return [name, size ? `(${size})` : "", item.manufacturer].filter(Boolean).join(" ");
+}
+
+// A product type in the language shown now: Daltosol, Faience / Faïence, Porcelain / Porcelaine, Rock / Pierre.
+// A type saved under an old spelling (Daldosol) reads as the current one; "" when the product has no type.
+function productTypeLabel(type) {
+  const value = String(type || "").trim();
+  if (!value) return "";
+  const known = Validation.normalizeProductType(value);
+  return known ? t("productType." + known) : value;
+}
+
+// The type under the product name, in the same small grey style as the converted quantity ("1,42 m²").
+// No type: nothing at all, so the line is exactly what it always was.
+function invoiceItemTypeHtml(item) {
+  const label = productTypeLabel(item.productType);
+  return label ? `<div class="inv-sub">${esc(label)}</div>` : "";
 }
 
 // "10 Boxes", "2.5 m²": a quantity with the unit it is counted in.
@@ -1439,7 +1451,7 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
     return {
       productId: item.productId,
       name: p ? p.name : DELETED_PRODUCT,
-      productType: p ? p.productType || "" : "",   // a snapshot, like the name: editing the product later never changes a saved invoice
+      productType: p ? Validation.normalizeProductType(p.productType) : "",   // a snapshot, like the name: editing the product later never changes a saved invoice
       manufacturer: p ? p.manufacturer : "",
       tileSize: p ? p.tileSize : "",
       coveragePerBox: p ? p.coveragePerBox : null,
@@ -1989,7 +2001,7 @@ function invoiceHtml(inv) {
         const toCollect = left && left.remaining > 0
           ? `<div class="inv-sub inv-open">${esc(t("inv.deliveredOf", { delivered: qtyText(left.delivered, i.sellingUnit), remaining: qtyText(left.remaining, i.sellingUnit) }))}</div>`
           : "";
-        return `<tr><td>${esc(invoiceItemLabel(i))}</td><td class="num">${num(i.qty)}${i.sellingUnit ? ` ${esc(unitLabel(i.sellingUnit, i.qty))}` : ""}${inPriceUnit}${toCollect}</td><td class="num">${num(shown.price)}${shown.unit ? ` <span class="inv-unit">/ ${esc(unitLabel(shown.unit))}</span>` : ""}</td><td class="num">${num(i.total != null ? i.total : Calc.calculateLineTotal(i.qty, i.unitPrice))}</td></tr>`;
+        return `<tr><td>${esc(invoiceItemLabel(i))}${invoiceItemTypeHtml(i)}</td><td class="num">${num(i.qty)}${i.sellingUnit ? ` ${esc(unitLabel(i.sellingUnit, i.qty))}` : ""}${inPriceUnit}${toCollect}</td><td class="num">${num(shown.price)}${shown.unit ? ` <span class="inv-unit">/ ${esc(unitLabel(shown.unit))}</span>` : ""}</td><td class="num">${num(i.total != null ? i.total : Calc.calculateLineTotal(i.qty, i.unitPrice))}</td></tr>`;
       }).join("")
     : `<tr><td colspan="4" class="none">${esc(t("inv.noItems"))}</td></tr>`;
 
@@ -2077,7 +2089,7 @@ function collectionHtml(inv) {
   const logo = state.settings.logo ? `<img class="inv-logo" src="${esc(state.settings.logo)}" alt="${esc(t("logo.alt"))}">` : "";
   const detail = Validation.deliveryDetail(inv);
   const rows = detail.toCollect.length
-    ? detail.toCollect.map((l) => `<tr><td>${esc(invoiceItemLabel(l.item))}<div class="inv-sub">${esc(t("collect.docSold", { sold: qtyText(l.qty, l.item.sellingUnit), delivered: qtyText(l.delivered, l.item.sellingUnit) }))}</div></td><td class="num collect-qty">${esc(qtyText(l.remaining, l.item.sellingUnit))}</td></tr>`).join("")
+    ? detail.toCollect.map((l) => `<tr><td>${esc(invoiceItemLabel(l.item))}${invoiceItemTypeHtml(l.item)}<div class="inv-sub">${esc(t("collect.docSold", { sold: qtyText(l.qty, l.item.sellingUnit), delivered: qtyText(l.delivered, l.item.sellingUnit) }))}</div></td><td class="num collect-qty">${esc(qtyText(l.remaining, l.item.sellingUnit))}</td></tr>`).join("")
     : `<tr><td colspan="2" class="none">${esc(t("collect.docNothing"))}</td></tr>`;
   const done = (inv.deliveries || []).map((d, n) => {
     const what = d.type === "sale" ? t("inv.deliverySale") : Validation.receiptNumber(inv, inv.deliveries.slice(0, n + 1).filter((x) => x.type === "collection").length);
@@ -2150,7 +2162,7 @@ function renderDeliveryBox() {
     const unit = l.item.sellingUnit;
     const name = invoiceItemLabel(l.item);
     const whole = Calc.isWholeUnit(unit);
-    const info = `<div class="collect-info"><div>${esc(name)}</div><div class="muted small">${esc(t("deliv.soldLine", { sold: qtyText(l.qty, unit), delivered: qtyText(l.delivered, unit), remaining: qtyText(l.remaining, unit) }))}</div></div>`;
+    const info = `<div class="collect-info"><div>${esc(name)}</div>${invoiceItemTypeHtml(l.item)}<div class="muted small">${esc(t("deliv.soldLine", { sold: qtyText(l.qty, unit), delivered: qtyText(l.delivered, unit), remaining: qtyText(l.remaining, unit) }))}</div></div>`;
     if (l.remaining <= 0) return `<div class="collect-row done">${info}<div class="collect-input muted small">${esc(t("deliv.done"))}</div></div>`;
     return `<div class="collect-row" data-line="${esc(l.lineId)}">${info}<div class="collect-input"><input type="number" min="0" max="${l.remaining}" step="${whole ? 1 : "any"}" data-collect-qty data-line="${esc(l.lineId)}" data-remaining="${l.remaining}" aria-label="${esc(t("deliv.qtyAria", { name }))}"><span class="muted small">${esc(unitLabel(unit, l.remaining))}</span></div></div>`;
   }).join("");
@@ -3382,6 +3394,8 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     invoiceLinePrice,
     renderSale,
     invoiceItemLabel,
+    invoiceItemTypeHtml,
+    productTypeLabel,
     readProductForm,
     stockForm,
     ProductForm,

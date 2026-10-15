@@ -311,9 +311,17 @@
   const isTileSize = Calc.isTileSize;
   const normalizeTileSize = Calc.normalizeTileSize;
 
-  // The optional type of a product, shown before its name on invoices. "" = none. These names are printed as they are
-  // written here (they are not translated), and a product saved before the field existed simply has none.
-  const PRODUCT_TYPES = ["Daldosol", "Faience", "Porcelain", "Rock"];
+  // The optional type of a product, shown under its name on invoices. "" = none. These are the stored values; the
+  // words people see come from the language files (productType.<value>), so French shows Faïence, Pierre, Porcelaine.
+  // A product saved before the field existed simply has none.
+  const PRODUCT_TYPES = ["Daltosol", "Faience", "Porcelain", "Rock"];
+  // Spellings an earlier version saved: they are read as the current value, so no saved product or invoice is lost.
+  const LEGACY_PRODUCT_TYPES = { Daldosol: "Daltosol" };
+  // The stored value a type is known by (an old spelling becomes the current one); "" for no type or an unknown one.
+  function normalizeProductType(type) {
+    const value = LEGACY_PRODUCT_TYPES.hasOwnProperty(type) ? LEGACY_PRODUCT_TYPES[type] : type;
+    return PRODUCT_TYPES.includes(value) ? value : "";
+  }
 
   function normalizeProduct(raw) {
     if (!raw || typeof raw !== "object" || !raw.name) return null;
@@ -336,7 +344,7 @@
       ...extra,
       id: String(raw.id || uid()),
       name: String(raw.name),
-      productType: PRODUCT_TYPES.includes(raw.productType) ? raw.productType : "",
+      productType: normalizeProductType(raw.productType),
       manufacturer: String(raw.manufacturer || ""),
       // tileSize is the physical size of one tile. It is deliberately separate from box coverage.
       tileSize: String(raw.tileSize != null ? raw.tileSize : dimensions || ""),
@@ -396,7 +404,7 @@
     const name = get("name");
     if (!name) return fail("name", t("product.nameRequired"));
     const productType = get("productType");
-    if (productType && !PRODUCT_TYPES.includes(productType)) return fail("productType", t("product.typeInvalid"));
+    if (productType && !normalizeProductType(productType)) return fail("productType", t("product.typeInvalid"));
     const tileSizeRaw = get("tileSize");
     if (tileSizeRaw && !isTileSize(tileSizeRaw)) return fail("tileSize", t("product.tileSizeFormat"));
     const tileSize = tileSizeRaw ? normalizeTileSize(tileSizeRaw) : "";
@@ -450,7 +458,7 @@
     const sku = get("sku");
     const values = {
       name,
-      productType,
+      productType: normalizeProductType(productType),
       manufacturer: get("manufacturer"),
       tileSize,
       coveragePerBox: coverageRaw === "" ? null : coveragePerBox,
@@ -669,7 +677,7 @@
     if (!isObj(p)) return t("problem.notObject");
     if (!isStr(p.id) || !p.id) return t("problem.noId");
     if (!isStr(p.name) || !p.name.trim()) return t("problem.noName");
-    if (p.productType !== undefined && p.productType !== "" && !PRODUCT_TYPES.includes(p.productType)) return t("problem.badProductType");
+    if (p.productType !== undefined && p.productType !== "" && !normalizeProductType(p.productType)) return t("problem.badProductType");
     if (p.manufacturer !== undefined && !isStr(p.manufacturer)) return t("problem.badManufacturer");
     if (p.tileSize !== undefined && (!isStr(p.tileSize) || (p.tileSize.trim() && !isTileSize(p.tileSize)))) return t("problem.badTileSize");
     if (p.coveragePerBox !== undefined && p.coveragePerBox !== null && (!isNum(p.coveragePerBox) || p.coveragePerBox <= 0)) return t("problem.badCoverage");
@@ -1240,7 +1248,7 @@
 
   globalThis.Validation = {
     APP_NAME, CURRENCY, DATA_VERSION, BACKUP_FORMAT_VERSION, MIRROR_KEY, LEGACY_KEYS, DEFAULT_BACKUP_DAYS,
-    DEFAULT_SETTINGS, SELLING_UNITS, PRODUCT_TYPES, INVOICE_STATUSES, DERIVED_INVOICE_FIELDS, WALK_IN,
+    DEFAULT_SETTINGS, SELLING_UNITS, PRODUCT_TYPES, normalizeProductType, INVOICE_STATUSES, DERIVED_INVOICE_FIELDS, WALK_IN,
     isObj, isStr, isNum, isDate, round2, toNumber, uid, sameValue,
     formatInvoiceNumber, invoiceSequence, highestInvoiceNumber,
     carriedLines, paidTotal, carriedTotal, amountDue, transferredOut, carriedBreakdown,
