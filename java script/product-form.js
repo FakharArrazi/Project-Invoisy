@@ -30,7 +30,7 @@
   const STOCK_UNITS = ["piece", "box", "m2", "kg", "m"];
   // The id of each plain field is the prefix plus this ("p" + "Name" = pName).
   const FIELD_SUFFIX = {
-    name: "Name", manufacturer: "Manufacturer", tileSize: "TileSize", sku: "Sku", category: "Category", description: "Desc",
+    name: "Name", productType: "Type", manufacturer: "Manufacturer", tileSize: "TileSize", sku: "Sku", category: "Category", description: "Desc",
     stock: "Stock", stockUnit: "StockUnit", coveragePerBox: "CoveragePerBox", purchasePrice: "Cost",
   };
 
@@ -53,7 +53,7 @@
     const text = (v) => (v == null ? "" : String(v));
     if (source == null) {
       return {
-        name: "", manufacturer: "", tileSize: "", sku: "", category: "", description: "", stock: "0", stockUnit: "box",
+        name: "", productType: "", manufacturer: "", tileSize: "", sku: "", category: "", description: "", stock: "0", stockUnit: "box",
         coveragePerBox: "", purchasePrice: "", prices: [{ unit: "m2", price: "" }],
       };
     }
@@ -66,7 +66,7 @@
       prices = saved.length ? saved : [{ unit: "", price: source.sellingPrice }];
     }
     return {
-      name: text(source.name), manufacturer: text(source.manufacturer), tileSize: text(source.tileSize), sku: text(source.sku),
+      name: text(source.name), productType: text(source.productType), manufacturer: text(source.manufacturer), tileSize: text(source.tileSize), sku: text(source.sku),
       category: text(source.category), description: text(source.description), stock: text(source.stock),
       stockUnit: text(source.stockUnit), coveragePerBox: text(source.coveragePerBox), purchasePrice: text(source.purchasePrice),
       prices: prices.map((p) => ({ unit: text(p && p.unit), price: text(p && p.price) })),
@@ -191,6 +191,8 @@
       holder.priceRows = raw.prices.map((p) => newRow(p.unit, p.price));
       const attr = (key) => (raw[key] === "" ? "" : ` value="${esc(raw[key])}"`);
       const stockUnits = STOCK_UNITS.map((u) => `<option value="${u}"${raw.stockUnit === u ? " selected" : ""}>${esc(t("stockunit." + u))}</option>`).join("");
+      const typeOptions = `<option value=""${raw.productType ? "" : " selected"} data-i18n="stock.productTypeNone">${esc(t("stock.productTypeNone"))}</option>` +
+        Validation.PRODUCT_TYPES.map((type) => `<option value="${esc(type)}"${raw.productType === type ? " selected" : ""}>${esc(type)}</option>`).join("");
       const touched = given && raw.stockUnit ? ' data-touched="1"' : "";   // an edit never changes the unit on its own
       const cover = needsCoverage();
       return `<div class="product-fields" data-product-form="${esc(prefix)}">
@@ -199,6 +201,10 @@
               <div class="field">
                 <label for="${ids.name}"><span data-i18n="stock.productName">${esc(t("stock.productName"))}</span> <span class="req" aria-hidden="true">*</span></label>
                 <input type="text" id="${ids.name}" autocomplete="off" aria-required="true"${attr("name")}>
+              </div>
+              <div class="field">
+                <label for="${ids.productType}" data-i18n="stock.productType">${esc(t("stock.productType"))}</label>
+                <select id="${ids.productType}">${typeOptions}</select>
               </div>
               <div class="grid-2">
                 <div class="field">

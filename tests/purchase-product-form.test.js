@@ -57,7 +57,7 @@ test("the Stock form and a purchase read a product the same way: same fields, sa
   assert.equal(purchase.values.stock, 0, "a product made by a purchase starts at 0: the goods received add to it");
   assert.deepEqual({ ...plain(purchase.values), stock: 7 }, plain(stock.values), "every other field is identical");
   assert.deepEqual(Object.keys(stock.values).sort(), [
-    "category", "coveragePerBox", "description", "manufacturer", "name", "priceUnit", "purchasePrice", "sellingPrice", "sellingPrices", "sku", "stock", "stockUnit", "tileSize",
+    "category", "coveragePerBox", "description", "manufacturer", "name", "priceUnit", "productType", "purchasePrice", "sellingPrice", "sellingPrices", "sku", "stock", "stockUnit", "tileSize",
   ]);
   assert.equal(stock.values.manufacturer, "Timgad Ceramic");
   assert.equal(stock.values.tileSize, "60*120");

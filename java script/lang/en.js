@@ -106,6 +106,8 @@ I18n.register("en", "English", {
   "stock.addProduct": "Add product",
   "stock.editProduct": "Edit product",
   "stock.productName": "Product name",
+  "stock.productType": "Product type",
+  "stock.productTypeNone": "None",
   "stock.manufacturer": "Manufacturer",
   "stock.tileSize": "Tile size",
   "stock.description": "Description",
@@ -260,6 +262,7 @@ I18n.register("en", "English", {
 
   // ----- Products: form checks and messages -----
   "product.nameRequired": "Product name is required.",
+  "product.typeInvalid": "Choose a product type from the list.",
   "product.tileSizeFormat": "Tile size must look like 60*120.",
   "product.coverageGreater": "Coverage per box must be greater than 0.",
   "product.priceRequired": "Selling price is required.",
@@ -516,6 +519,7 @@ I18n.register("en", "English", {
   "problem.notObject": "is not an object",
   "problem.noId": "has no id",
   "problem.noName": "has no name",
+  "problem.badProductType": "has an invalid product type",
   "problem.badManufacturer": "has an invalid manufacturer",
   "problem.badTileSize": "has an invalid tile size",
   "problem.badCoverage": "has an invalid box coverage",

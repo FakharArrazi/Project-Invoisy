@@ -142,7 +142,11 @@ function formatTileSize(size) {
 function invoiceItemLabel(item) {
   const size = formatTileSize(item.tileSize);
   const name = item.name === DELETED_PRODUCT ? t("sell.deletedProduct") : item.name;
-  return [name, size ? `(${size})` : "", item.manufacturer].filter(Boolean).join(" ");
+  const label = [name, size ? `(${size})` : "", item.manufacturer].filter(Boolean).join(" ");
+  // The product type kept on the line when it was sold goes first: "Daldosol — ACRA Beige". No type (none chosen, or an
+  // invoice saved before the field existed): the label is exactly what it always was.
+  const type = String(item.productType || "").trim();
+  return type ? `${type} — ${label}` : label;
 }
 
 // "10 Boxes", "2.5 m²": a quantity with the unit it is counted in.
@@ -1435,6 +1439,7 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
     return {
       productId: item.productId,
       name: p ? p.name : DELETED_PRODUCT,
+      productType: p ? p.productType || "" : "",   // a snapshot, like the name: editing the product later never changes a saved invoice
       manufacturer: p ? p.manufacturer : "",
       tileSize: p ? p.tileSize : "",
       coveragePerBox: p ? p.coveragePerBox : null,

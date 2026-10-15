@@ -110,6 +110,8 @@
     "stock.addProduct": "Ajouter un produit",
     "stock.editProduct": "Modifier le produit",
     "stock.productName": "Nom du produit",
+    "stock.productType": "Type de produit",
+    "stock.productTypeNone": "Aucun",
     "stock.manufacturer": "Fabricant",
     "stock.tileSize": "Dimensions du carreau",
     "stock.description": "Description",
@@ -264,6 +266,7 @@
 
     // ----- Products: form checks and messages -----
     "product.nameRequired": "Le nom du produit est obligatoire.",
+    "product.typeInvalid": "Choisissez un type de produit dans la liste.",
     "product.tileSizeFormat": "Les dimensions du carreau doivent ressembler à 60*120.",
     "product.coverageGreater": "La couverture par carton doit être supérieure à 0.",
     "product.priceRequired": "Le prix de vente est obligatoire.",
@@ -520,6 +523,7 @@
     "problem.notObject": "n’est pas un objet",
     "problem.noId": "identifiant manquant",
     "problem.noName": "nom manquant",
+    "problem.badProductType": "type de produit non valide",
     "problem.badManufacturer": "fabricant non valide",
     "problem.badTileSize": "dimensions de carreau non valides",
     "problem.badCoverage": "couverture par carton non valide",
