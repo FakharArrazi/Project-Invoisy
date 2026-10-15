@@ -295,6 +295,7 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 .inv-meta .label { color: #555; font-size: 12px; }
 .inv-meta .right { text-align: right; }
 .inv-customer { white-space: pre-line; }
+.inv-second-label { margin-top: 8px; }
 .inv-table { width: 100%; border-collapse: collapse; }
 .inv-table th { text-align: left; font-size: 12px; padding: 6px 4px; border-top: 1px solid #000; border-bottom: 1px solid #000; }
 .inv-table td { padding: 6px 4px; border-bottom: 1px solid #ddd; vertical-align: top; }

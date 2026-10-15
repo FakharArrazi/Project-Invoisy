@@ -312,11 +312,12 @@
   const normalizeTileSize = Calc.normalizeTileSize;
 
   // The optional type of a product, shown under its name on invoices. "" = none. These are the stored values; the
-  // words people see come from the language files (productType.<value>), so French shows Faïence, Pierre, Porcelaine.
+  // words people see come from the language files (productType.<value>), so French shows Dalle de sol, Faïence, Pierre, Porcelaine.
   // A product saved before the field existed simply has none.
-  const PRODUCT_TYPES = ["Daltosol", "Faience", "Porcelain", "Rock"];
-  // Spellings an earlier version saved: they are read as the current value, so no saved product or invoice is lost.
-  const LEGACY_PRODUCT_TYPES = { Daldosol: "Daltosol" };
+  const PRODUCT_TYPES = ["DalleDeSol", "Faience", "Porcelain", "Rock"];
+  // Spellings an earlier version saved (the type is "Dalle de sol"): they are read as the current value, so no saved
+  // product or invoice is lost.
+  const LEGACY_PRODUCT_TYPES = { Daldosol: "DalleDeSol", Daltosol: "DalleDeSol" };
   // The stored value a type is known by (an old spelling becomes the current one); "" for no type or an unknown one.
   function normalizeProductType(type) {
     const value = LEGACY_PRODUCT_TYPES.hasOwnProperty(type) ? LEGACY_PRODUCT_TYPES[type] : type;
@@ -706,6 +707,8 @@
     if (!Array.isArray(inv.payments)) return t("problem.noPayments");
     if (inv.payments.some((p) => !isObj(p) || !isNum(p.amount) || p.amount <= 0 || !isDate(p.timestamp))) return t("problem.badPayment");
     if (inv.customer != null && !isObj(inv.customer)) return t("problem.badCustomer");
+    // Optional second customer (older invoices do not have one): { name: string }.
+    if (inv.secondCustomer !== undefined && (!isObj(inv.secondCustomer) || typeof inv.secondCustomer.name !== "string")) return t("problem.badSecondCustomer");
     if (inv.carriedForward !== undefined) {
       if (!Array.isArray(inv.carriedForward)) return t("problem.badCarried");
       const seenTransfers = new Set();

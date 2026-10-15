@@ -85,6 +85,20 @@ function customerLabel(name) {
   return !name || name === WALK_IN ? t("sell.walkIn") : name;
 }
 
+// The optional second customer name of an invoice or of the sale being prepared ("" when there is none).
+function secondCustomerName(record) {
+  const second = record && record.secondCustomer;
+  return second && typeof second.name === "string" ? second.name.trim() : "";
+}
+
+// The customer block of an invoice or collection document. One customer reads exactly as before; with a second
+// name, a labelled line is added below the first customer's details.
+function customerBlockHtml(inv, cust) {
+  const second = secondCustomerName(inv);
+  return `<div><div class="label">${esc(t("inv.customer"))}</div><div class="inv-customer">${esc(customerLabel(cust.name))}${cust.phone ? "\n" + esc(cust.phone) : ""}${cust.address ? "\n" + esc(cust.address) : ""}</div>` +
+    (second ? `<div class="label inv-second-label">${esc(t("inv.secondCustomer"))}</div><div class="inv-customer">${esc(second)}</div>` : "") + `</div>`;
+}
+
 /* ---------- Data model ---------- */
 
 // Units a line on a sale can be sold in. The unit belongs to the sale line, not to the product.
@@ -145,8 +159,8 @@ function invoiceItemLabel(item) {
   return [name, size ? `(${size})` : "", item.manufacturer].filter(Boolean).join(" ");
 }
 
-// A product type in the language shown now: Daltosol, Faience / Faïence, Porcelain / Porcelaine, Rock / Pierre.
-// A type saved under an old spelling (Daldosol) reads as the current one; "" when the product has no type.
+// A product type in the language shown now: Dalle de sol, Faience / Faïence, Porcelain / Porcelaine, Rock / Pierre.
+// A type saved under an old spelling (Daldosol, Daltosol) reads as the current one; "" when the product has no type.
 function productTypeLabel(type) {
   const value = String(type || "").trim();
   if (!value) return "";
@@ -172,6 +186,7 @@ function newSale() {
   return {
     items: [],                              // { lineId, productId, qty, sellingUnit, unitPrice }; a line sold beyond the stock also has partial / deliverNow (see deliverNowQty)
     customer: { name: "", phone: "", address: "" },
+    secondCustomer: { name: "" },           // optional second name on the same invoice (e.g. the builder when an architect buys); never a debt identity
     discountType: "amount", discountValue: "",
     taxType: "amount", taxValue: "",
     paidValue: "",                          // amount paid now; empty = 0 (nothing paid yet)
@@ -1418,6 +1433,7 @@ function clearSale() {
   $("custName").value = "";
   $("custPhone").value = "";
   $("custAddress").value = "";
+  $("custName2").value = "";
   $("discountValue").value = "";
   $("taxValue").value = "";
   $("amountPaid").value = "";
@@ -1487,6 +1503,8 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
       phone: sale.customer.phone.trim(),
       address: sale.customer.address.trim(),
     },
+    // Second customer: its own field, only present when filled in, so older invoices and one-customer invoices keep their shape.
+    ...(secondCustomerName(sale) ? { secondCustomer: { name: secondCustomerName(sale) } } : {}),
     items,
     // Debt carried forward from older invoices: its own lines, never products. subtotal, discount, tax and total
     // above stay the figures of this purchase; what the customer owes is total + the carried lines.
@@ -2056,7 +2074,7 @@ function invoiceHtml(inv) {
       <div class="inv-title">${esc(t("inv.title"))}</div>
     </header>
     <div class="inv-meta">
-      <div><div class="label">${esc(t("inv.customer"))}</div><div class="inv-customer">${esc(customerLabel(cust.name))}${cust.phone ? "\n" + esc(cust.phone) : ""}${cust.address ? "\n" + esc(cust.address) : ""}</div></div>
+      ${customerBlockHtml(inv, cust)}
       <div class="right"><div><span class="label">${esc(t("inv.number"))}</span> ${esc(inv.invoiceNumber)}</div><div><span class="label">${esc(t("inv.date"))}</span> ${esc(formatDateTime(inv.date))}</div></div>
     </div>
     <table class="inv-table">
@@ -2105,7 +2123,7 @@ function collectionHtml(inv) {
     </header>
     <div class="collect-banner">${esc(t("collect.docNotice", { invoice: inv.invoiceNumber }))}</div>
     <div class="inv-meta">
-      <div><div class="label">${esc(t("inv.customer"))}</div><div class="inv-customer">${esc(customerLabel(cust.name))}${cust.phone ? "\n" + esc(cust.phone) : ""}${cust.address ? "\n" + esc(cust.address) : ""}</div></div>
+      ${customerBlockHtml(inv, cust)}
       <div class="right">
         <div><span class="label">${esc(t("collect.docNumber"))}</span> ${esc(Validation.collectionNumber(inv))}</div>
         <div><span class="label">${esc(t("collect.docInvoice"))}</span> ${esc(inv.invoiceNumber)} (${esc(formatDate(inv.date))})</div>
@@ -2241,7 +2259,8 @@ function searchInvoices(query) {
     const c = inv.customer || {};
     const phone = String(c.phone || "");
     // The stored walk-in name and its translation are both searchable.
-    const haystack = (inv.invoiceNumber + " " + (c.name || WALK_IN) + " " + customerLabel(c.name) + " " + phone + " " + phone.replace(/\s+/g, "")).toLowerCase();
+    // Both customer names are searched; each one matches on its own, whichever field holds it.
+    const haystack = (inv.invoiceNumber + " " + (c.name || WALK_IN) + " " + customerLabel(c.name) + " " + secondCustomerName(inv) + " " + phone + " " + phone.replace(/\s+/g, "")).toLowerCase();
     return terms.every((t) => haystack.includes(t));
   });
 }
@@ -2270,7 +2289,7 @@ function renderInvoices() {
     return `<tr data-id="${esc(inv.id)}">` +
       `<td>${esc(inv.invoiceNumber)}</td>` +
       `<td>${esc(formatDate(inv.date))}</td>` +
-      `<td>${esc(customerLabel(inv.customer && inv.customer.name))}</td>` +
+      `<td>${esc(customerLabel(inv.customer && inv.customer.name))}${secondCustomerName(inv) ? `<div class="muted small">${esc(secondCustomerName(inv))}</div>` : ""}</td>` +
       `<td class="num">${esc(money(pay.due, inv.currency))}${notes.length ? `<div class="muted small">${notes.map(esc).join("<br>")}</div>` : ""}</td>` +
       `<td class="num">${esc(money(pay.paid, inv.currency))}</td>` +
       `<td class="num">${esc(money(pay.remaining, inv.currency))}</td>` +
@@ -3075,6 +3094,11 @@ function bindEvents() {
       if (key !== "address") renderSaleDebts();
     });
   }
+  // The optional second customer name is plain data entry: it never identifies a debt, so it needs none of the above.
+  $("custName2").addEventListener("input", () => {
+    state.sale.secondCustomer.name = $("custName2").value;
+    refreshLive();
+  });
   // The debt of a returning customer is looked up when the person settles on them (leaves the field, Enter, or picks
   // a suggestion), never while they are still typing.
   for (const id of ["custName", "custPhone"]) {

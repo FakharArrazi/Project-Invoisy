@@ -66,7 +66,7 @@
       prices = saved.length ? saved : [{ unit: "", price: source.sellingPrice }];
     }
     return {
-      name: text(source.name), productType: Validation.normalizeProductType(text(source.productType)),   // an old spelling (Daldosol) shows as the current type
+      name: text(source.name), productType: Validation.normalizeProductType(text(source.productType)),   // an old spelling (Daldosol, Daltosol) shows as the current type
       manufacturer: text(source.manufacturer), tileSize: text(source.tileSize), sku: text(source.sku),
       category: text(source.category), description: text(source.description), stock: text(source.stock),
       stockUnit: text(source.stockUnit), coveragePerBox: text(source.coveragePerBox), purchasePrice: text(source.purchasePrice),
