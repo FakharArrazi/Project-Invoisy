@@ -647,3 +647,43 @@ input:disabled, select:disabled, textarea:disabled { background: #f1f3f6; color:
   .purchase-print .inv-sub { color: #555; font-size: 9pt; }
   .purchase-print .prewrap { white-space: pre-wrap; }
 }
+
+/* ==========================================================================
+   Partial delivery: goods paid for now, collected later
+   ========================================================================== */
+
+.partial-toggle { margin-top: 4px; }
+.deliver-cell { display: flex; gap: 6px; justify-content: flex-end; align-items: center; margin-top: 6px; }
+.collect-later { text-align: right; color: #8a5a00; margin-top: 2px; }
+
+.delivery-box .collect-list { margin: 10px 0; }
+.collect-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.collect-row.done { opacity: 0.7; }
+.collect-input { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.collect-input input { width: 84px; text-align: right; }
+.delivery-box label { display: block; margin: 8px 0 4px; font-size: 13px; }
+.status-line { margin-top: 4px; }
+
+/* On the printed invoice: what is still to collect under a line, and the delivery status next to the payment status. */
+.inv-open { color: #8a5a00; font-weight: 600; white-space: normal; max-width: 120px; margin-left: auto; }
+.inv-delivery-status { margin-top: 8px; }
+.inv-status .dlv-complete { color: #1b6e3c; }
+.inv-status .dlv-partial { color: #8a5a00; }
+.inv-status .dlv-pending { color: #b3261e; }
+
+/* The collection document uses the invoice look and stays hidden on screen. */
+.collection-print { display: none; }
+.collect-title { font-size: 15pt; text-align: right; }
+.collect-banner { margin: 10px 0 14px; padding: 8px 10px; border: 2px solid #000; font-weight: 700; text-align: center; }
+.collect-qty { font-weight: 700; }
+.collect-sign { display: flex; justify-content: space-between; gap: 30px; margin-top: 36px; }
+.collect-sign > div { flex: 1; padding-top: 28px; border-top: 1px solid #000; }
+
+@media print {
+  body[data-printing="collection"] .app, body[data-printing="collection"] .preview-panel { display: none !important; }   /* .app would otherwise keep a page-high minimum height on paper-width screens */
+  body[data-printing="collection"] .collection-print { display: block !important; border: 0; padding: 15mm; font-size: 11pt; }
+  body[data-printing="collection"] .collection-print .inv-table th, body[data-printing="collection"] .collection-print .inv-table td { font-size: 10.5pt; }
+  .collection-print .inv-table tr, .collection-print .inv-payments, .collection-print .collect-sign { page-break-inside: avoid; }
+  .collection-print .inv-sub { color: #555; font-size: 9pt; }
+  html[data-paper="a5"] .collection-print { padding: 10mm; font-size: 10pt; }
+}

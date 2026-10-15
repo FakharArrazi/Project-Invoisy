@@ -145,11 +145,16 @@ function invoiceItemLabel(item) {
   return [name, size ? `(${size})` : "", item.manufacturer].filter(Boolean).join(" ");
 }
 
+// "10 Boxes", "2.5 m²": a quantity with the unit it is counted in.
+function qtyText(qty, unit) {
+  return numberFormat.format(qty) + (unit ? ` ${unitLabel(unit, qty)}` : "");
+}
+
 /* ---------- State ---------- */
 
 function newSale() {
   return {
-    items: [],                              // { lineId, productId, qty, sellingUnit, unitPrice }
+    items: [],                              // { lineId, productId, qty, sellingUnit, unitPrice }; a line sold beyond the stock also has partial / deliverNow (see deliverNowQty)
     customer: { name: "", phone: "", address: "" },
     discountType: "amount", discountValue: "",
     taxType: "amount", taxValue: "",
@@ -943,6 +948,107 @@ function findSaleItem(lineId) {
   return state.sale.items.find((i) => i.lineId === lineId);
 }
 
+/* ---------- Delivering only part of a line now ----------
+   Normally a sale line leaves with the customer at once, so all of it has to be in stock. When the goods are paid but the
+   warehouse has only part of them, the line can be marked "deliver only part now" (partial): the customer takes
+   deliverNow, and the rest stays on the invoice to be collected later. Only the quantity delivered now is checked
+   against the stock and taken out of it; the quantity, the price and the total of the line stay those of the sale. */
+
+// How much of a line leaves with the customer now, in the unit it is sold in. A line that is not marked hands over everything.
+function deliverNowQty(item) {
+  return item.partial ? Calc.cleanNumber(Math.max(0, toNumber(item.deliverNow))) : item.qty;
+}
+
+// The most of this line that `left` (stock in the product's stock unit) can deliver, in the unit sold; never more than the line.
+// Whole units round down, other units to 3 decimals. 0 when the stock can not deliver anything.
+function deliverableFrom(product, item, left) {
+  if (!(left > 0)) return 0;
+  const c = Calc.isUnit(product.stockUnit) ? Calc.convertQuantity(left, product.stockUnit, item.sellingUnit, product) : { value: left };
+  if (c.error) return 0;
+  const fit = Calc.isWholeUnit(item.sellingUnit) ? Math.floor(c.value + 1e-9) : Math.floor(c.value * 1000 + 1e-9) / 1000;
+  return Math.max(0, Math.min(fit, item.qty));
+}
+
+// What the stock can deliver now for this line, after the other lines of the same product.
+function maxDeliverableNow(item, sale = state.sale, data = state) {
+  const p = findProduct(item.productId, data);
+  if (!p) return 0;
+  return deliverableFrom(p, item, Calc.cleanNumber(p.stock - stockUsedInSale(p.id, [item.lineId], sale, data)));
+}
+
+// After the quantity, the unit or the stock changed: a line the person never typed a delivery for follows the stock
+// (delivers as much as is available); one they typed keeps their number, lowered if it no longer fits.
+function refitDeliverNow(item) {
+  const max = maxDeliverableNow(item);
+  const typed = Calc.cleanNumber(Math.min(Math.max(0, toNumber(item.deliverNow)), item.qty, max));
+  item.deliverNow = item.deliverTouched ? typed : max;
+}
+
+// A line that will leave something to collect later.
+const leavesRemainder = (item) => Boolean(item.partial) && deliverNowQty(item) < item.qty - Validation.DELIVERY_EPSILON;
+
+// Ticks or unticks "deliver only part now". Unticking a line that is more than the stock brings its quantity back to the stock.
+function setSalePartial(lineId, on) {
+  const item = findSaleItem(lineId);
+  const product = item && findProduct(item.productId);
+  if (!item || !product) return { error: t("sale.productUnavailable") };
+  if (on) {
+    item.partial = true;
+    item.deliverTouched = false;
+    refitDeliverNow(item);
+    return {};
+  }
+  item.partial = false;
+  delete item.deliverNow;
+  delete item.deliverTouched;
+  const others = stockUsedInSale(item.productId, [lineId]);
+  const taken = Calc.stockDeduction(product, item.qty, item.sellingUnit);
+  if (!taken.error && !Calc.hasEnoughStock(product.stock, others + taken.value)) {
+    item.qty = fitQuantity(product, item.sellingUnit, Calc.cleanNumber(product.stock - others));
+    return { error: stockMessage(product, others), clamped: true };
+  }
+  return {};
+}
+
+// The quantity typed in "Deliver now". Returns { error } when it is refused, { error, clamped } when it was brought back to a valid number.
+function updateSaleDeliverNow(lineId, rawQty) {
+  const item = findSaleItem(lineId);
+  const product = item && findProduct(item.productId);
+  if (!item || !product) return { error: t("sale.productUnavailable") };
+  if (!item.partial) return { error: t("sale.notPartial") };
+  const raw = String(rawQty).trim();
+  const qty = Number(raw);
+  if (raw === "" || !Number.isFinite(qty) || qty < 0) return { error: t("sale.deliverInvalid") };
+  if (Calc.isWholeUnit(item.sellingUnit) && !Number.isInteger(qty)) return { error: t("sale.deliverWhole") };
+  item.deliverTouched = true;
+  if (qty > item.qty + Validation.DELIVERY_EPSILON) {
+    item.deliverNow = maxDeliverableNow(item);   // the quantity sold, or less when the stock can not deliver that much
+    return { error: t("sale.deliverTooMany", { n: qtyText(item.qty, item.sellingUnit) }), clamped: true };
+  }
+  const max = maxDeliverableNow(item);
+  if (qty > max + Validation.DELIVERY_EPSILON) {
+    item.deliverNow = max;
+    return { error: t("sale.deliverNoStock", { available: stockText(product) }), clamped: true };
+  }
+  item.deliverNow = Calc.cleanNumber(qty);
+  return {};
+}
+
+// Problems with the "deliver now" quantity of the partial lines of a sale.
+function deliveryErrors(sale = state.sale, data = state) {
+  const errors = [];
+  for (const item of sale.items) {
+    if (!item.partial) continue;
+    const p = findProduct(item.productId, data);
+    const now = Number(item.deliverNow);
+    const whole = Calc.isWholeUnit(item.sellingUnit);
+    if (!Number.isFinite(now) || now < 0 || now > item.qty + Validation.DELIVERY_EPSILON || (whole && !Number.isInteger(now))) {
+      errors.push(t("sale.deliverLine", { name: p ? p.name : t("sell.deletedProduct") }));
+    }
+  }
+  return errors;
+}
+
 // Stock a product's lines take, in the product's own stock unit (2 boxes = 8 pieces of a piece-counted product).
 // Lines in `exceptLineIds` are left out, so one line can be checked against all the others.
 function stockUsedInSale(productId, exceptLineIds = [], sale = state.sale, data = state) {
@@ -951,7 +1057,7 @@ function stockUsedInSale(productId, exceptLineIds = [], sale = state.sale, data 
   let used = 0;
   for (const i of sale.items) {
     if (i.productId !== productId || exceptLineIds.includes(i.lineId)) continue;
-    const d = Calc.stockDeduction(product, i.qty, i.sellingUnit);
+    const d = Calc.stockDeduction(product, deliverNowQty(i), i.sellingUnit);
     if (!d.error) used += d.value;
   }
   return Calc.cleanNumber(used);
@@ -965,7 +1071,7 @@ function stockNeeds(items, data = state) {
   for (const item of items) {
     const p = findProduct(item.productId, data);
     if (!p) continue;
-    const d = Calc.stockDeduction(p, item.qty, item.sellingUnit);
+    const d = Calc.stockDeduction(p, deliverNowQty(item), item.sellingUnit);
     if (d.error) errors.push(d.error);
     else totals.set(p.id, Calc.cleanNumber((totals.get(p.id) || 0) + d.value));
   }
@@ -1014,10 +1120,17 @@ function addToSale(productId, rawQty, rawUnit) {
   // Stock is checked in the product's own stock unit, so 1 box is not the same as 1 piece.
   const taken = Calc.stockDeduction(product, qty, sellingUnit);
   if (taken.error) return { error: taken.error };
-  const inSale = stockUsedInSale(productId);
-  if (!Calc.hasEnoughStock(product.stock, inSale + taken.value)) return { error: stockMessage(product, inSale) };
 
   const item = state.sale.items.find((i) => i.productId === productId && i.sellingUnit === sellingUnit);
+  // A line marked "deliver only part now" may grow beyond the stock: only what is delivered now has to be in stock.
+  if (item && item.partial) {
+    item.qty = Calc.cleanNumber(item.qty + qty);
+    refitDeliverNow(item);
+    return { ok: true };
+  }
+  const inSale = stockUsedInSale(productId);
+  if (!Calc.hasEnoughStock(product.stock, inSale + taken.value)) return { error: stockMessage(product, inSale), lowStock: true };
+
   if (item) item.qty = Calc.cleanNumber(item.qty + qty);
   else state.sale.items.push({ lineId: uid(), productId, qty, sellingUnit, unitPrice: priced.value, listPrice: priced.value, priceOverridden: false, catalog: catalogOf(priced) });
   // `converted` tells the caller an area was turned into boxes, so the person is told what was added to the sale.
@@ -1042,6 +1155,7 @@ function updateSaleUnit(lineId, rawUnit) {
   const product = findProduct(item.productId);
   const twin = state.sale.items.find((i) => i !== item && i.productId === item.productId && i.sellingUnit === rawUnit);
   const newQty = twin ? Calc.cleanNumber(twin.qty + item.qty) : item.qty;
+  const partial = Boolean(item.partial || (twin && twin.partial));   // such a line is not limited by the stock, only what it delivers now is
   let priced = { value: item.unitPrice };
   if (product) {
     if (rawUnit === "m2" && rawUnit !== item.sellingUnit && Calc.suppliesInBoxes(product)) return { error: lineUnitProblem(product, rawUnit), revert: true };
@@ -1052,13 +1166,22 @@ function updateSaleUnit(lineId, rawUnit) {
     const taken = Calc.stockDeduction(product, newQty, rawUnit);
     if (taken.error) return { error: taken.error, revert: true };
     const others = stockUsedInSale(item.productId, [item.lineId, twin && twin.lineId]);
-    if (!Calc.hasEnoughStock(product.stock, others + taken.value)) return { error: stockMessage(product, others), revert: true };
+    if (!partial && !Calc.hasEnoughStock(product.stock, others + taken.value)) return { error: stockMessage(product, others), revert: true };
   }
   item.sellingUnit = rawUnit;
   if (twin) {
     twin.qty = newQty;
     state.sale.items = state.sale.items.filter((i) => i !== item);
+    if (partial) {
+      twin.partial = true;
+      twin.deliverTouched = false;
+      refitDeliverNow(twin);
+    }
     return { merged: true };
+  }
+  if (partial) {
+    item.deliverTouched = false;   // the number typed was for the old unit
+    refitDeliverNow(item);
   }
   // A price typed by hand on this line was for the old unit, so it is replaced by the new unit's price
   // (the saved price for that unit, or the conversion of it). The caller tells the person.
@@ -1084,6 +1207,11 @@ function updateSaleQuantity(lineId, rawQty) {
   const qty = checked.value;
   const taken = Calc.stockDeduction(product, qty, item.sellingUnit);
   if (taken.error) return { error: taken.error };
+  if (item.partial) {
+    item.qty = qty;
+    refitDeliverNow(item);
+    return {};
+  }
   const others = stockUsedInSale(item.productId, [lineId]);
   if (!Calc.hasEnoughStock(product.stock, others + taken.value)) {
     item.qty = fitQuantity(product, item.sellingUnit, Calc.cleanNumber(product.stock - others));
@@ -1206,6 +1334,7 @@ function validateSale() {
     }
     if (!Number.isFinite(item.unitPrice) || item.unitPrice < 0) errors.push(t("sale.linePrice", { name: p.name }));
   }
+  errors.push(...deliveryErrors());
   const needs = stockNeeds(state.sale.items);
   errors.push(...needs.errors);
   for (const [productId, total] of needs.totals) {
@@ -1242,6 +1371,18 @@ function syncSaleWithProducts() {
     const left = Calc.cleanNumber(p.stock - (used.get(p.id) || 0));
     let need = Calc.stockDeduction(p, item.qty, item.sellingUnit);
     if (need.error) { notes.push(t("sale.removedError", { error: need.error })); return false; }
+    if (item.partial) {
+      // Only what is delivered now has to be in stock: it follows the stock, the quantity sold stays as it is.
+      const cap = deliverableFrom(p, item, left);
+      const wanted = Calc.cleanNumber(Math.max(0, toNumber(item.deliverNow)));
+      const next = item.deliverTouched ? Math.min(wanted, item.qty, cap) : cap;
+      if (next < wanted - Validation.DELIVERY_EPSILON) notes.push(t("sale.deliverReduced", { name: p.name, stock: stockText(p) }));
+      item.deliverNow = Calc.cleanNumber(next);
+      const now = Calc.stockDeduction(p, item.deliverNow, item.sellingUnit);
+      if (now.error) { notes.push(t("sale.removedError", { error: now.error })); return false; }
+      used.set(p.id, Calc.cleanNumber((used.get(p.id) || 0) + now.value));
+      return true;
+    }
     if (!Calc.hasEnoughStock(left, need.value)) {
       const fit = fitQuantity(p, item.sellingUnit, left);
       const fitNeed = Calc.stockDeduction(p, fit, item.sellingUnit);
@@ -1283,9 +1424,14 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
   const totals = calculateTotals(sale);
   const carried = draftCarriedLines(sale, data);
   const paid = salePaid(sale, round2(totals.total + round2(carried.reduce((sum, l) => sum + l.amount, 0))));
+  // When some line leaves something to collect later, the invoice keeps a delivery log (see Validation.deliveryDetail).
+  const tracked = sale.items.some(leavesRemainder);
+  const handedOver = [];
   const items = sale.items.map((item) => {
     const p = findProduct(item.productId, data);
-    const taken = p ? Calc.stockDeduction(p, item.qty, item.sellingUnit) : { error: true };
+    const handed = deliverNowQty(item);
+    const taken = p ? Calc.stockDeduction(p, handed, item.sellingUnit) : { error: true };
+    if (tracked && handed > 0) handedOver.push({ lineId: item.lineId, qty: handed, stockDeducted: taken.error ? 0 : taken.value });
     return {
       productId: item.productId,
       name: p ? p.name : DELETED_PRODUCT,
@@ -1310,7 +1456,9 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
       calculatedUnitPrice: item.listPrice != null ? item.listPrice : item.unitPrice,
       priceOverridden: Boolean(item.priceOverridden),
       stockUnit: p ? p.stockUnit : null,
+      // What this line took out of stock with the sale (for a partial line: only what was delivered now).
       stockDeducted: taken.error ? null : taken.value,
+      ...(tracked ? { lineId: item.lineId } : {}),
     };
   });
   const s = data.settings;
@@ -1326,6 +1474,7 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
     // Debt carried forward from older invoices: its own lines, never products. subtotal, discount, tax and total
     // above stay the figures of this purchase; what the customer owes is total + the carried lines.
     ...(carried.length ? { carriedForward: carried } : {}),
+    ...(tracked ? { deliveries: handedOver.length ? [{ id: uid(), type: "sale", date: dateIso, lines: handedOver }] : [] } : {}),
     subtotal: totals.subtotal,
     discount: totals.discount,
     tax: totals.tax,
@@ -1351,6 +1500,8 @@ function draftInvoice() {
 function applySale(d, sale) {
   d.debtTransfers = d.debtTransfers || [];
   if (sale.items.some((i) => !findProduct(i.productId, d))) return { error: t("sale.productMissing") };
+  const badDelivery = deliveryErrors(sale, d);
+  if (badDelivery.length) return { error: badDelivery[0] };
   const needs = stockNeeds(sale.items, d);
   if (needs.errors.length) return { error: needs.errors[0] };
   for (const [productId, total] of needs.totals) {
@@ -1412,6 +1563,11 @@ function completeSale() {
 async function deleteInvoice(id) {
   const inv = state.invoices.find((i) => i.id === id);
   if (!inv) return;
+  // An invoice sold in several deliveries keeps its delivery log as an audit trail (the database refuses it too).
+  if (Validation.isTracked(inv)) {
+    notify(t("invoice.cannotDeleteDelivered", { number: inv.invoiceNumber }), "error");
+    return;
+  }
   // An invoice whose unpaid balance was carried to a newer invoice stays: deleting it would lose that debt.
   if (Debt.carriedTo(inv, state.debtTransfers).length) {
     notify(t("invoice.cannotDeleteCarried", { number: inv.invoiceNumber, numbers: carriedToNumbers(inv) }), "error");
@@ -1454,13 +1610,83 @@ async function addPayment(id, rawAmount) {
   return saved;
 }
 
+/* ---------- Goods collected later (partial delivery) ----------
+   Payment and delivery are separate. Recording a collection never touches the invoice's items, prices, total or
+   payments: it only appends one entry to the delivery log and takes the delivered goods out of stock, in one transaction. */
+
+// Records one pick-up on the data draft `d` (entries: [{ lineId, qty }], qty as typed; blank = nothing for that line).
+// Everything is checked again against the latest data: nothing is delivered beyond what is left to collect, and stock
+// can never go below zero. All or nothing: { delivery, invoice } or { error }.
+function applyCollection(d, invoiceId, entries, note) {
+  const inv = d.invoices.find((i) => i.id === invoiceId);
+  if (!inv) return { error: t("collect.notFound") };
+  const detail = Validation.deliveryDetail(inv);
+  if (!detail.tracked || !detail.toCollect.length) return { error: t("collect.nothingLeft") };
+  const lines = [];
+  const needs = new Map();
+  const seen = new Set();
+  for (const entry of entries || []) {
+    const raw = String(entry && entry.qty != null ? entry.qty : "").trim();
+    if (raw === "") continue;
+    const line = detail.lines.find((l) => l.lineId && l.lineId === entry.lineId);
+    if (!line || seen.has(line.lineId)) return { error: t("collect.badLine") };
+    seen.add(line.lineId);
+    const name = invoiceItemLabel(line.item);
+    const unit = line.item.sellingUnit;
+    const checked = Calc.validateQuantity(raw, unit);
+    if (checked.error) return { error: t("collect.lineError", { name, error: checked.error }) };
+    const qty = Calc.cleanNumber(checked.value);
+    if (qty > line.remaining + Validation.DELIVERY_EPSILON) return { error: t("collect.tooMuch", { name, remaining: qtyText(line.remaining, unit) }) };
+    const p = findProduct(line.item.productId, d);
+    if (!p) return { error: t("collect.productGone", { name }) };
+    const taken = Calc.stockDeduction(p, qty, unit);
+    if (taken.error) return { error: t("collect.lineError", { name, error: taken.error }) };
+    needs.set(p.id, Calc.cleanNumber((needs.get(p.id) || 0) + taken.value));
+    lines.push({ lineId: line.lineId, qty, stockDeducted: taken.value });
+  }
+  if (!lines.length) return { error: t("collect.enterQty") };
+  for (const [productId, total] of needs) {
+    const p = findProduct(productId, d);
+    if (!Calc.hasEnoughStock(p.stock, total)) return { error: t("collect.noStock", { name: p.name, needed: stockText(p, total), available: stockText(p) }) };
+  }
+  for (const [productId, total] of needs) {
+    const p = findProduct(productId, d);
+    p.stock = Math.max(0, Calc.cleanNumber(p.stock - total));
+  }
+  const text = String(note || "").trim().slice(0, Validation.DELIVERY_NOTE_MAX);
+  const delivery = { id: uid(), type: "collection", date: new Date().toISOString(), lines, ...(text ? { note: text } : {}) };
+  inv.deliveries.push(delivery);
+  return { delivery, invoice: inv };
+}
+
+async function recordCollection(id, entries, note) {
+  return commit((d) => applyCollection(d, id, entries, note));
+}
+
 function viewInvoice(id) {
   const inv = state.invoices.find((i) => i.id === id);
   if (!inv) return;
   state.previewInvoice = inv;
   $("payAmount").value = "";
   showError("payError", "");
+  $("collectNote").value = "";
+  showError("collectError", "");
   showView("sell", { keepPreview: true });
+}
+
+// Prints the collection document of an invoice: only what is still to collect, with no prices and no amounts.
+function printCollection(invoiceId) {
+  const inv = state.invoices.find((i) => i.id === invoiceId);
+  if (!inv || !Validation.deliveryDetail(inv).toCollect.length) return;
+  $("collectionPrint").innerHTML = collectionHtml(inv);
+  const original = document.title;
+  document.title = Validation.collectionNumber(inv);
+  document.body.dataset.printing = "collection";
+  window.addEventListener("afterprint", () => {
+    document.title = original;
+    delete document.body.dataset.printing;
+  }, { once: true });
+  window.print();
 }
 
 function printInvoice(invoice) {
@@ -1662,6 +1888,11 @@ function invoiceLinePrice(item) {
   return { price: base, unit: item.priceUnit, qtyInPriceUnit: converted.value };
 }
 
+// "5 Boxes to collect later" under a partial line.
+function collectLaterText(item) {
+  return t("sell.collectLater", { n: qtyText(Calc.cleanNumber(Math.max(0, item.qty - deliverNowQty(item))), item.sellingUnit) });
+}
+
 function renderSale() {
   const body = $("saleBody");
   if (state.sale.items.length === 0) {
@@ -1671,10 +1902,16 @@ function renderSale() {
       const p = findProduct(item.productId);
       const name = p ? productLabel(p) : t("sell.deletedProduct");
       const whole = Calc.isWholeUnit(item.sellingUnit);
+      // "Deliver only part now": the customer takes some of the line now and collects the rest later (see deliverNowQty).
+      const partialToggle = `<label class="check partial-toggle"><input type="checkbox" data-field="partial"${item.partial ? " checked" : ""} aria-label="${esc(t("sell.partialAria", { name }))}"><span>${esc(t("sell.partialLabel"))}</span></label>`;
+      const deliverCell = item.partial
+        ? `<div class="deliver-cell"><label class="muted small">${esc(t("sell.deliverNow"))}</label><input class="qty-input" type="number" min="0" step="${whole ? 1 : "any"}" value="${item.deliverNow}" data-field="deliver" aria-label="${esc(t("sell.deliverAria", { name }))}"><span class="muted small">${esc(unitLabel(item.sellingUnit, item.deliverNow))}</span></div>` +
+          `<div class="small collect-later" data-collect-later>${esc(collectLaterText(item))}</div>`
+        : "";
       return `<tr data-id="${esc(item.lineId)}">` +
-        `<td><div>${esc(name)}</div><div class="muted small">${esc(t("sell.available", { n: p ? stockLabel(p) : 0 }))}</div><div class="error small" data-row-error></div></td>` +
+        `<td><div>${esc(name)}</div><div class="muted small">${esc(t("sell.available", { n: p ? stockLabel(p) : 0 }))}</div>${partialToggle}<div class="error small" data-row-error></div></td>` +
         `<td class="num"><div class="qty-cell"><input class="qty-input" type="number" min="${whole ? 1 : 0}" step="${whole ? 1 : "any"}" value="${item.qty}" data-field="qty" aria-label="${esc(t("sell.qtyAria", { name }))}">` +
-        `<select class="unit-select" data-field="unit" aria-label="${esc(t("sell.unitAria", { name }))}">${unitOptions(item.sellingUnit, p)}</select></div></td>` +
+        `<select class="unit-select" data-field="unit" aria-label="${esc(t("sell.unitAria", { name }))}">${unitOptions(item.sellingUnit, p)}</select></div>${deliverCell}</td>` +
         `<td class="num"><div class="price-cell"><input class="price-input" type="number" min="0" step="any" value="${item.unitPrice}" data-field="price" aria-label="${esc(t("sell.priceAria", { name, unit: linePriceUnit(item) }))}">` +
         `<span class="price-unit" data-price-unit>${esc(linePriceUnit(item))}</span></div>` +
         `<div class="muted small price-note" data-price-note>${esc(priceNote(item))}</div></td>` +
@@ -1715,6 +1952,10 @@ function refreshLive() {
     row.querySelector("[data-line-total]").textContent = money(Calc.calculateLineTotal(item.qty, item.unitPrice));
     row.querySelector("[data-price-note]").textContent = priceNote(item);
     row.querySelector("[data-price-unit]").textContent = linePriceUnit(item);
+    const later = row.querySelector("[data-collect-later]");
+    if (later) later.textContent = collectLaterText(item);
+    const deliver = row.querySelector("input[data-field='deliver']");
+    if (deliver && document.activeElement !== deliver) deliver.value = item.deliverNow;   // follows the quantity and the stock
   });
   renderTotals();
   renderInvoice();
@@ -1732,11 +1973,18 @@ function invoiceHtml(inv) {
   const line = (text) => (text ? `<div>${esc(text)}</div>` : "");
   const logo = state.settings.logo ? `<img class="inv-logo" src="${esc(state.settings.logo)}" alt="${esc(t("logo.alt"))}">` : "";
 
+  // Goods sold in several deliveries: each line shows what was handed over and what is still to collect. The quantity,
+  // price and total of the line are always those of the sale.
+  const delivery = Validation.deliveryDetail(inv);
   const rows = inv.items.length
-    ? inv.items.map((i) => {
+    ? inv.items.map((i, index) => {
         const shown = invoiceLinePrice(i);
         const inPriceUnit = shown.qtyInPriceUnit == null ? "" : `<div class="inv-sub">${num(shown.qtyInPriceUnit)} ${esc(unitLabel(shown.unit, shown.qtyInPriceUnit))}</div>`;
-        return `<tr><td>${esc(invoiceItemLabel(i))}</td><td class="num">${num(i.qty)}${i.sellingUnit ? ` ${esc(unitLabel(i.sellingUnit, i.qty))}` : ""}${inPriceUnit}</td><td class="num">${num(shown.price)}${shown.unit ? ` <span class="inv-unit">/ ${esc(unitLabel(shown.unit))}</span>` : ""}</td><td class="num">${num(i.total != null ? i.total : Calc.calculateLineTotal(i.qty, i.unitPrice))}</td></tr>`;
+        const left = delivery.tracked ? delivery.lines[index] : null;
+        const toCollect = left && left.remaining > 0
+          ? `<div class="inv-sub inv-open">${esc(t("inv.deliveredOf", { delivered: qtyText(left.delivered, i.sellingUnit), remaining: qtyText(left.remaining, i.sellingUnit) }))}</div>`
+          : "";
+        return `<tr><td>${esc(invoiceItemLabel(i))}</td><td class="num">${num(i.qty)}${i.sellingUnit ? ` ${esc(unitLabel(i.sellingUnit, i.qty))}` : ""}${inPriceUnit}${toCollect}</td><td class="num">${num(shown.price)}${shown.unit ? ` <span class="inv-unit">/ ${esc(unitLabel(shown.unit))}</span>` : ""}</td><td class="num">${num(i.total != null ? i.total : Calc.calculateLineTotal(i.qty, i.unitPrice))}</td></tr>`;
       }).join("")
     : `<tr><td colspan="4" class="none">${esc(t("inv.noItems"))}</td></tr>`;
 
@@ -1769,6 +2017,22 @@ function invoiceHtml(inv) {
         : `<div class="inv-pay"><span class="when">${esc(t("inv.noPayments"))}</span></div>`
     }</section>`
     : "";
+  // Delivery is shown apart from payment: a paid invoice can still have goods waiting.
+  const deliveryBlock = hasItems && delivery.tracked
+    ? `<div class="inv-status inv-delivery-status"><span class="dlv-${delivery.status}">${esc(t("inv.deliveryStatus"))} ${esc(t("inv.delivery." + delivery.status))}</span></div>
+    <section class="inv-payments inv-deliveries"><h3>${esc(t("inv.deliveryHistory"))}</h3>${
+      inv.deliveries.length
+        ? inv.deliveries.map((d, n) => {
+            const what = d.type === "sale" ? t("inv.deliverySale") : t("inv.deliveryCollection", { number: Validation.receiptNumber(inv, inv.deliveries.slice(0, n + 1).filter((x) => x.type === "collection").length) });
+            const things = d.lines.map((l) => {
+              const item = inv.items.find((i) => i.lineId === l.lineId);
+              return t("inv.deliveryLine", { quantity: qtyText(l.qty, item && item.sellingUnit), name: item ? invoiceItemLabel(item) : "" });
+            }).join(", ");
+            return `<div class="inv-pay"><span class="when">${esc(formatDateTime(d.date))}</span><span>${esc(what)}: ${esc(things)}${d.note ? ` (${esc(d.note)})` : ""}</span></div>`;
+          }).join("")
+        : `<div class="inv-pay"><span class="when">${esc(t("inv.noDeliveries"))}</span></div>`
+    }</section>`
+    : "";
 
   return `<header class="inv-head">
       <div>${logo}<div class="inv-biz-name">${esc(biz.name)}</div>${line(biz.address)}${line(biz.phone)}${line(biz.email)}</div>
@@ -1791,7 +2055,53 @@ function invoiceHtml(inv) {
       ${paidRows}
     </table>
     ${history}
+    ${deliveryBlock}
     <p class="inv-thanks">${esc(t("inv.thanks"))}</p>`;
+}
+
+// The collection document: what is still to collect on an invoice, and nothing else. It is NOT an invoice: it has no
+// prices and no amounts, it says which invoice the goods were already sold on, and it is numbered after that invoice
+// (INV-000030 -> COL-000030). Payment is recorded on the invoice only, so these goods can not be charged a second time.
+function collectionHtml(inv) {
+  const biz = inv.business || {
+    name: state.settings.businessName, address: state.settings.address,
+    phone: state.settings.phone, email: state.settings.email,
+  };
+  const cust = inv.customer || { name: WALK_IN, phone: "", address: "" };
+  const line = (text) => (text ? `<div>${esc(text)}</div>` : "");
+  const logo = state.settings.logo ? `<img class="inv-logo" src="${esc(state.settings.logo)}" alt="${esc(t("logo.alt"))}">` : "";
+  const detail = Validation.deliveryDetail(inv);
+  const rows = detail.toCollect.length
+    ? detail.toCollect.map((l) => `<tr><td>${esc(invoiceItemLabel(l.item))}<div class="inv-sub">${esc(t("collect.docSold", { sold: qtyText(l.qty, l.item.sellingUnit), delivered: qtyText(l.delivered, l.item.sellingUnit) }))}</div></td><td class="num collect-qty">${esc(qtyText(l.remaining, l.item.sellingUnit))}</td></tr>`).join("")
+    : `<tr><td colspan="2" class="none">${esc(t("collect.docNothing"))}</td></tr>`;
+  const done = (inv.deliveries || []).map((d, n) => {
+    const what = d.type === "sale" ? t("inv.deliverySale") : Validation.receiptNumber(inv, inv.deliveries.slice(0, n + 1).filter((x) => x.type === "collection").length);
+    const things = d.lines.map((l) => {
+      const item = inv.items.find((i) => i.lineId === l.lineId);
+      return t("inv.deliveryLine", { quantity: qtyText(l.qty, item && item.sellingUnit), name: item ? invoiceItemLabel(item) : "" });
+    }).join(", ");
+    return `<div class="inv-pay"><span class="when">${esc(formatDateTime(d.date))}</span><span>${esc(what)}: ${esc(things)}</span></div>`;
+  }).join("");
+  return `<header class="inv-head">
+      <div>${logo}<div class="inv-biz-name">${esc(biz.name)}</div>${line(biz.address)}${line(biz.phone)}${line(biz.email)}</div>
+      <div class="inv-title collect-title">${esc(t("collect.docTitle"))}</div>
+    </header>
+    <div class="collect-banner">${esc(t("collect.docNotice", { invoice: inv.invoiceNumber }))}</div>
+    <div class="inv-meta">
+      <div><div class="label">${esc(t("inv.customer"))}</div><div class="inv-customer">${esc(customerLabel(cust.name))}${cust.phone ? "\n" + esc(cust.phone) : ""}${cust.address ? "\n" + esc(cust.address) : ""}</div></div>
+      <div class="right">
+        <div><span class="label">${esc(t("collect.docNumber"))}</span> ${esc(Validation.collectionNumber(inv))}</div>
+        <div><span class="label">${esc(t("collect.docInvoice"))}</span> ${esc(inv.invoiceNumber)} (${esc(formatDate(inv.date))})</div>
+        <div><span class="label">${esc(t("collect.docIssued"))}</span> ${esc(formatDateTime(new Date().toISOString()))}</div>
+      </div>
+    </div>
+    <table class="inv-table">
+      <thead><tr><th>${esc(t("inv.product"))}</th><th class="num">${esc(t("collect.docQty"))}</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${done ? `<section class="inv-payments"><h3>${esc(t("inv.deliveryHistory"))}</h3>${done}</section>` : ""}
+    <div class="collect-sign"><div>${esc(t("collect.docReceived"))}</div><div>${esc(t("collect.docDate"))}</div></div>
+    <p class="inv-thanks">${esc(t("collect.docFooter", { invoice: inv.invoiceNumber }))}</p>`;
 }
 
 // Payment box above a saved invoice: totals plus the "Add Payment" control.
@@ -1819,12 +2129,40 @@ function renderPayBox() {
     : t("pay.max", { n: numberFormat.format(info.remaining) });
 }
 
+// Box above a saved invoice that was sold in several deliveries: payment and delivery status side by side (never mixed),
+// what is left to collect per line, and where the warehouse records a collection.
+function renderDeliveryBox() {
+  const inv = state.previewInvoice;
+  const detail = inv ? Validation.deliveryDetail(inv) : null;
+  const box = $("deliveryBox");
+  box.hidden = !(detail && detail.tracked);
+  if (box.hidden) return;
+  const pay = paymentInfo(inv);
+  $("delNumber").textContent = inv.invoiceNumber;
+  $("delPayment").textContent = pay.status + (pay.remaining > 0 ? ` (${t("deliv.stillToPay", { amount: money(pay.remaining, inv.currency) })})` : "");
+  $("delStatus").textContent = t("inv.delivery." + detail.status);
+  $("delBody").innerHTML = detail.lines.map((l) => {
+    const unit = l.item.sellingUnit;
+    const name = invoiceItemLabel(l.item);
+    const whole = Calc.isWholeUnit(unit);
+    const info = `<div class="collect-info"><div>${esc(name)}</div><div class="muted small">${esc(t("deliv.soldLine", { sold: qtyText(l.qty, unit), delivered: qtyText(l.delivered, unit), remaining: qtyText(l.remaining, unit) }))}</div></div>`;
+    if (l.remaining <= 0) return `<div class="collect-row done">${info}<div class="collect-input muted small">${esc(t("deliv.done"))}</div></div>`;
+    return `<div class="collect-row" data-line="${esc(l.lineId)}">${info}<div class="collect-input"><input type="number" min="0" max="${l.remaining}" step="${whole ? 1 : "any"}" data-collect-qty data-line="${esc(l.lineId)}" data-remaining="${l.remaining}" aria-label="${esc(t("deliv.qtyAria", { name }))}"><span class="muted small">${esc(unitLabel(unit, l.remaining))}</span></div></div>`;
+  }).join("");
+  const open = detail.toCollect.length > 0;
+  $("collectNote").disabled = !open;
+  $("collectAll").disabled = !open;
+  $("collectBtn").disabled = !open;
+  $("collectPrint").disabled = !open;
+}
+
 function renderInvoice() {
   const saved = state.previewInvoice;
   $("invoice").innerHTML = invoiceHtml(saved || draftInvoice());
   $("previewStatus").textContent = t(saved ? "preview.saved" : "preview.live");
   $("backToSale").hidden = !saved;
   renderPayBox();
+  renderDeliveryBox();
 }
 
 function renderStock() {
@@ -1907,6 +2245,11 @@ function renderInvoices() {
     const notes = [];
     if (pay.carried > 0) notes.push(t("invoices.inclCarried", { amount: money(pay.carried, inv.currency) }));
     if (pay.transferredOut > 0) notes.push(t("invoices.carriedTo", { amount: money(pay.transferredOut, inv.currency), numbers: carriedToNumbers(inv) }));
+    // Delivery is its own status, shown under the payment status.
+    const delivery = Validation.deliveryDetail(inv);
+    const deliveryBadge = delivery.tracked
+      ? `<div class="status-line"><span class="badge ${{ complete: "dl-received", partial: "dl-partial", pending: "dl-pending" }[delivery.status]}">${esc(t("badge.delivery." + delivery.status))}</span></div>`
+      : "";
     return `<tr data-id="${esc(inv.id)}">` +
       `<td>${esc(inv.invoiceNumber)}</td>` +
       `<td>${esc(formatDate(inv.date))}</td>` +
@@ -1914,10 +2257,11 @@ function renderInvoices() {
       `<td class="num">${esc(money(pay.due, inv.currency))}${notes.length ? `<div class="muted small">${notes.map(esc).join("<br>")}</div>` : ""}</td>` +
       `<td class="num">${esc(money(pay.paid, inv.currency))}</td>` +
       `<td class="num">${esc(money(pay.remaining, inv.currency))}</td>` +
-      `<td><span class="badge ${pay.cls}">${esc(label)}</span></td>` +
+      `<td><span class="badge ${pay.cls}">${esc(label)}</span>${deliveryBadge}</td>` +
       `<td class="num"><div class="row-actions">` +
       `<button type="button" class="btn small" data-action="view">${esc(t("invoices.view"))}</button>` +
       `<button type="button" class="btn small" data-action="pay"${pay.remaining <= 0 ? " disabled" : ""}>${esc(t("invoices.addPayment"))}</button>` +
+      (delivery.toCollect.length ? `<button type="button" class="btn small" data-action="collect">${esc(t("invoices.collect"))}</button>` : "") +
       `<button type="button" class="btn small" data-action="print">${esc(t("invoices.print"))}</button>` +
       `<button type="button" class="btn small danger" data-action="delete">${esc(t("common.delete"))}</button>` +
       `</div></td></tr>`;
@@ -2604,7 +2948,7 @@ function bindEvents() {
     e.preventDefault();
     const result = addToSale(state.selectedId, $("addQty").value.trim(), $("addUnit").value);
     if (result.error) {
-      showError("addError", result.error);
+      showError("addError", result.error + (result.lowStock ? " " + t("sell.partialHint") : ""));
       $("addQty").focus();
       return;
     }
@@ -2634,13 +2978,30 @@ function bindEvents() {
     if (!input) return;
     const row = input.closest("tr");
     const id = row.dataset.id;
-    const result = input.dataset.field === "qty" ? updateSaleQuantity(id, input.value.trim()) : updateSalePrice(id, input.value.trim());
-    if (result.clamped) input.value = findSaleItem(id).qty;
-    row.querySelector("[data-row-error]").textContent = result.error || "";
+    const field = input.dataset.field;
+    if (field === "partial") return;   // the checkbox is handled on "change"
+    const wasPartial = Boolean(findSaleItem(id) && findSaleItem(id).partial);
+    const result = field === "qty" ? updateSaleQuantity(id, input.value.trim())
+      : field === "deliver" ? updateSaleDeliverNow(id, input.value.trim())
+      : updateSalePrice(id, input.value.trim());
+    if (result.clamped) input.value = field === "deliver" ? findSaleItem(id).deliverNow : findSaleItem(id).qty;
+    // A quantity brought back to the stock: tell the person they can sell it all and let the customer collect the rest later.
+    const hint = result.clamped && field === "qty" && !wasPartial ? " " + t("sell.partialHint") : "";
+    row.querySelector("[data-row-error]").textContent = result.error ? result.error + hint : "";
     showError("saleError", "");
     refreshLive();
   });
   saleBody.addEventListener("change", (e) => {
+    const toggle = e.target.closest("input[data-field='partial']");
+    if (toggle) {
+      const result = setSalePartial(toggle.closest("tr").dataset.id, toggle.checked);
+      if (result.error) notify(result.error, "error");
+      showError("saleError", "");
+      state.previewInvoice = null;
+      renderSale();
+      renderInvoice();
+      return;
+    }
     const unitSelect = e.target.closest("select[data-field='unit']");
     if (unitSelect) {
       const rowId = unitSelect.closest("tr").dataset.id;
@@ -2674,7 +3035,7 @@ function bindEvents() {
     const row = input.closest("tr");
     const item = findSaleItem(row.dataset.id);
     if (!item) return;
-    input.value = input.dataset.field === "qty" ? item.qty : item.unitPrice;
+    input.value = input.dataset.field === "qty" ? item.qty : input.dataset.field === "deliver" ? item.deliverNow : item.unitPrice;
     row.querySelector("[data-row-error]").textContent = "";
   });
   saleBody.addEventListener("click", (e) => {
@@ -2846,6 +3207,11 @@ function bindEvents() {
     const id = btn.closest("tr").dataset.id;
     if (btn.dataset.action === "view") viewInvoice(id);
     else if (btn.dataset.action === "pay") { viewInvoice(id); $("payAmount").focus(); }
+    else if (btn.dataset.action === "collect") {
+      viewInvoice(id);
+      const first = document.querySelector("[data-collect-qty]");
+      if (first) first.focus();
+    }
     else if (btn.dataset.action === "print") printInvoice(state.invoices.find((i) => i.id === id));
     else if (btn.dataset.action === "delete") deleteInvoice(id);
   });
@@ -2871,6 +3237,35 @@ function bindEvents() {
     });
   });
   $("payAmount").addEventListener("input", () => showError("payError", ""));
+
+  // Record goods collected later on the invoice shown in the preview (delivery only: the invoice and its payments are untouched)
+  $("collectForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    guard(async () => {
+      if (!state.previewInvoice) return;
+      const entries = [...document.querySelectorAll("[data-collect-qty]")].map((input) => ({ lineId: input.dataset.line, qty: input.value }));
+      const result = await recordCollection(state.previewInvoice.id, entries, $("collectNote").value);
+      if (result.error) {
+        showError("collectError", result.error);
+        return;
+      }
+      showError("collectError", "");
+      $("collectNote").value = "";
+      const receipts = Validation.collectionReceipts(result.invoice);
+      renderStock();
+      renderResults();
+      renderSelected();
+      renderInvoices();
+      renderInvoice();
+      notify(t("collect.recorded", { number: receipts.length ? receipts[receipts.length - 1].number : result.invoice.invoiceNumber }));
+    });
+  });
+  $("collectForm").addEventListener("input", () => showError("collectError", ""));
+  $("collectAll").addEventListener("click", () => {
+    document.querySelectorAll("[data-collect-qty]").forEach((input) => { input.value = input.dataset.remaining; });
+    showError("collectError", "");
+  });
+  $("collectPrint").addEventListener("click", () => { if (state.previewInvoice) printCollection(state.previewInvoice.id); });
 
   // Preview
   $("printBtn").addEventListener("click", () => printInvoice());
@@ -3025,6 +3420,8 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     dismissDebtNotice, showDebtNoticeAgain, addDebtToSale, removeDebtFromSale, onDebtDataChanged, debtContext,
     openDebtDialog, closeDebtDialog, confirmDebtDialog, collectDebtPicks, updateDebtDialogTotals, debtDialogRowsData,
     saleDue, saleCarried, draftCarriedLines, carriedToNumbers,
+    setSalePartial, updateSaleDeliverNow, deliverNowQty, maxDeliverableNow, deliveryErrors,
+    applyCollection, recordCollection, collectionHtml, renderDeliveryBox, qtyText,
     viewInvoice, clearSale, draftInvoice, refreshAfterLoad, renderInvoices, renderInvoice, refreshLive,
     getDebtUi: () => state.debtUi,
   });

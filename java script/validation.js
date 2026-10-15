@@ -31,7 +31,7 @@
   const LEGACY_KEYS = ["products", "invoices", "settings", "invoiceCounter"];
   // Calculated from the payments, the carried-forward lines and the debt transfers, never trusted when read back.
   // amountDue and transferredOut are only written to a backup when they matter (see withDerived).
-  const DERIVED_INVOICE_FIELDS = ["amountPaid", "remaining", "status", "amountDue", "transferredOut"];
+  const DERIVED_INVOICE_FIELDS = ["amountPaid", "remaining", "status", "amountDue", "transferredOut", "deliveryStatus"];
   // "transferred": nothing is left to collect on this invoice because its unpaid balance was carried forward to a newer invoice.
   const INVOICE_STATUSES = ["paid", "partial", "unpaid", "transferred"];
   const WALK_IN = "Walk-in Customer";    // the name saved for a sale without a customer (script.js shows it in the current language)
@@ -542,6 +542,104 @@
     return clean;
   }
 
+  /* ---------- Delivery: what has been handed over and what is still to collect ----------
+     Payment and delivery are two separate things. A fully paid invoice can still have goods waiting in the warehouse.
+
+     An invoice is "tracked" when it was sold with part of an item left to collect later. A tracked invoice has
+       - a stable lineId on every item, and
+       - deliveries[]: an append-only log. The first entry (type "sale") is what left the shop with the sale; every
+         later entry (type "collection") is a pick-up recorded by the warehouse. A line of an entry says which item,
+         how much (in the unit the item was sold in) and how much stock that took out (in the product's stock unit).
+     Nothing else is stored. Delivered and remaining quantities are always calculated from this log (like the payment
+     totals are calculated from the payments), so they can not drift apart. The items, prices, total and payments of
+     the invoice are never touched by a delivery.
+     An invoice without deliveries[] (every invoice made before this feature, and every sale delivered in full) is
+     simply fully delivered. */
+
+  const DELIVERY_EPSILON = 1e-6;
+  const DELIVERY_TYPES = ["sale", "collection"];
+  const DELIVERY_NOTE_MAX = 200;
+
+  const isTracked = (inv) => isObj(inv) && Array.isArray(inv.deliveries);
+
+  // Per item of the invoice: how much was sold, handed over so far and is still to collect (same unit as the sale).
+  // status: "complete" (nothing left, or not tracked), "partial" (some handed over, some left), "pending" (nothing handed over yet).
+  function deliveryDetail(inv) {
+    const items = Array.isArray(inv && inv.items) ? inv.items : [];
+    const tracked = isTracked(inv);
+    const handed = new Map();
+    if (tracked) {
+      for (const d of inv.deliveries) {
+        for (const l of isObj(d) && Array.isArray(d.lines) ? d.lines : []) {
+          if (isObj(l)) handed.set(l.lineId, Calc.cleanNumber((handed.get(l.lineId) || 0) + toNumber(l.qty)));
+        }
+      }
+    }
+    const lines = items.map((item, index) => {
+      const qty = toNumber(item && item.qty);
+      const delivered = tracked ? Math.min(qty, handed.get(item && item.lineId) || 0) : qty;
+      return { lineId: item && item.lineId ? item.lineId : null, index, item, qty, delivered, remaining: Math.max(0, Calc.cleanNumber(qty - delivered)) };
+    });
+    const toCollect = lines.filter((l) => l.remaining > DELIVERY_EPSILON);
+    const anyDelivered = lines.some((l) => l.delivered > DELIVERY_EPSILON);
+    const status = !toCollect.length ? "complete" : anyDelivered ? "partial" : "pending";
+    return { tracked, lines, toCollect, status };
+  }
+
+  // The number of the collection document of an invoice: INV-000030 -> COL-000030. One per invoice, so it needs no counter.
+  const collectionNumber = (inv) => "COL-" + String(inv.invoiceNumber).replace(/^INV-/, "");
+  // The number of the n-th recorded pick-up (1, 2, ...) of an invoice: COL-000030-1.
+  const receiptNumber = (inv, n) => collectionNumber(inv) + "-" + n;
+  // Recorded pick-ups, oldest first, each with its receipt number.
+  function collectionReceipts(inv) {
+    if (!isTracked(inv)) return [];
+    return inv.deliveries.filter((d) => d && d.type === "collection").map((d, i) => ({ ...d, number: receiptNumber(inv, i + 1) }));
+  }
+
+  // "" when the delivery log of an invoice is well formed and never hands over more than was sold.
+  function deliveryProblem(inv) {
+    if (inv.deliveries === undefined) return "";
+    if (!Array.isArray(inv.deliveries)) return t("problem.badDeliveries");
+    const byLine = new Map();
+    for (const item of inv.items) {
+      if (!isStr(item.lineId) || !item.lineId || byLine.has(item.lineId)) return t("problem.badDeliveries");
+      byLine.set(item.lineId, item);
+    }
+    const handed = new Map();
+    const seen = new Set();
+    for (let n = 0; n < inv.deliveries.length; n++) {
+      const d = inv.deliveries[n];
+      if (!isObj(d) || !isStr(d.id) || !d.id || seen.has(d.id) || !DELIVERY_TYPES.includes(d.type) || !isDate(d.date) || !Array.isArray(d.lines) || !d.lines.length) return t("problem.badDeliveries");
+      if (d.type === "sale" && n !== 0) return t("problem.badDeliveries");
+      if (d.note !== undefined && (!isStr(d.note) || d.note.length > DELIVERY_NOTE_MAX)) return t("problem.badDeliveries");
+      seen.add(d.id);
+      for (const l of d.lines) {
+        const item = isObj(l) ? byLine.get(l.lineId) : null;
+        if (!item || !isNum(l.qty) || l.qty <= 0 || !isNum(l.stockDeducted) || l.stockDeducted < 0) return t("problem.badDeliveries");
+        if (Calc.isWholeUnit(item.sellingUnit) && !Number.isInteger(l.qty)) return t("problem.badDeliveries");
+        handed.set(l.lineId, Calc.cleanNumber((handed.get(l.lineId) || 0) + l.qty));
+      }
+    }
+    for (const [lineId, qty] of handed) {
+      if (qty > byLine.get(lineId).qty + DELIVERY_EPSILON) return t("problem.overDelivered");
+    }
+    return "";
+  }
+
+  // The delivery log only ever grows: a saved delivery is never edited or removed, an invoice never becomes tracked
+  // after it was saved (its stock was taken out in full when it was sold), and the lines of a tracked invoice never change.
+  function deliveryHistoryProblem(stored, next) {
+    if (!isTracked(stored) && !isTracked(next)) return "";
+    if (!isTracked(stored) || !isTracked(next)) return t("problem.deliveryHistory");
+    const before = stored.deliveries;
+    const after = next.deliveries;
+    if (after.length < before.length || before.some((entry, i) => !sameValue(entry, after[i]))) return t("problem.deliveryHistory");
+    const a = Array.isArray(stored.items) ? stored.items : [];
+    const b = Array.isArray(next.items) ? next.items : [];
+    if (a.length !== b.length || a.some((item, i) => item.lineId !== b[i].lineId || item.qty !== b[i].qty)) return t("problem.deliveryHistory");
+    return "";
+  }
+
   /* ---------- Validation of single records ---------- */
 
   // `sellingPrices` is optional (products saved before it existed do not have it). When it is there it must be a
@@ -602,7 +700,7 @@
         seenTransfers.add(l.transferId);
       }
     }
-    return "";
+    return deliveryProblem(inv);
   }
 
   // Not rejected (older data may not follow today's arithmetic exactly), but always shown to the person
@@ -884,6 +982,7 @@
     const derived = { amountPaid: pay.paid, remaining: pay.remaining, status: pay.cls };
     if (carriedLines(inv).length) derived.amountDue = pay.due;
     if (pay.transferredOut > 0) derived.transferredOut = pay.transferredOut;
+    if (isTracked(inv)) derived.deliveryStatus = deliveryDetail(inv).status;
     return { ...inv, ...derived };
   }
 
@@ -1136,6 +1235,7 @@
     isObj, isStr, isNum, isDate, round2, toNumber, uid, sameValue,
     formatInvoiceNumber, invoiceSequence, highestInvoiceNumber,
     carriedLines, paidTotal, carriedTotal, amountDue, transferredOut, carriedBreakdown,
+    isTracked, deliveryDetail, collectionNumber, receiptNumber, collectionReceipts, deliveryProblem, deliveryHistoryProblem, DELIVERY_EPSILON, DELIVERY_NOTE_MAX,
     normalizeName, phoneDigits, isWalkInName, customerKeys, customerGroups, findGroup, sameCustomer,
     transferProblem, ledgerProblems,
     isTileSize, normalizeTileSize, normalizeProduct, readProductInput, findDuplicateProduct, normalizeInvoice, normalizeSettings, paymentSummary, paymentDetail, stripDerived,

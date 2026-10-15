@@ -436,6 +436,25 @@
       </form>
       <p class="error" id="payError" role="alert"></p>
     </div>
+    <!-- Goods sold in several deliveries: payment and delivery status, what is left to collect, and where a collection is recorded. -->
+    <div class="pay-box delivery-box no-print" id="deliveryBox" hidden>
+      <div class="pay-summary">
+        <div><span data-i18n="deliv.invoice">Invoice</span><strong id="delNumber"></strong></div>
+        <div><span data-i18n="deliv.payment">Payment</span><span id="delPayment"></span></div>
+        <div class="grand"><span data-i18n="deliv.delivery">Delivery</span><span id="delStatus"></span></div>
+      </div>
+      <form id="collectForm" novalidate>
+        <div class="collect-list" id="delBody"></div>
+        <label for="collectNote" data-i18n="deliv.note">Note (optional, for example who collected)</label>
+        <input type="text" id="collectNote" maxlength="200">
+        <div class="actions wrap left">
+          <button type="button" class="btn" id="collectAll" data-i18n="deliv.fillAll">Fill all remaining</button>
+          <button type="submit" class="btn primary" id="collectBtn" data-i18n="deliv.record">Record collection</button>
+          <button type="button" class="btn" id="collectPrint" data-i18n="deliv.print">Print collection document</button>
+        </div>
+      </form>
+      <p class="error" id="collectError" role="alert"></p>
+    </div>
     <article class="invoice" id="invoice"></article>
   </aside>
 
@@ -443,6 +462,8 @@
 
 <!-- What is printed from the Suppliers and Purchases screens (hidden on screen, shown only when printing) -->
 <article class="invoice purchase-print" id="purchasePrint"></article>
+<!-- What is printed for goods still to collect (hidden on screen, shown only when printing) -->
+<article class="invoice collection-print" id="collectionPrint"></article>
 <!-- Confirmation before old debt is added to the sale being prepared. Nothing is saved from here. -->
 <dialog class="debt-dialog no-print" id="debtDialog" aria-labelledby="debtDialogTitle">
   <form id="debtForm" novalidate>
