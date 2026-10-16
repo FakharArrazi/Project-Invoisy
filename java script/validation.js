@@ -386,6 +386,25 @@
     return null;
   }
 
+  // Products that LOOK like the one typed without being the same product (findDuplicateProduct is the rule that refuses an
+  // exact repeat). Two products look alike when their names are the same once case, accents, spaces and punctuation are
+  // ignored, or when one name is inside the other and their tile sizes do not tell them apart. This only WARNS before a
+  // new product is added; nothing is refused or merged here. `exceptId` is a product to leave out.
+  function findSimilarProducts(candidate, products, exceptId) {
+    const plain = (v) => String(v == null ? "" : v).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const size = (p) => looseKey(Calc.normalizeTileSize(p.tileSize));
+    const name = plain(candidate.name);
+    if (!name) return [];
+    return (products || []).filter((p) => {
+      if (!p || (exceptId != null && p.id === exceptId)) return false;
+      const other = plain(p.name);
+      if (!other) return false;
+      if (other === name) return true;
+      const inside = Math.min(other.length, name.length) >= 4 && (other.includes(name) || name.includes(other));
+      return inside && (!size(p) || !size(candidate) || size(p) === size(candidate));
+    }).slice(0, 5);
+  }
+
   // THE one place a product typed into a form is checked, so every way of adding a product follows the same rules:
   // the Stock form calls it, and so does a purchase that creates a product (again when the draft is confirmed).
   //   raw  what was typed: { name, manufacturer, tileSize, coveragePerBox, description, sku, category,
@@ -1258,7 +1277,7 @@
     isTracked, deliveryDetail, collectionNumber, receiptNumber, collectionReceipts, deliveryProblem, deliveryHistoryProblem, DELIVERY_EPSILON, DELIVERY_NOTE_MAX,
     normalizeName, phoneDigits, isWalkInName, customerKeys, customerGroups, findGroup, sameCustomer,
     transferProblem, ledgerProblems,
-    isTileSize, normalizeTileSize, normalizeProduct, readProductInput, findDuplicateProduct, normalizeInvoice, normalizeSettings, paymentSummary, paymentDetail, stripDerived,
+    isTileSize, normalizeTileSize, normalizeProduct, readProductInput, findDuplicateProduct, findSimilarProducts, normalizeInvoice, normalizeSettings, paymentSummary, paymentDetail, stripDerived,
     productProblem, invoiceProblem, invoiceWarnings, settingsProblem, legacyProductIssue, legacyInvoiceIssue,
     buildData, hasMeaningfulData, countsOf, buildBackup, prepareBackupFile, parseBackup, backupFileName,
     readLegacyStorage, prepareLegacyCopy, backupReminder,

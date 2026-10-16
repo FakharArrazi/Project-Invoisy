@@ -96,6 +96,8 @@
   const todayOf = (ctx) => (ctx && ctx.today) || toDay(nowOf(ctx));
 
   const unitName = (unit) => (Calc.isUnit(unit) ? Calc.unitLabel(unit) : "");
+  // The unit as it reads next to a number ("138 boxes", "1 box"), following the language's plural rule.
+  const unitFor = (unit, n) => (Calc.isUnit(unit) ? Calc.unitLabel(unit, n).toLowerCase() : "");
 
   // What an operation needs to know, taken from the data draft.
   function ctxOf(d, options) {
@@ -303,12 +305,14 @@
      PURCHASE: reading the form, checking it, building the record
      ========================================================================== */
 
-  // How many stock units are in ONE purchase unit, when it can be worked out from the product itself.
+  // How many stock units are in ONE purchase unit, worked out from the product itself (its tile size, its saved
+  // coverage per box and its stock unit). Nothing is typed and nothing is guessed: when the product does not hold
+  // what the conversion needs, { error } says which information is missing. The value is NOT rounded, so 207.36 m²
+  // at 1.44 m² a box is exactly 144 boxes.
   function autoFactor(spec, unit, stockUnit) {
     if (!Calc.isUnit(stockUnit)) return { value: 1 };   // an old product with no stock unit counts one-for-one
     if (unit === stockUnit) return { value: 1 };
-    const f = Calc.getUnitFactor(spec, unit, stockUnit);
-    return f.error ? f : { value: cleanNumber(f.value) };
+    return Calc.getUnitFactor(spec, unit, stockUnit);
   }
 
   // A product made while recording a purchase is checked by the same function as the Stock form (validation.js):
@@ -363,17 +367,15 @@
         else qty = checked.value;
       }
 
+      // The quantity is the quantity BOUGHT, in the unit it was bought in. What it adds to stock is always worked out
+      // from the product's own saved information (never typed, never a hardcoded coverage), so a purchase by m² of a
+      // product counted in boxes becomes a number of boxes. When that can not be done reliably the line is refused
+      // and the message names what the product is missing.
       let factor = null;
-      if (stockUnit && unit === stockUnit) factor = 1;
-      else {
-        const typed = readNumber(row.factor);
-        if (typed.blank) {
-          const auto = autoFactor(spec, unit, stockUnit);
-          if (auto.error) fail("factor", t("pur.err.factorNeeded", { name: spec.name, unit: unitName(unit).toLowerCase(), stock: unitName(stockUnit).toLowerCase() }));
-          else factor = auto.value;
-        } else if (typed.invalid || typed.value <= 0) fail("factor", t("pur.err.factorInvalid"));
-        else factor = typed.value;
-      }
+      const auto = autoFactor(spec, unit, stockUnit);
+      if (auto.error) {
+        fail("unit", t("pur.err.cannotConvert", { name: spec.name, unit: unitFor(unit, 2), stock: unitFor(stockUnit, 2), reason: auto.error }));
+      } else factor = auto.value;
 
       let baseQty = 0;
       if (qty > 0 && factor) {
@@ -381,7 +383,16 @@
         if (Calc.isWholeUnit(stockUnit)) {
           const whole = Math.round(baseQty);
           if (Math.abs(baseQty - whole) <= 1e-6) baseQty = whole;
-          else fail("qty", t("pur.err.wholeStock", { name: spec.name, qty: baseQty, unit: unitName(stockUnit).toLowerCase() }));
+          else {
+            const lower = Math.floor(baseQty);
+            const area = (n) => cleanNumber(n / factor);
+            const nearest = (n) => `${n} ${unitFor(stockUnit, n)} = ${area(n)} ${unitFor(unit, area(n))}`;
+            const shown = cleanNumber(Math.round(baseQty * 1000) / 1000);
+            fail("qty", t("pur.err.wholeStock", {
+              name: spec.name, qty: shown, unit: unitFor(stockUnit, shown),
+              options: lower >= 1 ? `${nearest(lower)} / ${nearest(lower + 1)}` : nearest(lower + 1),
+            }));
+          }
         }
       }
 

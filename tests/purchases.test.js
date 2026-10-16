@@ -203,16 +203,16 @@ test("200 boxes of 1.44 m² at 900 DA a box = 288 m² and 180,000 DA; the factor
   assert.equal(P.lineBaseQty({ qty: 200, factor: 1.44 }), 288);
 });
 
-test("a typed conversion factor is used when the product can not give one", () => {
+test("a conversion the product can not give is refused with what is missing, and a typed factor is never used", () => {
   const d = withSupplier();
   d.products.push(sampleProduct({ id: "p-sand", name: "Sand", tileSize: "", coveragePerBox: null, priceUnit: "kg", stockUnit: "kg", sellingPrice: 10, sku: "SD", stock: 0 }));
-  const noFactor = P.saveDraft(d, purchaseInput(d, { lines: [{ productId: "p-sand", unit: "m", qty: "3", unitPrice: "5" }] }));
-  assert.match(noFactor.error, /how many/i, "an impossible conversion asks instead of guessing");
+  const impossible = P.saveDraft(d, purchaseInput(d, { lines: [{ productId: "p-sand", unit: "m", qty: "3", unitPrice: "5" }] }));
+  assert.match(impossible.error, /can't convert/i, "an impossible conversion is refused instead of guessed");
   const kgToKg = P.saveDraft(d, purchaseInput(d, { lines: [{ productId: "p-sand", unit: "kg", qty: "40", unitPrice: "5" }] }));
   assert.equal(kgToKg.purchase.lines[0].baseQty, 40);
-  const factor = P.previewPurchase(d, purchaseInput(d, { supplierInvoiceNumber: "FA-FACTOR", lines: [{ productId: "p-sand", unit: "box", qty: "2", factor: "25", unitPrice: "100" }] }), "draft");
-  assert.equal(factor.errors.length, 0);
-  assert.equal(factor.purchase.lines[0].baseQty, 50);
+  const typed = P.previewPurchase(d, purchaseInput(d, { supplierInvoiceNumber: "FA-FACTOR", lines: [{ productId: "p-sand", unit: "box", qty: "2", factor: "25", unitPrice: "100" }] }), "draft");
+  assert.ok(typed.errors.length > 0, "a factor typed by hand no longer decides what goes into stock");
+  assert.equal(typed.errors[0].field, "line.0.unit");
 });
 
 test("line discounts, invoice discount, tax and delivery give clear totals; tax can be added or already included", () => {
