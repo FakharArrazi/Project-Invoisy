@@ -159,7 +159,7 @@ function invoiceItemLabel(item) {
   return [name, size ? `(${size})` : "", item.manufacturer].filter(Boolean).join(" ");
 }
 
-// A product type in the language shown now: Dalle de sol, Faience / Faïence, Porcelain / Porcelaine, Rock / Pierre.
+// A product type in the language shown now: Dalle de sol, Faience / Faïence, Porcelain / Porcelaine, Rock / Pierre, Évier, Ciment-colle, Pâte à joint.
 // A type saved under an old spelling (Daldosol, Daltosol) reads as the current one; "" when the product has no type.
 function productTypeLabel(type) {
   const value = String(type || "").trim();

@@ -312,9 +312,9 @@
   const normalizeTileSize = Calc.normalizeTileSize;
 
   // The optional type of a product, shown under its name on invoices. "" = none. These are the stored values; the
-  // words people see come from the language files (productType.<value>), so French shows Dalle de sol, Faïence, Pierre, Porcelaine.
+  // words people see come from the language files (productType.<value>), so French shows Dalle de sol, Faïence, Porcelaine, Pierre, Évier, Ciment-colle, Pâte à joint.
   // A product saved before the field existed simply has none.
-  const PRODUCT_TYPES = ["DalleDeSol", "Faience", "Porcelain", "Rock"];
+  const PRODUCT_TYPES = ["DalleDeSol", "Faience", "Porcelain", "Rock", "Evier", "CimentColle", "PateAJoint"];
   // Spellings an earlier version saved (the type is "Dalle de sol"): they are read as the current value, so no saved
   // product or invoice is lost.
   const LEGACY_PRODUCT_TYPES = { Daldosol: "DalleDeSol", Daltosol: "DalleDeSol" };

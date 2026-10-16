@@ -1,6 +1,6 @@
 "use strict";
 
-// The optional Product type (None / Dalle de sol / Faience / Porcelain / Rock): the Stock form field, saving and editing it,
+// The optional Product type (None / Dalle de sol / Faience / Porcelain / Rock / Évier / Ciment-colle / Pâte à joint): the Stock form field, saving and editing it,
 // backups, products and invoices saved before the field existed, and the text printed on the invoice.
 
 const test = require("node:test");
@@ -8,7 +8,7 @@ const assert = require("node:assert/strict");
 const { loadApp } = require("./helpers/app");
 const { fillProductForm } = require("./helpers");
 
-const TYPES = ["DalleDeSol", "Faience", "Porcelain", "Rock"];
+const TYPES = ["DalleDeSol", "Faience", "Porcelain", "Rock", "Evier", "CimentColle", "PateAJoint"];
 const plain = (value) => JSON.parse(JSON.stringify(value));   // the app runs in its own context: compare plain data
 
 async function startedApp(options) {
@@ -45,13 +45,13 @@ const legacyProduct = (overrides) => ({
 
 /* ---------- The form field ---------- */
 
-test("the Stock form has a Product type dropdown: None (default), Dalle de sol, Faience, Porcelain, Rock, and it is optional", () => {
+test("the Stock form has a Product type dropdown: None (default), Dalle de sol, Faience, Porcelain, Rock, Évier, Ciment-colle, Pâte à joint, and it is optional", () => {
   const html = loadApp().api.stockForm.html();
   const select = html.match(/<select id="pType">([^]*?)<\/select>/);
   assert.ok(select, "a select with the id pType");
   const options = [...select[1].matchAll(/<option value="([^"]*)"([^>]*)>([^<]*)<\/option>/g)].map((m) => ({ value: m[1], selected: /selected/.test(m[2]), text: m[3] }));
   assert.deepEqual(options.map((o) => o.value), ["", ...TYPES]);
-  assert.deepEqual(options.map((o) => o.text), ["None", "Dalle de sol", "Faience", "Porcelain", "Rock"]);
+  assert.deepEqual(options.map((o) => o.text), ["None", "Dalle de sol", "Faience", "Porcelain", "Rock", "Évier", "Ciment-colle", "Pâte à joint"]);
   assert.deepEqual(options.filter((o) => o.selected).map((o) => o.value), [""], "None is the default");
   assert.match(html, /<label for="pType" data-i18n="stock\.productType">Product type<\/label>/);
   assert.doesNotMatch(html, /id="pType"[^>]*(aria-required|required)/, "not mandatory");
@@ -195,6 +195,9 @@ test("the invoice line shows the type on its own line under the name, and nothin
   assert.equal(api.invoiceItemTypeHtml({ productType: "Faience" }), '<div class="inv-sub">Faience</div>');
   assert.equal(api.invoiceItemTypeHtml({ productType: "Porcelain" }), '<div class="inv-sub">Porcelain</div>');
   assert.equal(api.invoiceItemTypeHtml({ productType: "Rock" }), '<div class="inv-sub">Rock</div>');
+  assert.equal(api.invoiceItemTypeHtml({ productType: "Evier" }), '<div class="inv-sub">Évier</div>');
+  assert.equal(api.invoiceItemTypeHtml({ productType: "CimentColle" }), '<div class="inv-sub">Ciment-colle</div>');
+  assert.equal(api.invoiceItemTypeHtml({ productType: "PateAJoint" }), '<div class="inv-sub">Pâte à joint</div>');
   for (const none of ["", undefined, null, "   "]) assert.equal(api.invoiceItemTypeHtml({ productType: none }), "", "no type: no empty line, no placeholder");
   assert.equal(api.invoiceItemLabel({ name: "(deleted product)", tileSize: "", manufacturer: "", productType: "" }), "(deleted product)");
 });
@@ -305,7 +308,7 @@ test("the delivery and collection documents show the type too", async () => {
 
 /* ---------- Names, French labels and the old spelling ---------- */
 
-test("the dropdown labels are Dalle de sol, Faience, Porcelain, Rock in English and Dalle de sol, Faïence, Porcelaine, Pierre in French", () => {
+test("the dropdown labels: Dalle de sol, Faience, Porcelain, Rock in English and Dalle de sol, Faïence, Porcelaine, Pierre in French; Évier, Ciment-colle, Pâte à joint in both", () => {
   const options = (lang) => {
     const app = loadApp();
     setLang(app, lang);
@@ -313,8 +316,8 @@ test("the dropdown labels are Dalle de sol, Faience, Porcelain, Rock in English 
     const select = html.match(/<select id="pType">([^]*?)<\/select>/)[1];
     return [...select.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)<\/option>/g)].map((m) => [m[1], m[2]]);
   };
-  assert.deepEqual(options("en"), [["", "None"], ["DalleDeSol", "Dalle de sol"], ["Faience", "Faience"], ["Porcelain", "Porcelain"], ["Rock", "Rock"]]);
-  assert.deepEqual(options("fr"), [["", "Aucun"], ["DalleDeSol", "Dalle de sol"], ["Faience", "Faïence"], ["Porcelain", "Porcelaine"], ["Rock", "Pierre"]]);
+  assert.deepEqual(options("en"), [["", "None"], ["DalleDeSol", "Dalle de sol"], ["Faience", "Faience"], ["Porcelain", "Porcelain"], ["Rock", "Rock"], ["Evier", "Évier"], ["CimentColle", "Ciment-colle"], ["PateAJoint", "Pâte à joint"]]);
+  assert.deepEqual(options("fr"), [["", "Aucun"], ["DalleDeSol", "Dalle de sol"], ["Faience", "Faïence"], ["Porcelain", "Porcelaine"], ["Rock", "Pierre"], ["Evier", "Évier"], ["CimentColle", "Ciment-colle"], ["PateAJoint", "Pâte à joint"]]);
 });
 
 test("the invoice shows the type in the language of the app, under the name", async () => {
@@ -382,4 +385,55 @@ test("the old spellings Daldosol and DalleDeSol are read as Dalle de sol (DalleD
   assert.equal(again.api.Validation.invoiceProblem(invoice), "");
   assert.match(again.api.invoiceHtml(invoice), /<div class="inv-sub">Dalle de sol<\/div>/);
   assert.doesNotMatch(again.api.invoiceHtml(invoice), /Daldosol/);
+});
+
+/* ---------- Évier, Ciment-colle, Pâte à joint ---------- */
+
+test("the three added types are chosen in the Stock form, saved, shown when editing, kept after a reload, and cleared again", async () => {
+  const app = await startedApp();
+  const names = { Evier: "Évier Inox", CimentColle: "Ciment-colle Gris", PateAJoint: "Pâte Blanche" };
+  const saved = {};
+  for (const type of Object.keys(names)) saved[type] = await addViaForm(app, { pName: names[type], pType: type });
+  for (const type of Object.keys(names)) assert.equal(saved[type].productType, type, type);
+
+  for (const type of Object.keys(names)) {
+    app.api.startEditProduct(saved[type].id);
+    assert.equal(app.field("pType").value, type, "the dropdown shows the saved type when editing: " + type);
+  }
+  const again = await startedApp({ indexedDB: app.indexedDB });
+  assert.deepEqual(plain(Object.fromEntries(again.api.getProducts().map((p) => [p.name, p.productType]))),
+    { "Évier Inox": "Evier", "Ciment-colle Gris": "CimentColle", "Pâte Blanche": "PateAJoint" }, "still there after a reload");
+
+  again.api.startEditProduct(saved.Evier.id);
+  again.field("pType").value = "";
+  await again.api.updateProduct(saved.Evier.id, again.api.readProductForm().values);
+  assert.equal(again.api.getProducts().find((p) => p.name === "Évier Inox").productType, "", "None again");
+});
+
+test("the added types appear on the invoice line under the name in the app language, in the preview, saved invoice and backup", async () => {
+  const app = await startedApp();
+  const products = [];
+  for (const [name, type] of [["Évier Inox", "Evier"], ["Colle Gris", "CimentColle"], ["Joint Blanc", "PateAJoint"]]) products.push(await addViaForm(app, { pName: name, pType: type }));
+  const invoice = await sell(app, products);
+  assert.deepEqual(plain(invoice.items.map((i) => i.productType)), ["Evier", "CimentColle", "PateAJoint"], "kept on each saved line");
+  for (const lang of ["en", "fr"]) {
+    setLang(app, lang);
+    const html = app.api.invoiceHtml(invoice);
+    for (const [name, label] of [["Évier Inox", "Évier"], ["Colle Gris", "Ciment-colle"], ["Joint Blanc", "Pâte à joint"]]) {
+      assert.match(html, new RegExp(`<td>${name} \\(45 × 45\\)<div class="inv-sub">${label}</div></td>`), `${lang}: ${name}`);
+    }
+  }
+
+  await app.api.exportBackup();
+  const restored = await startedApp();
+  await restored.api.importBackup(restored.file(await app.downloadedText()));
+  assert.deepEqual(plain(restored.api.getInvoices()[0].items.map((i) => i.productType)), ["Evier", "CimentColle", "PateAJoint"]);
+  assert.deepEqual(plain(restored.api.getProducts().map((p) => p.productType).sort()), ["CimentColle", "Evier", "PateAJoint"]);
+});
+
+test("a product of an existing type is unaffected by the added types: same stored values, same labels", () => {
+  const { api } = loadApp();
+  assert.deepEqual(plain(api.Validation.PRODUCT_TYPES.slice(0, 4)), ["DalleDeSol", "Faience", "Porcelain", "Rock"], "the stored values of the existing types did not change");
+  for (const type of TYPES) assert.equal(api.Validation.normalizeProductType(type), type, type);
+  assert.equal(api.Validation.normalizeProductType("Evier "), "", "an unknown spelling is still refused, never printed");
 });
