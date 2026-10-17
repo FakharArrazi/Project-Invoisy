@@ -28,7 +28,7 @@
   const PAY_FILTERS = ["all", "unpaid", "partial", "paid", "overdue"];
 
   const ui = {
-    sup: { screen: "list", q: "", status: "active", sortKey: "name", sortDir: 1, editingId: null, profileId: null, tab: "overview", formReady: false, formLang: "" },
+    sup: { screen: "list", q: "", status: "active", sortKey: "name", sortDir: 1, editingId: null, profileId: null, tab: "overview", formReady: false, formLang: "", contactRows: [] },
     pur: {
       screen: "list", tab: "list", q: "", status: "all", pay: "all", supplierId: "", sortKey: "date", sortDir: -1,
       detailId: null, open: "", form: null, formLang: "",
@@ -236,7 +236,7 @@
     const q = P.normText(ui.sup.q);
     const rows = s.suppliers
       .filter((sp) => ui.sup.status === "all" || (ui.sup.status === "archived") === Boolean(sp.archived))
-      .filter((sp) => !q || [sp.name, sp.contactName, sp.phone, sp.email, sp.city, sp.taxId].some((v) => P.normText(v).includes(q)))
+      .filter((sp) => !q || [sp.name, sp.contactName, sp.phone, ...P.supplierContactNames(sp), ...P.supplierPhones(sp), sp.email, sp.city, sp.taxId].some((v) => P.normText(v).includes(q)))
       .map((sp) => {
         const sum = P.supplierSummary(sp, s.purchases, s.supplierPayments, day);
         return { sp, sum, name: sp.name, total: sum.total, paid: sum.paid, outstanding: sum.outstanding, last: sum.lastPurchase };
@@ -263,8 +263,8 @@
       const status = sp.archived ? badge("st-cancelled", t("sup.status.archived")) : badge("st-confirmed", t("sup.status.active"));
       const overdue = sum.overdueCount ? " " + badge("overdue", t("sup.overdueCount", { n: sum.overdueCount })) : "";
       return `<tr data-id="${esc(sp.id)}">
-        <td><button type="button" class="link" data-act="sup-open" data-id="${esc(sp.id)}">${esc(sp.name)}</button>${sp.contactName ? `<div class="muted small">${esc(sp.contactName)}</div>` : ""}</td>
-        <td>${esc(sp.phone)}</td>
+        <td><button type="button" class="link" data-act="sup-open" data-id="${esc(sp.id)}">${esc(sp.name)}</button>${P.supplierContactNames(sp).length ? `<div class="muted small">${esc(P.supplierContactNames(sp).join(", "))}</div>` : ""}</td>
+        <td>${P.supplierPhones(sp).map((phone) => `<div>${esc(phone)}</div>`).join("")}</td>
         <td>${esc(sp.email)}</td>
         <td class="num">${esc(money(sum.total))}</td>
         <td class="num">${esc(money(sum.paid))}</td>
@@ -317,8 +317,47 @@
 
   const TERMS_CHOICES = [0, 15, 30];
 
+  // The contact rows of the supplier form, as typed: { rowId, name, phone }. Kept in ui.sup.contactRows so adding and removing a
+  // row redraws only the rows, never the other fields. A supplier with no contact yet shows one empty row.
+  let contactSerial = 0;
+  const newContactRow = (c) => ({ rowId: ++contactSerial, name: (c && c.name) || "", phone: (c && c.phone) || "" });
+
+  function contactRowsHtml() {
+    const rows = ui.sup.contactRows;
+    return rows.map((row, i) => `<div class="contact-row" data-contact="${row.rowId}">
+        <input type="text" class="contact-name" data-field="name" value="${esc(row.name)}" placeholder="${esc(t("sup.f.contactName"))}" aria-label="${esc(t("sup.f.contactNameN", { n: i + 1 }))}" autocomplete="off">
+        <input type="text" inputmode="tel" class="contact-phone" data-field="phone" value="${esc(row.phone)}" placeholder="${esc(t("sup.f.phone"))}" aria-label="${esc(t("sup.f.phoneN", { n: i + 1 }))}" autocomplete="off">
+        <button type="button" class="btn small" data-act="sup-contact-remove" data-row="${row.rowId}" aria-label="${esc(t("sup.f.removeContactN", { n: i + 1 }))}"${rows.length < 2 ? " disabled" : ""}>${esc(t("common.remove"))}</button>
+      </div>`).join("");
+  }
+
+  function addContactRow() {
+    if (ui.sup.contactRows.length >= P.MAX_CONTACTS) return null;
+    const row = newContactRow();
+    ui.sup.contactRows.push(row);
+    return row;
+  }
+
+  function removeContactRow(rowId) {
+    if (ui.sup.contactRows.length < 2) return false;
+    ui.sup.contactRows = ui.sup.contactRows.filter((r) => String(r.rowId) !== String(rowId));
+    return true;
+  }
+
+  function redrawContactRows(focusRow) {
+    if ($("supContacts")) $("supContacts").innerHTML = contactRowsHtml();
+    if ($("supAddContact")) $("supAddContact").disabled = ui.sup.contactRows.length >= P.MAX_CONTACTS;
+    if (focusRow) {
+      const box = $("supContacts") && $("supContacts").querySelector(`[data-contact="${focusRow.rowId}"] input`);
+      if (box && box.focus) box.focus();
+    }
+  }
+
   function supplierFormHtml(values) {
     const v = values || {};
+    // What the rows start from: a list typed in this form, a saved list, or the single contact an older supplier has.
+    const start = P.supplierContacts(v);
+    ui.sup.contactRows = (start.length ? start : [{}]).map(newContactRow);
     const terms = v.paymentTermsDays === undefined || v.paymentTermsDays === "" ? 0 : Number(v.paymentTermsDays);
     const custom = !TERMS_CHOICES.includes(terms);
     const text = (id, key, label, extra) => field("sf-" + id, esc(label), `<input type="text" id="sf-${id}" value="${esc(v[key] || "")}" autocomplete="off"${extra || ""}>`);
@@ -328,11 +367,13 @@
       <form id="supplierForm" data-form="sup-save" novalidate>
         <div class="grid-2">
           ${field("sf-name", esc(t("sup.f.name")) + ' <span class="req" aria-hidden="true">*</span>', `<input type="text" id="sf-name" value="${esc(v.name || "")}" autocomplete="off" aria-required="true">`)}
-          ${text("contactName", "contactName", t("sup.f.contact"))}
-        </div>
-        <div class="grid-2">
-          ${text("phone", "phone", t("sup.f.phone"))}
           ${text("email", "email", t("sup.f.email"))}
+        </div>
+        <div class="field contacts-field">
+          <label id="supContactsLabel">${esc(t("sup.f.contacts"))}</label>
+          <p class="muted small contacts-hint">${esc(t("sup.f.contactsHint"))}</p>
+          <div class="contact-rows" id="supContacts" role="group" aria-labelledby="supContactsLabel">${contactRowsHtml()}</div>
+          <button type="button" class="btn small" id="supAddContact" data-act="sup-contact-add"${ui.sup.contactRows.length >= P.MAX_CONTACTS ? " disabled" : ""}>${esc(t("sup.f.addContact"))}</button>
         </div>
         ${text("address", "address", t("sup.f.address"))}
         <div class="grid-2">
@@ -371,7 +412,7 @@
     const terms = $("sf-terms").value;
     return {
       id: ui.sup.editingId || undefined,
-      name: $("sf-name").value, contactName: $("sf-contactName").value, phone: $("sf-phone").value, email: $("sf-email").value,
+      name: $("sf-name").value, contacts: ui.sup.contactRows.map(({ name, phone }) => ({ name, phone })), email: $("sf-email").value,
       address: $("sf-address").value, city: $("sf-city").value, country: $("sf-country").value, taxId: $("sf-taxId").value,
       website: $("sf-website").value, paymentTermsDays: terms === "custom" ? $("sf-termsCustom").value : terms,
       creditLimit: $("sf-creditLimit").value, notes: $("sf-notes").value,
@@ -480,7 +521,7 @@
       <div class="panel">
         <h2>${esc(t("sup.details"))}</h2>
         <dl class="data-info">
-          ${line(t("sup.f.contact"), sp.contactName)}${line(t("sup.f.phone"), sp.phone)}${line(t("sup.f.email"), sp.email)}
+          ${P.supplierContacts(sp).map((c) => line(c.name ? t("sup.f.contact") : t("sup.f.phone"), [c.name, c.phone].filter(Boolean).join(" · "))).join("")}${line(t("sup.f.email"), sp.email)}
           ${line(t("sup.f.address"), sp.address)}${line(t("sup.f.cityCountry"), place)}${line(t("sup.f.taxId"), sp.taxId)}${site}
           <dt>${esc(t("sup.f.terms"))}</dt><dd>${esc(terms)}</dd>
           <dt>${esc(t("sup.f.credit"))}</dt><dd>${esc(sp.creditLimit == null ? t("sup.noLimit") : money(sp.creditLimit))}</dd>
@@ -604,13 +645,17 @@
     const st = S().settings;
     const line = (v) => (v ? `<div>${esc(v)}</div>` : "");
     const logo = st.logo ? `<img class="inv-logo" src="${esc(st.logo)}" alt="">` : "";
-    return `<div>${logo}<div class="inv-biz-name">${esc(st.businessName)}</div>${line(st.address)}${line(st.phone)}${line(st.email)}</div>`;
+    const phones = Validation.businessPhones(st);
+    const phoneLine = phones.length > 1
+      ? `<div class="inv-phones">${phones.map((p) => `<span class="inv-phone">${esc(p)}</span>`).join('<span class="inv-sep"> · </span>')}</div>`
+      : line(phones[0]);
+    return `<div>${logo}<div class="inv-biz-name">${esc(st.businessName)}</div>${line(st.address)}${phoneLine}${line(st.email)}</div>`;
   }
 
   function supplierStatementHtml(sp) {
     const { sum, purchases, payments } = supplierStatement(sp);
     return `<header class="inv-head">${businessHeader()}<div class="inv-title">${esc(t("sup.statement"))}</div></header>
-      <div class="inv-meta"><div><div class="label">${esc(t("pur.col.supplier"))}</div><div class="inv-customer">${esc(sp.name)}${sp.phone ? "\n" + esc(sp.phone) : ""}${sp.address ? "\n" + esc(sp.address) : ""}</div></div>
+      <div class="inv-meta"><div><div class="label">${esc(t("pur.col.supplier"))}</div><div class="inv-customer">${esc(sp.name)}${P.supplierPhones(sp).length ? "\n" + esc(P.supplierPhones(sp).join(" · ")) : ""}${sp.address ? "\n" + esc(sp.address) : ""}</div></div>
       <div class="right"><div><span class="label">${esc(t("sup.csv.date"))}</span> ${esc(fmtDay(today()))}</div></div></div>
       <table class="inv-table"><thead><tr><th>${esc(t("pur.col.reference"))}</th><th>${esc(t("pur.col.invoiceNo"))}</th><th>${esc(t("pur.col.date"))}</th><th class="num">${esc(t("col.total"))}</th><th class="num">${esc(t("col.paid"))}</th><th class="num">${esc(t("pur.col.outstanding"))}</th></tr></thead>
       <tbody>${purchases.map((p) => { const x = summaryOf(p); return `<tr><td>${esc(p.reference)}</td><td>${esc(p.supplierInvoiceNumber)}</td><td>${esc(fmtDay(p.invoiceDate))}</td><td class="num">${esc(num(p.total))}</td><td class="num">${esc(num(x.paid))}</td><td class="num">${esc(num(x.outstanding))}</td></tr>`; }).join("") || `<tr><td colspan="6" class="none">${esc(t("pur.noneFound"))}</td></tr>`}</tbody></table>
@@ -1688,7 +1733,7 @@
     const cur = p.currency || S().settings.currency;
     const m = (n) => h.money(n, cur);
     return `<header class="inv-head">${businessHeader()}<div class="inv-title">${esc(t("pur.print.title"))}</div></header>
-      <div class="inv-meta"><div><div class="label">${esc(t("pur.col.supplier"))}</div><div class="inv-customer">${esc(sp ? sp.name : "")}${sp && sp.phone ? "\n" + esc(sp.phone) : ""}${sp && sp.address ? "\n" + esc(sp.address) : ""}</div></div>
+      <div class="inv-meta"><div><div class="label">${esc(t("pur.col.supplier"))}</div><div class="inv-customer">${esc(sp ? sp.name : "")}${sp && P.supplierPhones(sp).length ? "\n" + esc(P.supplierPhones(sp).join(" · ")) : ""}${sp && sp.address ? "\n" + esc(sp.address) : ""}</div></div>
       <div class="right"><div><span class="label">${esc(t("pur.f.reference"))}</span> ${esc(p.reference)}</div>
         <div><span class="label">${esc(t("pur.f.invoiceNo"))}</span> ${esc(p.noSupplierInvoice ? t("pur.noInvoiceShort") : p.supplierInvoiceNumber)}</div>
         <div><span class="label">${esc(t("pur.f.invoiceDate"))}</span> ${esc(fmtDay(p.invoiceDate))}</div><div><span class="label">${esc(t("pur.f.dueDate"))}</span> ${esc(fmtDay(p.dueDate))}</div></div></div>
@@ -1838,6 +1883,8 @@
     "sup-edit"(el) { ui.sup.editingId = el.dataset.id; ui.sup.screen = "form"; ui.sup.formReady = false; if (S().view !== "suppliers") h.showView("suppliers"); else renderSuppliers(); },
     "sup-open"(el) { openSupplier(el.dataset.id); },
     "sup-back"() { ui.sup.screen = "list"; renderSuppliers(); },
+    "sup-contact-add"() { redrawContactRows(addContactRow()); },
+    "sup-contact-remove"(el) { if (removeContactRow(el.dataset.row)) redrawContactRows(); },
     "sup-cancel"() { ui.sup.formReady = false; ui.sup.screen = ui.sup.editingId && supplierById(ui.sup.editingId) ? "profile" : "list"; if (ui.sup.screen === "profile") ui.sup.profileId = ui.sup.editingId; renderSuppliers(); },
     "sup-sort"(el) {
       const key = el.dataset.key;
@@ -1994,6 +2041,12 @@
       showCombo(lineId);
       return;
     }
+    const contactBox = el.closest && el.closest("[data-contact]");
+    if (contactBox && el.dataset && el.dataset.field) {   // a name or number typed in a supplier contact row
+      const row = ui.sup.contactRows.find((r) => String(r.rowId) === contactBox.dataset.contact);
+      if (row) row[el.dataset.field] = el.value;
+      return;
+    }
     if (id === "supSearch") { ui.sup.q = el.value; refreshSupplierRows(); return; }
     if (id === "purSearch") { ui.pur.q = el.value; $("purRows").innerHTML = purchaseListRows(); return; }
     if (el.closest && el.closest("#purchaseForm")) {
@@ -2105,5 +2158,6 @@
     openSupplier, openPurchase, newPurchase,
     // for tests
     supplierCsv, supplierRows, filteredPurchases, state: ui,
+    supplierFormHtml, readSupplierForm, addContactRow, removeContactRow, contactRowsHtml, supplierTableRows, supplierProfileHtml,
   };
 })();

@@ -99,6 +99,15 @@ function customerBlockHtml(inv, cust) {
     (second ? `<div class="label inv-second-label">${esc(t("inv.secondCustomer"))}</div><div class="inv-customer">${esc(second)}</div>` : "") + `</div>`;
 }
 
+// The phone line of a business header (an invoice, a collection document). One number, or the single number older invoices have,
+// reads exactly as before. Several numbers share one compact line, each kept whole, separated by a dot, so the header stays tidy.
+function businessPhonesHtml(biz) {
+  const phones = Validation.businessPhones(biz);
+  if (!phones.length) return "";
+  if (phones.length === 1) return `<div>${esc(phones[0])}</div>`;
+  return `<div class="inv-phones">${phones.map((p) => `<span class="inv-phone">${esc(p)}</span>`).join('<span class="inv-sep"> · </span>')}</div>`;
+}
+
 /* ---------- Data model ---------- */
 
 // Units a line on a sale can be sold in. The unit belongs to the sale line, not to the product.
@@ -216,6 +225,9 @@ const state = {
   priceRows: [],          // the selling price rows of the Stock form, as typed: { rowId, unit, price } (kept by stockForm)
   addUnitFor: null,       // product the Sell page unit list was last set up for
   debtUi: { armed: false, dismissedKey: null, suggestions: [], suggestIndex: -1 },   // screen-only: never saved
+  invoiceEdit: null,      // the saved invoice being corrected (screen-only until Save changes): see startEditInvoice
+  saleDone: null,         // the sale just saved while its "What would you like to do?" dialog is open: { id, number } (screen-only)
+  phoneRows: [],          // the business phone numbers of the Settings form, as typed: { rowId, value } (screen-only until saved)
 };
 
 function applyData(d) {
@@ -905,6 +917,53 @@ async function addStock(id, rawQty) {
   });
 }
 
+/* ---------- Similar products (Stock form) ----------
+   While a name is typed the form lists the products already in stock that look like it (Validation.suggestProducts), so a
+   duplicate is noticed before it is made. It reads state.products, which is already in memory (no database read per key),
+   and it only shows: a suggestion can be opened to review/edit or used to add stock, nothing is merged or deleted. A new
+   variant (another size) can still be added. */
+
+function productSuggestions() {
+  return Validation.suggestProducts($("pName").value, state.products, { exceptId: state.editingId });
+}
+
+function suggestionHtml(p, typedSize) {
+  const type = Validation.normalizeProductType(p.productType);
+  const details = [p.tileSize, type ? t("productType." + type) : "", p.manufacturer].filter(Boolean);
+  const same = typedSize && Calc.normalizeTileSize(p.tileSize) === typedSize;
+  return `<li class="similar-item" data-id="${esc(p.id)}">` +
+    `<div class="similar-text"><strong>${esc(p.name)}</strong>` +
+    `<span class="muted small">${esc(details.length ? details.join(" · ") : t("stock.similar.noDetails"))}</span>` +
+    (same ? `<span class="similar-same small">${esc(t("stock.similar.sameSize"))}</span>` : "") + `</div>` +
+    `<div class="similar-actions"><button type="button" class="btn small" data-similar="view">${esc(t("stock.similar.view"))}</button>` +
+    `<button type="button" class="btn small" data-similar="stock">${esc(t("stock.similar.addStock"))}</button></div></li>`;
+}
+
+function renderProductSuggestions() {
+  const box = $("productSimilar");
+  if (!box) return;
+  const query = $("pName").value;
+  if (!query.trim()) { box.hidden = true; box.innerHTML = ""; return; }
+  const found = productSuggestions();
+  const typedSize = Calc.normalizeTileSize($("pTileSize").value);
+  box.hidden = false;
+  box.innerHTML = found.length
+    ? `<p class="small"><strong>${esc(t("stock.similar.title"))}</strong> <span class="muted">${esc(t("stock.similar.hint"))}</span></p><ul class="similar-list">${found.map((p) => suggestionHtml(p, typedSize)).join("")}</ul>`
+    : `<p class="muted small">${esc(t("stock.similar.none"))}</p>`;
+}
+
+// A suggestion's buttons: open the product to review or edit it, or go straight to adding stock to it.
+function useSuggestion(id, action) {
+  const p = findProduct(id);
+  if (!p) return false;
+  if (action === "stock") {
+    $("rProduct").value = id;
+    renderRestockInfo();
+    $("rQty").focus();
+  } else startEditProduct(id);
+  return true;
+}
+
 function startEditProduct(id) {
   const p = findProduct(id);
   if (!p) return;
@@ -912,6 +971,7 @@ function startEditProduct(id) {
   stockForm.fill(p);
   renderProductFormMode();
   clearProductErrors();
+  renderProductSuggestions();
   $("pName").focus();
 }
 
@@ -920,6 +980,7 @@ function resetProductForm() {
   stockForm.blank();   // a new product starts with a price per m² (stock counted in boxes)
   renderProductFormMode();
   clearProductErrors();
+  renderProductSuggestions();
 }
 
 // The Stock form's title and buttons depend on whether a product is being edited.
@@ -1452,6 +1513,41 @@ function clearSale() {
    INVOICES
    ========================================================================== */
 
+// One line of a saved invoice, from a sale line (productId, qty, sellingUnit, unitPrice, listPrice, priceOverridden, catalog) and its
+// product. Everything the line needs later is saved in it, so a saved invoice never depends on the product's current data.
+// `stockDeducted` is what the sale took out of stock for this line (null when it could not be worked out).
+// Used when a sale is saved and when a line is added while editing a saved invoice.
+function invoiceLineData(item, p, stockDeducted) {
+  return {
+    productId: item.productId,
+    name: p ? p.name : DELETED_PRODUCT,
+    productType: p ? Validation.normalizeProductType(p.productType) : "",   // a snapshot, like the name: editing the product later never changes a saved invoice
+    manufacturer: p ? p.manufacturer : "",
+    tileSize: p ? p.tileSize : "",
+    coveragePerBox: p ? p.coveragePerBox : null,
+    sellingUnit: SELLING_UNITS.includes(item.sellingUnit) ? item.sellingUnit : "piece",
+    sku: p ? p.sku : "",
+    qty: item.qty,
+    unitPrice: item.unitPrice,
+    // The unit the charged unitPrice is for (always the unit sold), kept next to the price so the
+    // line never depends on the product's current data to say what the price is per.
+    unitPriceUnit: SELLING_UNITS.includes(item.sellingUnit) ? item.sellingUnit : "piece",
+    total: Calc.calculateLineTotal(item.qty, item.unitPrice),
+    // What the price was worked out from, kept so the line can be audited later. A saved invoice
+    // is never recalculated from the product's current price, size or coverage.
+    // `priceUnit` / `productPrice` are the catalogue price the line used (the price saved for the unit sold, or the
+    // main price it was converted from). `priceSource` says which: explicit, calculated, legacy, or custom (typed here).
+    priceUnit: item.catalog ? item.catalog.unit : p ? p.priceUnit : null,
+    productPrice: item.catalog ? item.catalog.price : p ? p.sellingPrice : item.unitPrice,
+    ...(item.priceOverridden || item.catalog ? { priceSource: item.priceOverridden ? "custom" : item.catalog.source } : {}),
+    calculatedUnitPrice: item.listPrice != null ? item.listPrice : item.unitPrice,
+    priceOverridden: Boolean(item.priceOverridden),
+    stockUnit: p ? p.stockUnit : null,
+    // What this line took out of stock with the sale (for a partial line: only what was delivered now).
+    stockDeducted,
+  };
+}
+
 function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
   const totals = calculateTotals(sale);
   const carried = draftCarriedLines(sale, data);
@@ -1464,35 +1560,7 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
     const handed = deliverNowQty(item);
     const taken = p ? Calc.stockDeduction(p, handed, item.sellingUnit) : { error: true };
     if (tracked && handed > 0) handedOver.push({ lineId: item.lineId, qty: handed, stockDeducted: taken.error ? 0 : taken.value });
-    return {
-      productId: item.productId,
-      name: p ? p.name : DELETED_PRODUCT,
-      productType: p ? Validation.normalizeProductType(p.productType) : "",   // a snapshot, like the name: editing the product later never changes a saved invoice
-      manufacturer: p ? p.manufacturer : "",
-      tileSize: p ? p.tileSize : "",
-      coveragePerBox: p ? p.coveragePerBox : null,
-      sellingUnit: SELLING_UNITS.includes(item.sellingUnit) ? item.sellingUnit : "piece",
-      sku: p ? p.sku : "",
-      qty: item.qty,
-      unitPrice: item.unitPrice,
-      // The unit the charged unitPrice is for (always the unit sold), kept next to the price so the
-      // line never depends on the product's current data to say what the price is per.
-      unitPriceUnit: SELLING_UNITS.includes(item.sellingUnit) ? item.sellingUnit : "piece",
-      total: Calc.calculateLineTotal(item.qty, item.unitPrice),
-      // What the price was worked out from, kept so the line can be audited later. A saved invoice
-      // is never recalculated from the product's current price, size or coverage.
-      // `priceUnit` / `productPrice` are the catalogue price the line used (the price saved for the unit sold, or the
-      // main price it was converted from). `priceSource` says which: explicit, calculated, legacy, or custom (typed here).
-      priceUnit: item.catalog ? item.catalog.unit : p ? p.priceUnit : null,
-      productPrice: item.catalog ? item.catalog.price : p ? p.sellingPrice : item.unitPrice,
-      ...(item.priceOverridden || item.catalog ? { priceSource: item.priceOverridden ? "custom" : item.catalog.source } : {}),
-      calculatedUnitPrice: item.listPrice != null ? item.listPrice : item.unitPrice,
-      priceOverridden: Boolean(item.priceOverridden),
-      stockUnit: p ? p.stockUnit : null,
-      // What this line took out of stock with the sale (for a partial line: only what was delivered now).
-      stockDeducted: taken.error ? null : taken.value,
-      ...(tracked ? { lineId: item.lineId } : {}),
-    };
+    return { ...invoiceLineData(item, p, taken.error ? null : taken.value), ...(tracked ? { lineId: item.lineId } : {}) };
   });
   const s = data.settings;
   return {
@@ -1518,7 +1586,7 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
     discountPercent: sale.discountType === "percent" ? toNumber(sale.discountValue) : null,
     taxPercent: sale.taxType === "percent" ? toNumber(sale.taxValue) : null,
     currency: s.currency,
-    business: { name: s.businessName, address: s.address, phone: s.phone, email: s.email },
+    business: Validation.businessSnapshot(s),
   };
 }
 
@@ -1568,6 +1636,8 @@ function applySale(d, sale) {
 
 function completeSale() {
   return guard(async () => {
+    // A dialog about the previous sale that is still open is treated as "Later" (the invoice stays saved).
+    if (state.saleDone) { state.saleDone = null; closeSaleDoneDialog(); }
     // Validate the sale and check the stock one final time.
     const errors = validateSale();
     if (errors.length) {
@@ -1592,7 +1662,59 @@ function completeSale() {
     $("search").value = "";
     renderAll();
     notify(t("sell.completed", { number: r.invoice.invoiceNumber }));
+    // Only now, with the invoice and its stock committed, is the person asked what to do next.
+    openSaleDoneDialog(r.invoice);
   });
+}
+
+/* ---------- After a sale: Print Invoice / New Sale / Later ----------
+   The dialog opens only after the transaction has committed, so printing always starts from a saved invoice. It remembers
+   the id of THAT invoice. Whatever is pressed, the pending record is cleared first, so a second Enter or a rapid second
+   click finds nothing to do: no second print, and the sale was already saved once, so no second invoice. */
+
+function openSaleDoneDialog(invoice) {
+  state.saleDone = { id: invoice.id, number: invoice.invoiceNumber };
+  $("saleDoneNumber").textContent = t("saleDone.number", { number: invoice.invoiceNumber });
+  const dialog = $("saleDoneDialog");
+  if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
+  $("saleDonePrint").focus();   // Print Invoice is the default action: Enter prints the invoice that was just saved
+}
+
+function closeSaleDoneDialog() {
+  const dialog = $("saleDoneDialog");
+  if (typeof dialog.close === "function") dialog.close(); else dialog.removeAttribute("open");
+}
+
+// action: "print" | "new" | "later". { ignored: true } when nothing is pending (a repeated press).
+function saleDoneAction(action) {
+  const done = state.saleDone;
+  if (!done) return { ignored: true };
+  state.saleDone = null;
+  closeSaleDoneDialog();
+  if (action === "new") {
+    state.previewInvoice = null;
+    renderInvoice();
+    const search = $("search");
+    if (search && search.focus) search.focus();
+    return { action: "new" };
+  }
+  if (action === "print") {
+    const invoice = state.invoices.find((i) => i.id === done.id);
+    if (!invoice) {
+      notify(t("saleDone.gone", { number: done.number }), "error");
+      return { action: "print", error: true };
+    }
+    try {
+      printInvoice(invoice);
+    } catch (e) {
+      // The browser refused to print. The invoice is saved and shown in the preview: Print / PDF there tries again.
+      notify(t("saleDone.printFailed", { number: done.number }), "error");
+      return { action: "print", error: true };
+    }
+    notify(t("saleDone.afterPrint", { number: done.number }));
+    return { action: "print", invoice };
+  }
+  return { action: "later" };
 }
 
 async function deleteInvoice(id) {
@@ -1698,6 +1820,435 @@ async function recordCollection(id, entries, note) {
   return commit((d) => applyCollection(d, id, entries, note));
 }
 
+/* ==========================================================================
+   EDITING A SAVED INVOICE
+   Corrects an invoice after it was saved (and maybe printed) WITHOUT making a new one: the id, the number, the date, the
+   customer link, the payments, the carried-forward debt and the delivery log all stay. What can change is the customer's
+   details, the lines (products, quantities, prices) and the discount and tax.
+
+   The rules, all in planInvoiceEdit() so the screen, the tests and the database transaction share them:
+     - Stock: what the invoice originally took out of stock (the `stockDeducted` saved on each line, never recalculated from
+       today's product data) is given back and what the corrected lines need is taken out, per product, as ONE net change.
+       Not enough stock = the whole edit is refused and nothing is changed.
+     - History: a line that is kept keeps every saved detail (unit, the price it was sold at, where that price came from, the
+       size and coverage it was sold with). Only a quantity or price that was edited changes, and the line total follows. A
+       new line is made like a sale line, from the product as it is now.
+     - Money: subtotal, discount, tax and total are recalculated only when something financial was edited. Payments are never
+       edited or removed; if the new amount due would be lower than what is already paid, the edit is refused.
+     - An invoice sold in several deliveries keeps its products and quantities (its delivery log is a record); prices,
+       customer, discount and tax can still be corrected.
+   applyInvoiceEdit() saves through commit(): invoice + stock in ONE transaction, with the usual revision check and backup. */
+
+// What a saved line took out of stock, in the product's stock unit. Lines saved by older versions may not say: they are
+// worked out from the line's OWN saved size and unit, or (no unit known) one-for-one, as such stock always was.
+function lineStockTaken(item) {
+  if (typeof item.stockDeducted === "number" && Number.isFinite(item.stockDeducted) && item.stockDeducted >= 0) return item.stockDeducted;
+  if (Calc.isUnit(item.stockUnit)) {
+    const c = Calc.stockDeduction(item, item.qty, item.sellingUnit);
+    if (!c.error) return c.value;
+  }
+  return toNumber(item.qty);
+}
+
+// The discount and tax of a saved invoice as the edit form shows them (text, like the Sell page boxes).
+function invoiceAdjustInputs(inv) {
+  const part = (percent, amount) => (percent != null && percent !== "" ? { type: "percent", value: String(percent) } : { type: "amount", value: toNumber(amount) ? String(amount) : "" });
+  const d = part(inv.discountPercent, inv.discount);
+  const x = part(inv.taxPercent, inv.tax);
+  return { discountType: d.type, discountValue: d.value, taxType: x.type, taxValue: x.value };
+}
+
+const clean = (v) => String(v == null ? "" : v).trim();
+
+// Plans the corrected invoice WITHOUT changing anything.
+//   edit: { customer: { name, phone, address }, secondName, lines: [{ origIndex | null, productId, sellingUnit, qty, unitPrice }],
+//           discountType, discountValue, taxType, taxValue, baseItems? }
+//     origIndex = the position of the line on the saved invoice (a kept line); null = a line added now.
+//     baseItems = the lines the person started from: when the invoice changed meanwhile (another window), the edit is refused.
+// Returns { skip: true } (nothing to change) or { invoice, stockChanges: Map(productId -> new stock), overpaid }, or { error }.
+// A problem found after the corrected invoice could be worked out still carries it as `invoice` (the live preview uses it).
+function planInvoiceEdit(d, invoiceId, edit) {
+  const inv = d.invoices.find((i) => i.id === invoiceId);
+  if (!inv) return { error: t("edit.gone") };
+  if (edit.baseItems && !Validation.sameValue(edit.baseItems, inv.items)) return { error: t("edit.changedElsewhere") };
+  const tracked = Validation.isTracked(inv);
+  const lines = Array.isArray(edit.lines) ? edit.lines : [];
+  const used = new Set();
+  const restore = new Map();   // productId -> stock the invoice holds now, to give back
+  const take = new Map();      // productId -> stock the corrected lines need
+  const bump = (map, id, n) => map.set(id, Calc.cleanNumber((map.get(id) || 0) + n));
+  let linesChanged = lines.length !== inv.items.length;
+  const items = [];
+
+  for (const line of lines) {
+    if (line.origIndex != null) {
+      // ----- a kept line: every saved detail stays unless this edit changes it -----
+      const orig = inv.items[line.origIndex];
+      if (!orig || used.has(line.origIndex)) return { error: t("edit.changedElsewhere") };
+      used.add(line.origIndex);
+      const name = invoiceItemLabel(orig);
+      const product = findProduct(orig.productId, d);
+      const rawQty = clean(line.qty);
+      const rawPrice = clean(line.unitPrice);
+      const qtyChanged = Number(rawQty) !== orig.qty;
+      const priceChanged = rawPrice !== "" ? Number(rawPrice) !== orig.unitPrice : false;
+      let item = { ...orig };
+      if (qtyChanged) {
+        const checked = Calc.validateQuantity(rawQty, orig.sellingUnit);
+        if (checked.error) return { error: t("edit.lineError", { name, error: checked.error }) };
+        if (tracked) return { error: t("edit.trackedQty", { name }) };
+        if (!product) return { error: t("edit.productGone", { name }) };
+        if (Calc.isUnit(orig.stockUnit) && Calc.isUnit(product.stockUnit) && orig.stockUnit !== product.stockUnit) return { error: t("edit.stockUnitChanged", { name }) };
+        item.qty = Calc.cleanNumber(checked.value);
+        // The conversion this line was sold with is kept: its stock use follows the quantity in proportion.
+        item.stockDeducted = Calc.cleanNumber(lineStockTaken(orig) * item.qty / orig.qty);
+      }
+      if (rawPrice === "" || !Number.isFinite(Number(rawPrice)) || Number(rawPrice) < 0) return { error: t("edit.linePrice", { name }) };
+      if (priceChanged) {
+        item.unitPrice = Calc.roundMoney(Number(rawPrice));
+        // Back at the price the line was calculated at: it is a normal price again; any other price is typed by hand.
+        const reference = orig.calculatedUnitPrice;
+        item.priceOverridden = reference == null || round2(item.unitPrice) !== round2(toNumber(reference));
+        if (item.priceOverridden) item.priceSource = "custom";
+        else if (item.priceSource === "custom") delete item.priceSource;
+      }
+      if (!Number.isFinite(Calc.calculateLineTotal(item.qty, item.unitPrice))) return { error: t("edit.linePrice", { name }) };
+      if (qtyChanged || priceChanged) { item.total = Calc.calculateLineTotal(item.qty, item.unitPrice); linesChanged = true; }
+      if (line.origIndex !== items.length) linesChanged = true;   // moved or an earlier line removed
+      // Stock: the invoice's own record of what it took, against what the (possibly new) quantity takes.
+      if (product) {
+        bump(restore, product.id, lineStockTaken(orig));
+        bump(take, product.id, lineStockTaken(item));
+      }
+      items.push(item);
+    } else {
+      // ----- a line added now: made like a sale line, from the product as it is today -----
+      const product = findProduct(line.productId, d);
+      if (!product) return { error: t("sale.productMissing") };
+      const unit = line.sellingUnit;
+      const name = productLabel(product);
+      if (!SALE_LINE_UNITS.includes(unit)) return { error: t("sale.chooseUnit") };
+      if (unit === "m2" && Calc.suppliesInBoxes(product)) return { error: t("sale.areaInBoxes", { name: product.name }) };
+      const checked = Calc.validateQuantity(clean(line.qty), unit);
+      if (checked.error) return { error: t("edit.lineError", { name, error: checked.error }) };
+      const priced = Calc.getUnitPrice(product, unit);
+      if (priced.error) return { error: priced.error };
+      const taken = Calc.stockDeduction(product, checked.value, unit);
+      if (taken.error) return { error: taken.error };
+      const rawPrice = clean(line.unitPrice);
+      const typed = rawPrice === "" ? priced.value : Number(rawPrice);
+      if (!Number.isFinite(typed) || typed < 0) return { error: t("edit.linePrice", { name }) };
+      const unitPrice = Calc.roundMoney(typed);
+      const sold = {
+        productId: product.id, qty: Calc.cleanNumber(checked.value), sellingUnit: unit, unitPrice, listPrice: priced.value,
+        priceOverridden: unitPrice !== round2(priced.value), catalog: catalogOf(priced),
+      };
+      if (!Number.isFinite(Calc.calculateLineTotal(sold.qty, sold.unitPrice))) return { error: t("edit.linePrice", { name }) };
+      items.push(invoiceLineData(sold, product, taken.value));
+      bump(take, product.id, taken.value);
+      linesChanged = true;
+    }
+  }
+  if (!items.length) return { error: t("edit.noLines") };
+  // A kept line that was removed hands its stock back.
+  inv.items.forEach((orig, index) => {
+    if (used.has(index)) return;
+    const product = findProduct(orig.productId, d);
+    if (product) bump(restore, product.id, lineStockTaken(orig));
+  });
+  if (tracked && (items.length !== inv.items.length || items.some((i, n) => i.lineId !== inv.items[n].lineId || i.qty !== inv.items[n].qty))) return { error: t("edit.trackedLines") };
+
+  // ----- the discount and the tax -----
+  const adjust = {
+    discountType: edit.discountType === "percent" ? "percent" : "amount", discountValue: clean(edit.discountValue),
+    taxType: edit.taxType === "percent" ? "percent" : "amount", taxValue: clean(edit.taxValue),
+  };
+  for (const [type, value, negativeKey, percentKey] of [
+    [adjust.discountType, adjust.discountValue, "sale.discountNegative", "sale.discountPercent"],
+    [adjust.taxType, adjust.taxValue, "sale.taxNegative", "sale.taxPercent"],
+  ]) {
+    if (value === "") continue;
+    const v = Number(value);
+    if (!Number.isFinite(v) || v < 0) return { error: t(negativeKey) };
+    if (type === "percent" && v > 100) return { error: t(percentKey) };
+  }
+  const before = invoiceAdjustInputs(inv);
+  // Nothing typed (or 0) is the same whichever type is selected; otherwise the type and the number must both match.
+  const sameAdjust = (type, value, beforeType, beforeValue) => (toNumber(value) === 0 && toNumber(beforeValue) === 0) || (type === beforeType && toNumber(value) === toNumber(beforeValue));
+  const adjustChanged = !sameAdjust(adjust.discountType, adjust.discountValue, before.discountType, before.discountValue) ||
+    !sameAdjust(adjust.taxType, adjust.taxValue, before.taxType, before.taxValue);
+
+  const updated = { ...inv, customer: { ...(inv.customer || {}) }, items };
+  // A blank name is the walk-in customer, as on the Sell page. A detail an old invoice never had stays absent while it is blank.
+  const typedName = clean(edit.customer && edit.customer.name);
+  updated.customer.name = typedName || (inv.customer && inv.customer.name === "" ? "" : WALK_IN);
+  for (const key of ["phone", "address"]) {
+    const value = clean(edit.customer && edit.customer[key]);
+    if (value || key in updated.customer) updated.customer[key] = value;
+  }
+  const second = clean(edit.secondName);
+  if (second) updated.secondCustomer = { name: second }; else delete updated.secondCustomer;
+
+  if (linesChanged || adjustChanged) {
+    const totals = calculateTotals({ items, ...adjust });
+    if (!Number.isFinite(totals.total)) return { error: t("sale.totalInvalid") };
+    Object.assign(updated, totals, {
+      discountPercent: adjust.discountType === "percent" ? toNumber(adjust.discountValue) : null,
+      taxPercent: adjust.taxType === "percent" ? toNumber(adjust.taxValue) : null,
+    });
+  }
+
+  // Nothing at all changed: there is nothing to save.
+  if (Validation.sameValue(updated, inv)) return { skip: true, invoice: inv };
+  const now = new Date().toISOString();
+  updated.updatedAt = now;
+  updated.edits = [...(Array.isArray(inv.edits) ? inv.edits : []), { at: now, totalBefore: inv.total, totalAfter: updated.total }];
+
+  const stockChanges = new Map();
+  const result = { invoice: updated, stockChanges, overpaid: false };
+  // ----- the stock: given back and taken, per product, as one net change -----
+  for (const productId of new Set([...restore.keys(), ...take.keys()])) {
+    const product = findProduct(productId, d);
+    const available = Calc.cleanNumber(product.stock + (restore.get(productId) || 0));
+    const needed = take.get(productId) || 0;
+    if (!Calc.hasEnoughStock(available, needed)) {
+      return { ...result, error: t("edit.noStock", { name: product.name, needed: stockText(product, needed), available: stockText(product, available) }) };
+    }
+    const next = Math.max(0, Calc.cleanNumber(available - needed));
+    if (next !== product.stock) stockChanges.set(productId, next);
+  }
+  // ----- the money: payments stay, and can never be more than what is due -----
+  const paid = Validation.paidTotal(inv);
+  const due = round2(toNumber(updated.total) + Validation.carriedTotal(inv));
+  if (paid > due + 0.01) {
+    result.overpaid = true;
+    return { ...result, error: t("edit.overpaid", { paid: money(paid, inv.currency), due: money(due, inv.currency) }) };
+  }
+  // ----- what the database would refuse anyway, said plainly first -----
+  const why = Validation.invoiceProblem(updated);
+  if (why) return { ...result, error: t("edit.invalid", { number: inv.invoiceNumber, problem: why }) };
+  const history = Validation.deliveryHistoryProblem(inv, updated);
+  if (history) return { ...result, error: t("edit.invalid", { number: inv.invoiceNumber, problem: history }) };
+  const ledger = Validation.ledgerProblems(d.invoices.map((i) => (i.id === invoiceId ? updated : i)), d.debtTransfers || []);
+  if (ledger.length) return { ...result, error: ledger[0] };
+  return result;
+}
+
+// Saves a planned edit on the data draft `d`. All or nothing: any problem returns { error } and the draft is thrown away.
+function applyInvoiceEdit(d, invoiceId, edit) {
+  const plan = planInvoiceEdit(d, invoiceId, edit);
+  if (plan.error) return { error: plan.error };
+  if (plan.skip) return { skip: true, invoice: plan.invoice };
+  const index = d.invoices.findIndex((i) => i.id === invoiceId);
+  d.invoices[index] = plan.invoice;
+  for (const [productId, stock] of plan.stockChanges) findProduct(productId, d).stock = stock;
+  return { invoice: plan.invoice };
+}
+
+/* ---------- The Edit invoice screen ----------
+   state.invoiceEdit holds what is typed. Nothing is saved until Save changes, which sends it through applyInvoiceEdit(). */
+
+let editSerial = 0;
+
+function editInput(edit = state.invoiceEdit) {
+  return {
+    customer: { ...edit.customer },
+    secondName: edit.secondName,
+    lines: edit.lines.map((l) => ({ origIndex: l.origIndex, productId: l.productId, sellingUnit: l.sellingUnit, qty: l.qty, unitPrice: l.unitPrice })),
+    discountType: edit.discountType, discountValue: edit.discountValue, taxType: edit.taxType, taxValue: edit.taxValue,
+  };
+}
+
+// True when something was typed that is not on the saved invoice (what the "unsaved changes" warnings ask about).
+function editDirty() {
+  return Boolean(state.invoiceEdit) && JSON.stringify(editInput()) !== state.invoiceEdit.initial;
+}
+
+// Opens the edit screen for a saved invoice. { error } when it can not be edited now.
+function startEditInvoice(id) {
+  const inv = state.invoices.find((i) => i.id === id);
+  if (!inv) return { error: t("edit.gone") };
+  if (!canWrite()) { const error = blockedMessage(); notify(error, "error"); return { error }; }
+  const c = inv.customer || {};
+  const adjust = invoiceAdjustInputs(inv);
+  const edit = {
+    id,
+    fromPreview: Boolean(state.previewInvoice && state.previewInvoice.id === id),
+    baseItems: structuredClone(inv.items),
+    customer: { name: !c.name || c.name === WALK_IN ? "" : c.name, phone: c.phone || "", address: c.address || "" },
+    secondName: secondCustomerName(inv),
+    lines: inv.items.map((item, index) => ({ key: ++editSerial, origIndex: index, productId: item.productId, sellingUnit: item.sellingUnit, qty: String(item.qty), unitPrice: String(item.unitPrice), label: invoiceItemLabel(item), fresh: false })),
+    ...adjust,
+    pickId: null,
+    initial: "",
+  };
+  edit.initial = JSON.stringify(editInput(edit));
+  state.invoiceEdit = edit;
+  showView("editinvoice");
+  return {};
+}
+
+// The corrected invoice as it would be saved, worked out from what is typed (for the live preview and the summary).
+function editPlan() {
+  const edit = state.invoiceEdit;
+  return planInvoiceEdit(state, edit.id, { ...editInput(edit), baseItems: edit.baseItems });
+}
+
+function editPreviewInvoice() {
+  const edit = state.invoiceEdit;
+  const plan = editPlan();
+  return plan.invoice || state.invoices.find((i) => i.id === edit.id) || null;
+}
+
+function editLineHtml(line) {
+  const edit = state.invoiceEdit;
+  const inv = state.invoices.find((i) => i.id === edit.id);
+  const orig = line.origIndex != null ? inv.items[line.origIndex] : null;
+  const product = findProduct(line.productId);
+  const name = line.label;
+  const tracked = Validation.isTracked(inv);
+  const whole = Calc.isWholeUnit(line.sellingUnit);
+  const unit = line.sellingUnit;
+  const note = orig && !product ? t("edit.productGone", { name }) : "";
+  const qtyLocked = tracked && orig;
+  return `<tr data-key="${line.key}"${orig ? "" : ' class="edit-new"'}>` +
+    `<td><div>${esc(name)}</div>${note ? `<div class="muted small edit-line-note">${esc(note)}</div>` : ""}<div class="error small" data-row-error></div></td>` +
+    `<td class="num"><div class="qty-cell"><input class="qty-input" type="number" min="${whole ? 1 : 0}" step="${whole ? 1 : "any"}" value="${esc(line.qty)}" data-field="qty"${qtyLocked ? ` disabled title="${esc(t("edit.quantityFixed"))}"` : ""} aria-label="${esc(t("sell.qtyAria", { name }))}"><span class="muted small" data-qty-unit>${esc(unitLabel(unit, toNumber(line.qty)))}</span></div></td>` +
+    `<td class="num"><div class="price-cell"><input class="price-input" type="number" min="0" step="any" value="${esc(line.unitPrice)}" data-field="price" aria-label="${esc(t("sell.priceAria", { name, unit: t("sell.priceUnit", { currency: state.settings.currency, unit: unitLabel(unit, 1).toLowerCase() }) }))}"><span class="price-unit">${esc(t("sell.priceUnit", { currency: state.settings.currency, unit: unitLabel(unit, 1).toLowerCase() }))}</span></div></td>` +
+    `<td class="num" data-line-total>${esc(money(Calc.calculateLineTotal(toNumber(line.qty), toNumber(line.unitPrice))))}</td>` +
+    `<td class="num"><button type="button" class="btn small danger" data-action="edit-remove" aria-label="${esc(t("edit.removeLine", { name }))}"${tracked ? " disabled" : ""}>${esc(t("common.remove"))}</button></td></tr>`;
+}
+
+// Draws the whole screen from state.invoiceEdit (opening it, adding or removing a line).
+function renderInvoiceEdit() {
+  const edit = state.invoiceEdit;
+  if (!edit) return;
+  const inv = state.invoices.find((i) => i.id === edit.id);
+  if (!inv) return;
+  $("editHeading").textContent = t("edit.heading", { number: inv.invoiceNumber });
+  const tracked = Validation.isTracked(inv);
+  $("editNotes").hidden = !tracked;
+  $("editNotes").textContent = tracked ? t("edit.trackedNote") : "";
+  $("editName").value = edit.customer.name;
+  $("editPhone").value = edit.customer.phone;
+  $("editAddress").value = edit.customer.address;
+  $("editName2").value = edit.secondName;
+  $("editDiscountValue").value = edit.discountValue;
+  $("editDiscountType").value = edit.discountType;
+  $("editTaxValue").value = edit.taxValue;
+  $("editTaxType").value = edit.taxType;
+  $("editBody").innerHTML = edit.lines.map(editLineHtml).join("");
+  const addBox = $("editAdd");
+  addBox.disabled = tracked;
+  $("editSearch").disabled = tracked;
+  renderEditResults();
+  refreshEditLive();
+}
+
+// The product list under the "Add a product" search (the same matches as the Sell page).
+function renderEditResults() {
+  const edit = state.invoiceEdit;
+  const query = $("editSearch").value;
+  const box = $("editResults");
+  if (!edit || !query.trim()) { box.innerHTML = ""; return; }
+  const matches = findMatches(query);
+  box.innerHTML = matches.length
+    ? matches.map((p) => `<div class="result" role="option" data-id="${esc(p.id)}" aria-selected="${p.id === edit.pickId}">` +
+        `<div><div>${esc(productLabel(p))}</div></div><div class="price">${esc(priceLabel(p))}</div><div class="stock">${esc(t("stock.n", { n: stockLabel(p) }))}</div></div>`).join("")
+    : `<div class="empty"><p class="muted">${esc(t("results.noMatch", { query }))}</p></div>`;
+}
+
+// Updates the line totals, the summary, the problem line and the preview without redrawing the inputs (keeps focus).
+function refreshEditLive() {
+  const edit = state.invoiceEdit;
+  if (!edit) return;
+  for (const row of $("editBody").querySelectorAll("tr[data-key]")) {
+    const line = edit.lines.find((l) => String(l.key) === row.dataset.key);
+    if (!line) continue;
+    row.querySelector("[data-line-total]").textContent = money(Calc.calculateLineTotal(toNumber(line.qty), toNumber(line.unitPrice)));
+    row.querySelector("[data-qty-unit]").textContent = unitLabel(line.sellingUnit, toNumber(line.qty));
+  }
+  const plan = editPlan();
+  const inv = state.invoices.find((i) => i.id === edit.id);
+  const shown = plan.invoice || inv;
+  const pay = paymentInfo(shown);
+  const cur = shown.currency;
+  const row = (label, value, cls) => `<div${cls ? ` class="${cls}"` : ""}><span>${esc(label)}</span><span>${esc(value)}</span></div>`;
+  $("editSummary").innerHTML =
+    row(t("sell.subtotal"), money(toNumber(shown.subtotal), cur)) + row(t("sell.discount"), money(toNumber(shown.discount), cur)) + row(t("sell.tax"), money(toNumber(shown.tax), cur)) +
+    row(t("edit.newDue"), money(pay.due, cur), "grand") +
+    row(t("edit.paid"), money(pay.paid, cur)) +
+    row(t("edit.remainingAfter"), money(pay.remaining, cur), plan.overpaid ? "due edit-warn" : "due") +
+    row(t("edit.statusAfter"), pay.status);
+  $("editError").textContent = plan.error || "";
+  $("editSave").disabled = Boolean(plan.error);
+  if (state.view === "editinvoice") renderInvoice();
+}
+
+// Adds the product picked in the search to the lines (the same product and unit joins the line already there).
+function addEditLine() {
+  const edit = state.invoiceEdit;
+  const product = edit && findProduct(edit.pickId);
+  if (!product) return { error: t("edit.chooseProduct") };
+  const typedUnit = SALE_LINE_UNITS.includes($("editAddUnit").value) ? $("editAddUnit").value : "piece";
+  const checked = Calc.validateQuantity($("editAddQty").value.trim(), typedUnit);
+  if (checked.error) return { error: checked.error };
+  // Same rule as the Sell page: an area typed for a product supplied in boxes becomes whole boxes, once, here.
+  const supplied = Calc.toSuppliedQuantity(product, checked.value, typedUnit);
+  if (supplied.error) return { error: supplied.error };
+  const priced = Calc.getUnitPrice(product, supplied.unit);
+  if (priced.error) return { error: priced.error };
+  const taken = Calc.stockDeduction(product, supplied.qty, supplied.unit);
+  if (taken.error) return { error: taken.error };
+  const twin = edit.lines.find((l) => l.productId === product.id && l.sellingUnit === supplied.unit);
+  if (twin) twin.qty = String(Calc.cleanNumber(toNumber(twin.qty) + supplied.qty));
+  else edit.lines.push({ key: ++editSerial, origIndex: null, productId: product.id, sellingUnit: supplied.unit, qty: String(supplied.qty), unitPrice: String(priced.value), label: productLabel(product), fresh: true });
+  return { ok: true, converted: supplied.converted ? { requested: supplied.requested, exact: supplied.exact, boxes: supplied.qty, area: supplied.area } : null };
+}
+
+function removeEditLine(key) {
+  const edit = state.invoiceEdit;
+  if (!edit) return false;
+  const before = edit.lines.length;
+  edit.lines = edit.lines.filter((l) => String(l.key) !== String(key));
+  return edit.lines.length < before;
+}
+
+// Where the person goes when the edit ends: back to the saved invoice they were looking at, or to the list.
+function leaveEdit(id, fromPreview, saved) {
+  state.invoiceEdit = null;
+  if (saved || fromPreview) viewInvoice(id);
+  else showView("invoices");
+}
+
+function cancelInvoiceEdit() {
+  const edit = state.invoiceEdit;
+  if (!edit) return { ignored: true };
+  if (editDirty() && !confirm(t("edit.leaveConfirm"))) return { stayed: true };
+  leaveEdit(edit.id, edit.fromPreview, false);
+  return { cancelled: true };
+}
+
+// Save changes: ONE transaction for the invoice and the stock (see applyInvoiceEdit). On any problem nothing is changed and
+// the screen stays open with what was typed.
+function saveInvoiceEdit() {
+  return guard(async () => {
+    const edit = state.invoiceEdit;
+    if (!edit) return;
+    const input = { ...editInput(edit), baseItems: edit.baseItems };
+    const r = await commit((d) => applyInvoiceEdit(d, edit.id, input));
+    if (r.error) {
+      showError("editError", r.error);
+      notify(r.error, "error");
+      return;
+    }
+    const number = (state.invoices.find((i) => i.id === edit.id) || {}).invoiceNumber || "";
+    leaveEdit(edit.id, edit.fromPreview, true);
+    notify(t(r.skip ? "edit.nothingChanged" : "edit.saved", { number }));
+    onDebtDataChanged();
+  });
+}
+
 function viewInvoice(id) {
   const inv = state.invoices.find((i) => i.id === id);
   if (!inv) return;
@@ -1732,8 +2283,16 @@ function printInvoice(invoice) {
   // The document title becomes the suggested file name when saving as PDF.
   const original = document.title;
   document.title = (state.previewInvoice || draftInvoice()).invoiceNumber;
-  window.addEventListener("afterprint", () => { document.title = original; }, { once: true });
-  window.print();
+  const restore = () => { document.title = original; };
+  window.addEventListener("afterprint", restore, { once: true });
+  try {
+    window.print();
+  } catch (e) {
+    // The print dialog could not open (blocked by the browser): put the title back and let the caller say so.
+    if (typeof window.removeEventListener === "function") window.removeEventListener("afterprint", restore);
+    restore();
+    throw e;
+  }
 }
 
 /* ==========================================================================
@@ -1998,10 +2557,7 @@ function refreshLive() {
 
 function invoiceHtml(inv) {
   const cur = inv.currency || state.settings.currency;
-  const biz = inv.business || {
-    name: state.settings.businessName, address: state.settings.address,
-    phone: state.settings.phone, email: state.settings.email,
-  };
+  const biz = inv.business || Validation.businessSnapshot(state.settings);
   const cust = inv.customer || { name: WALK_IN, phone: "", address: "" };
   const num = (n) => numberFormat.format(toNumber(n));
   const pct = (p) => (p ? ` (${numberFormat.format(p)}%)` : "");
@@ -2070,7 +2626,7 @@ function invoiceHtml(inv) {
     : "";
 
   return `<header class="inv-head">
-      <div>${logo}<div class="inv-biz-name">${esc(biz.name)}</div>${line(biz.address)}${line(biz.phone)}${line(biz.email)}</div>
+      <div>${logo}<div class="inv-biz-name">${esc(biz.name)}</div>${line(biz.address)}${businessPhonesHtml(biz)}${line(biz.email)}</div>
       <div class="inv-title">${esc(t("inv.title"))}</div>
     </header>
     <div class="inv-meta">
@@ -2098,10 +2654,7 @@ function invoiceHtml(inv) {
 // prices and no amounts, it says which invoice the goods were already sold on, and it is numbered after that invoice
 // (INV-000030 -> COL-000030). Payment is recorded on the invoice only, so these goods can not be charged a second time.
 function collectionHtml(inv) {
-  const biz = inv.business || {
-    name: state.settings.businessName, address: state.settings.address,
-    phone: state.settings.phone, email: state.settings.email,
-  };
+  const biz = inv.business || Validation.businessSnapshot(state.settings);
   const cust = inv.customer || { name: WALK_IN, phone: "", address: "" };
   const line = (text) => (text ? `<div>${esc(text)}</div>` : "");
   const logo = state.settings.logo ? `<img class="inv-logo" src="${esc(state.settings.logo)}" alt="${esc(t("logo.alt"))}">` : "";
@@ -2118,7 +2671,7 @@ function collectionHtml(inv) {
     return `<div class="inv-pay"><span class="when">${esc(formatDateTime(d.date))}</span><span>${esc(what)}: ${esc(things)}</span></div>`;
   }).join("");
   return `<header class="inv-head">
-      <div>${logo}<div class="inv-biz-name">${esc(biz.name)}</div>${line(biz.address)}${line(biz.phone)}${line(biz.email)}</div>
+      <div>${logo}<div class="inv-biz-name">${esc(biz.name)}</div>${line(biz.address)}${businessPhonesHtml(biz)}${line(biz.email)}</div>
       <div class="inv-title collect-title">${esc(t("collect.docTitle"))}</div>
     </header>
     <div class="collect-banner">${esc(t("collect.docNotice", { invoice: inv.invoiceNumber }))}</div>
@@ -2141,7 +2694,7 @@ function collectionHtml(inv) {
 
 // Payment box above a saved invoice: totals plus the "Add Payment" control.
 function renderPayBox() {
-  const inv = state.previewInvoice;
+  const inv = state.view === "editinvoice" ? null : state.previewInvoice;
   $("payBox").hidden = !inv;
   if (!inv) return;
   const cur = inv.currency || state.settings.currency;
@@ -2167,7 +2720,7 @@ function renderPayBox() {
 // Box above a saved invoice that was sold in several deliveries: payment and delivery status side by side (never mixed),
 // what is left to collect per line, and where the warehouse records a collection.
 function renderDeliveryBox() {
-  const inv = state.previewInvoice;
+  const inv = state.view === "editinvoice" ? null : state.previewInvoice;
   const detail = inv ? Validation.deliveryDetail(inv) : null;
   const box = $("deliveryBox");
   box.hidden = !(detail && detail.tracked);
@@ -2192,15 +2745,21 @@ function renderDeliveryBox() {
 }
 
 function renderInvoice() {
+  // While an invoice is being corrected the preview shows the corrected invoice (not saved yet) and nothing can be printed from it.
+  const editing = state.view === "editinvoice" && state.invoiceEdit;
   const saved = state.previewInvoice;
-  $("invoice").innerHTML = invoiceHtml(saved || draftInvoice());
-  $("previewStatus").textContent = t(saved ? "preview.saved" : "preview.live");
-  $("backToSale").hidden = !saved;
+  const shown = editing ? editPreviewInvoice() : saved || draftInvoice();
+  $("invoice").innerHTML = invoiceHtml(shown);
+  $("previewStatus").textContent = t(editing ? "edit.previewStatus" : saved ? "preview.saved" : "preview.live");
+  $("backToSale").hidden = Boolean(editing) || !saved;
+  $("editInvoiceBtn").hidden = Boolean(editing) || !saved;
+  $("printBtn").hidden = Boolean(editing);
   renderPayBox();
   renderDeliveryBox();
 }
 
 function renderStock() {
+  renderProductSuggestions();   // the stock list changed: the suggestions follow it
   const hasProducts = state.products.length > 0;
   const list = searchProducts($("stockFilter").value);
   const empty = $("stockEmpty");
@@ -2253,26 +2812,92 @@ function renderRestockInfo() {
     (!checked.error ? t("restock.after", { n: stockText(p, Calc.cleanNumber(p.stock + checked.value)) }) : "");
 }
 
-function searchInvoices(query) {
+// What the history screen shows: the search box, the two filters and the sort, which all work together.
+// Payment and delivery are independent filters. "Delivered" = every item handed over (an invoice that does not track deliveries
+// handed everything over at the sale); "Not delivered" = something is still to collect (partly delivered included).
+const invoiceView = { pay: "all", delivery: "all", sortKey: null, sortDir: 1 };
+
+const PAYMENT_RANK = { unpaid: 0, partial: 1, paid: 2, transferred: 3 };
+
+function invoiceMatchesView(inv, view) {
+  if (view.pay !== "all" && paymentInfo(inv).cls !== view.pay) return false;
+  if (view.delivery !== "all") {
+    const delivered = Validation.deliveryDetail(inv).status === "complete";
+    if (delivered !== (view.delivery === "delivered")) return false;
+  }
+  return true;
+}
+
+// The sort column: "number" (the number in INV-000012, so 9 comes before 10), "date" (by time), "customer" (A-Z, case-insensitive),
+// "total" (the amount due, as a number) or "status" (unpaid, partially paid, paid). Ties keep the newest invoice first.
+function invoiceSortValue(inv, key) {
+  if (key === "number") return Validation.invoiceSequence(inv.invoiceNumber);
+  if (key === "date") return Date.parse(inv.date) || 0;
+  if (key === "customer") return customerLabel(inv.customer && inv.customer.name).toLowerCase();
+  if (key === "total") return paymentInfo(inv).due;
+  if (key === "status") return PAYMENT_RANK[paymentInfo(inv).cls] ?? 9;
+  return 0;
+}
+
+function sortInvoices(list, key, dir) {
+  if (!key) return list;
+  return [...list].sort((a, b) => {
+    const x = invoiceSortValue(a, key);
+    const y = invoiceSortValue(b, key);
+    const r = typeof x === "string" ? x.localeCompare(y) : x - y;
+    return r * dir || Validation.invoiceSequence(b.invoiceNumber) - Validation.invoiceSequence(a.invoiceNumber);
+  });
+}
+
+function searchInvoices(query, view = invoiceView) {
   const terms = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
-  return [...state.invoices].reverse().filter((inv) => {
+  const found = [...state.invoices].reverse().filter((inv) => {
     const c = inv.customer || {};
     const phone = String(c.phone || "");
     // The stored walk-in name and its translation are both searchable.
     // Both customer names are searched; each one matches on its own, whichever field holds it.
     const haystack = (inv.invoiceNumber + " " + (c.name || WALK_IN) + " " + customerLabel(c.name) + " " + secondCustomerName(inv) + " " + phone + " " + phone.replace(/\s+/g, "")).toLowerCase();
-    return terms.every((t) => haystack.includes(t));
+    return terms.every((t) => haystack.includes(t)) && invoiceMatchesView(inv, view);
   });
+  return sortInvoices(found, view.sortKey, view.sortDir);
+}
+
+function setInvoiceSort(key) {
+  if (invoiceView.sortKey === key) invoiceView.sortDir = -invoiceView.sortDir;
+  else { invoiceView.sortKey = key; invoiceView.sortDir = 1; }
+  renderInvoices();
+}
+
+function clearInvoiceFilters() {
+  invoiceView.pay = "all";
+  invoiceView.delivery = "all";
+  invoiceView.sortKey = null;
+  invoiceView.sortDir = 1;
+  $("invoiceFilter").value = "";
+  $("invoicePayFilter").value = "all";
+  $("invoiceDeliveryFilter").value = "all";
+  renderInvoices();
 }
 
 function renderInvoices() {
   const hasInvoices = state.invoices.length > 0;
-  const list = searchInvoices($("invoiceFilter").value);
+  const query = $("invoiceFilter").value;
+  const list = searchInvoices(query);
+  const narrowed = Boolean(query.trim()) || invoiceView.pay !== "all" || invoiceView.delivery !== "all" || invoiceView.sortKey !== null;
   $("invoiceFilter").hidden = !hasInvoices;
+  $("invoiceFilters").hidden = !hasInvoices;
+  $("invoiceClear").hidden = !narrowed;
+  $("invoiceCount").textContent = hasInvoices ? t("invoices.count", { shown: list.length, total: state.invoices.length }) : "";
+  document.querySelectorAll("[data-sort-th]").forEach((th) => {
+    const on = th.dataset.sortTh === invoiceView.sortKey;
+    if (on) th.setAttribute("aria-sort", invoiceView.sortDir > 0 ? "ascending" : "descending");
+    else th.removeAttribute("aria-sort");
+    th.querySelector(".sort-mark").textContent = on ? (invoiceView.sortDir > 0 ? "▲" : "▼") : "";
+  });
   $("invoiceTable").hidden = list.length === 0;
   $("invoiceEmpty").hidden = list.length > 0;
   $("invoiceEmpty").innerHTML = hasInvoices
-    ? `<p class="muted">${esc(t("invoices.noMatch", { query: $("invoiceFilter").value }))}</p>`
+    ? `<p class="muted">${esc(query.trim() ? t("invoices.noMatch", { query }) : t("invoices.noMatchFilters"))}</p>`
     : `<p><strong>${esc(t("invoices.none"))}</strong></p><p class="muted">${esc(t("invoices.noneHint"))}</p>`;
   $("invoiceBody").innerHTML = list.map((inv) => {
     const pay = paymentInfo(inv);
@@ -2299,6 +2924,7 @@ function renderInvoices() {
       `<button type="button" class="btn small" data-action="pay"${pay.remaining <= 0 ? " disabled" : ""}>${esc(t("invoices.addPayment"))}</button>` +
       (delivery.toCollect.length ? `<button type="button" class="btn small" data-action="collect">${esc(t("invoices.collect"))}</button>` : "") +
       `<button type="button" class="btn small" data-action="print">${esc(t("invoices.print"))}</button>` +
+      `<button type="button" class="btn small" data-action="edit">${esc(t("invoices.edit"))}</button>` +
       `<button type="button" class="btn small danger" data-action="delete">${esc(t("common.delete"))}</button>` +
       `</div></td></tr>`;
   }).join("");
@@ -2308,11 +2934,76 @@ function applyCurrency() {
   document.querySelectorAll("[data-currency]").forEach((el) => { el.textContent = state.settings.currency; });
 }
 
+/* ---------- The business phone numbers (Settings -> Business details) ----------
+   A list of text boxes with an "Add phone number" button. What is typed lives in state.phoneRows until Save Settings, which
+   saves the whole list in the settings (and the first number as the older single `phone`, see validation.js). */
+
+let phoneSerial = 0;
+
+// The rows for the numbers a business has now (a business saved before the list existed has its one number); always at least one row.
+function phoneRowsFrom(settings) {
+  const list = Validation.businessPhones(settings);
+  return (list.length ? list : [""]).map((value) => ({ rowId: ++phoneSerial, value }));
+}
+
+function renderPhoneRows() {
+  const rows = state.phoneRows;
+  $("sPhones").innerHTML = rows.map((row, i) =>
+    `<div class="phone-row" data-row="${row.rowId}">` +
+    `<input type="text" inputmode="tel" class="phone-input" value="${esc(row.value)}" maxlength="${Validation.MAX_PHONE_LENGTH}" aria-label="${esc(t("settings.phoneN", { n: i + 1 }))}" autocomplete="off">` +
+    `<button type="button" class="btn small" data-action="remove-phone" aria-label="${esc(t("settings.removePhoneN", { n: i + 1 }))}"${rows.length < 2 ? " disabled" : ""}>${esc(t("common.remove"))}</button>` +
+    `</div>`
+  ).join("");
+  $("addPhone").disabled = rows.length >= Validation.MAX_BUSINESS_PHONES;
+}
+
+function addPhoneRow() {
+  if (state.phoneRows.length >= Validation.MAX_BUSINESS_PHONES) return null;
+  const row = { rowId: ++phoneSerial, value: "" };
+  state.phoneRows.push(row);
+  return row;
+}
+
+// At least one row always stays (an empty one means no phone number).
+function removePhoneRow(rowId) {
+  if (state.phoneRows.length < 2) return false;
+  state.phoneRows = state.phoneRows.filter((r) => String(r.rowId) !== String(rowId));
+  return true;
+}
+
+function setPhoneRow(rowId, value) {
+  const row = state.phoneRows.find((r) => String(r.rowId) === String(rowId));
+  if (row) row.value = String(value == null ? "" : value);
+}
+
+// Save Settings: the business details, with every phone number typed (blank rows and repeats of the same number left out).
+function saveBusinessSettings() {
+  return guard(async () => {
+    const phones = Validation.cleanPhoneList(state.phoneRows.map((r) => r.value)).slice(0, Validation.MAX_BUSINESS_PHONES);
+    const r = await commit((d) => {
+      d.settings = {
+        ...d.settings,
+        businessName: $("sName").value.trim(),
+        address: $("sAddress").value.trim(),
+        phone: phones[0] || "",
+        phones,
+        email: $("sEmail").value.trim(),
+        currency: $("sCurrency").value.trim() || CURRENCY,
+      };
+    });
+    if (r.error) { notify(r.error, "error"); return; }
+    notify(t("settings.saved"));
+    fillSettingsForm();
+    renderAll();
+  });
+}
+
 function fillSettingsForm() {
   const s = state.settings;
   $("sName").value = s.businessName;
   $("sAddress").value = s.address;
-  $("sPhone").value = s.phone;
+  state.phoneRows = phoneRowsFrom(s);
+  renderPhoneRows();
   $("sEmail").value = s.email;
   $("sCurrency").value = s.currency;
   renderLogoSetting();
@@ -2542,6 +3233,12 @@ function renderStorage() {
 
 // Called after the in-memory data was replaced from the file, a backup or another window.
 function refreshAfterLoad() {
+  // The invoice being corrected was deleted in another window: the edit has nothing left to change.
+  if (state.invoiceEdit && !state.invoices.some((i) => i.id === state.invoiceEdit.id)) {
+    state.invoiceEdit = null;
+    showView("invoices");
+    notify(t("edit.gone"), "error");
+  }
   if (state.editingId && !findProduct(state.editingId)) resetProductForm();
   if (state.selectedId && !findProduct(state.selectedId)) state.selectedId = null;
   const notes = syncSaleWithProducts();
@@ -2567,6 +3264,7 @@ function renderAll() {
   renderInvoice();
   PurchasesUI.render();
   renderDebtUi();
+  if (state.view === "editinvoice" && state.invoiceEdit) renderInvoiceEdit();
 }
 
 /* ==========================================================================
@@ -2893,6 +3591,11 @@ function rememberedView() {
 }
 
 function showView(name, options) {
+  // Leaving the edit screen with typed changes asks first; leaving with none just closes it.
+  if (state.view === "editinvoice" && name !== "editinvoice" && state.invoiceEdit) {
+    if (editDirty() && !confirm(t("edit.leaveConfirm"))) return false;
+    state.invoiceEdit = null;
+  }
   const keepPreview = options && options.keepPreview;
   const previous = state.view;
   state.view = name;
@@ -2903,7 +3606,7 @@ function showView(name, options) {
     else b.removeAttribute("aria-current");
   });
   $("app").dataset.view = name;
-  rememberView(name);
+  if (name !== "editinvoice") rememberView(name);
 
   let notes = [];
   if (name === "sell") {
@@ -2914,6 +3617,7 @@ function showView(name, options) {
 
   renderAll();
   if (notes.length) notify(notes.join(" "), "error");
+  return true;
 }
 
 function goToAddProduct() {
@@ -2936,6 +3640,12 @@ function bindEvents() {
   const productFields = $("productFields");
   productFields.innerHTML = stockForm.html();
   for (const type of ["input", "change", "click"]) productFields.addEventListener(type, (e) => stockForm.handle(e));
+  productFields.addEventListener("input", (e) => { if (e.target && (e.target.id === "pName" || e.target.id === "pTileSize")) renderProductSuggestions(); });
+  productFields.addEventListener("click", (e) => {
+    const btn = e.target && e.target.closest && e.target.closest("[data-similar]");
+    const item = btn && btn.closest("[data-id]");
+    if (item) useSuggestion(item.dataset.id, btn.dataset.similar);
+  });
 
   // Navigation and shared buttons
   document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => {
@@ -3187,6 +3897,13 @@ function bindEvents() {
 
   $("clearSale").addEventListener("click", clearSale);
   $("completeSale").addEventListener("click", completeSale);
+  // The question after a sale. Esc means Later. Holding Enter down must not press a button again, and a second activation is
+  // ignored anyway (saleDoneAction clears what is pending first).
+  for (const [id, action] of [["saleDonePrint", "print"], ["saleDoneNew", "new"], ["saleDoneLater", "later"]]) {
+    $(id).addEventListener("click", () => saleDoneAction(action));
+    $(id).addEventListener("keydown", (e) => { if (e.key === "Enter" && e.repeat) e.preventDefault(); });
+  }
+  $("saleDoneDialog").addEventListener("cancel", (e) => { e.preventDefault(); saleDoneAction("later"); });
 
   // Stock: product form
   const productForm = $("productForm");
@@ -3254,10 +3971,15 @@ function bindEvents() {
       if (first) first.focus();
     }
     else if (btn.dataset.action === "print") printInvoice(state.invoices.find((i) => i.id === id));
+    else if (btn.dataset.action === "edit") startEditInvoice(id);
     else if (btn.dataset.action === "delete") deleteInvoice(id);
   });
 
   $("invoiceFilter").addEventListener("input", renderInvoices);
+  $("invoicePayFilter").addEventListener("change", () => { invoiceView.pay = $("invoicePayFilter").value; renderInvoices(); });
+  $("invoiceDeliveryFilter").addEventListener("change", () => { invoiceView.delivery = $("invoiceDeliveryFilter").value; renderInvoices(); });
+  $("invoiceClear").addEventListener("click", clearInvoiceFilters);
+  document.querySelectorAll("[data-sort]").forEach((btn) => btn.addEventListener("click", () => setInvoiceSort(btn.dataset.sort)));
 
   // Add a payment to the invoice shown in the preview
   $("payForm").addEventListener("submit", (e) => {
@@ -3308,6 +4030,72 @@ function bindEvents() {
   });
   $("collectPrint").addEventListener("click", () => { if (state.previewInvoice) printCollection(state.previewInvoice.id); });
 
+  // Edit a saved invoice
+  $("editInvoiceBtn").addEventListener("click", () => { if (state.previewInvoice) startEditInvoice(state.previewInvoice.id); });
+  const editFields = { editName: ["customer", "name"], editPhone: ["customer", "phone"], editAddress: ["customer", "address"] };
+  for (const [id, [group, key]] of Object.entries(editFields)) {
+    $(id).addEventListener("input", () => { if (state.invoiceEdit) { state.invoiceEdit[group][key] = $(id).value; refreshEditLive(); } });
+  }
+  $("editName2").addEventListener("input", () => { if (state.invoiceEdit) { state.invoiceEdit.secondName = $("editName2").value; refreshEditLive(); } });
+  for (const [id, key] of Object.entries({ editDiscountValue: "discountValue", editDiscountType: "discountType", editTaxValue: "taxValue", editTaxType: "taxType" })) {
+    $(id).addEventListener("input", () => { if (state.invoiceEdit) { state.invoiceEdit[key] = $(id).value; refreshEditLive(); } });
+  }
+  $("editBody").addEventListener("input", (e) => {
+    const input = e.target.closest("input[data-field]");
+    if (!input || !state.invoiceEdit) return;
+    const line = state.invoiceEdit.lines.find((l) => String(l.key) === input.closest("tr").dataset.key);
+    if (!line) return;
+    line[input.dataset.field === "qty" ? "qty" : "unitPrice"] = input.value;
+    refreshEditLive();
+  });
+  $("editBody").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-action='edit-remove']");
+    if (!btn) return;
+    removeEditLine(btn.closest("tr").dataset.key);
+    renderInvoiceEdit();
+  });
+  $("editSearch").addEventListener("input", () => {
+    if (!state.invoiceEdit) return;
+    const matches = findMatches($("editSearch").value);
+    state.invoiceEdit.pickId = matches.length ? matches[0].id : null;
+    showError("editAddError", "");
+    renderEditResults();
+    const p = findProduct(state.invoiceEdit.pickId);
+    if (p) $("editAddUnit").value = Calc.defaultSellingUnit(p);
+  });
+  $("editResults").addEventListener("click", (e) => {
+    const row = e.target.closest(".result");
+    if (!row || !state.invoiceEdit) return;
+    state.invoiceEdit.pickId = row.dataset.id;
+    const p = findProduct(row.dataset.id);
+    if (p) $("editAddUnit").value = Calc.defaultSellingUnit(p);
+    renderEditResults();
+    $("editAddQty").focus();
+    $("editAddQty").select();
+  });
+  $("editAdd").addEventListener("click", () => {
+    const r = addEditLine();
+    if (r.error) { showError("editAddError", r.error); return; }
+    showError("editAddError", "");
+    if (r.converted) {
+      const c = r.converted;
+      notify(I18n.tn("sale.areaToBoxes", c.boxes, { requested: numberFormat.format(c.requested), exact: numberFormat.format(c.exact), area: numberFormat.format(c.area) }));
+    }
+    state.invoiceEdit.pickId = null;
+    $("editSearch").value = "";
+    $("editAddQty").value = 1;
+    renderInvoiceEdit();
+    $("editSearch").focus();
+  });
+  $("editForm").addEventListener("submit", (e) => { e.preventDefault(); saveInvoiceEdit(); });
+  $("editCancel").addEventListener("click", cancelInvoiceEdit);
+  // Closing or reloading the page with typed changes asks first.
+  window.addEventListener("beforeunload", (e) => {
+    if (!editDirty()) return;
+    e.preventDefault();
+    e.returnValue = "";
+  });
+
   // Preview
   $("printBtn").addEventListener("click", () => printInvoice());
   $("backToSale").addEventListener("click", () => {
@@ -3318,22 +4106,22 @@ function bindEvents() {
   // Settings
   $("settingsForm").addEventListener("submit", (e) => {
     e.preventDefault();
-    guard(async () => {
-      const r = await commit((d) => {
-        d.settings = {
-          ...d.settings,
-          businessName: $("sName").value.trim(),
-          address: $("sAddress").value.trim(),
-          phone: $("sPhone").value.trim(),
-          email: $("sEmail").value.trim(),
-          currency: $("sCurrency").value.trim() || CURRENCY,
-        };
-      });
-      if (r.error) { notify(r.error, "error"); return; }
-      notify(t("settings.saved"));
-      fillSettingsForm();
-      renderAll();
-    });
+    saveBusinessSettings();
+  });
+  $("sPhones").addEventListener("input", (e) => {
+    const row = e.target.closest(".phone-row");
+    if (row) setPhoneRow(row.dataset.row, e.target.value);
+  });
+  $("sPhones").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-action='remove-phone']");
+    if (btn && removePhoneRow(btn.closest(".phone-row").dataset.row)) renderPhoneRows();
+  });
+  $("addPhone").addEventListener("click", () => {
+    const row = addPhoneRow();
+    if (!row) return;
+    renderPhoneRows();
+    const box = $("sPhones").querySelector(`[data-row="${row.rowId}"] input`);
+    if (box) box.focus();
   });
 
   // Language
@@ -3467,6 +4255,12 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     applyCollection, recordCollection, collectionHtml, renderDeliveryBox, qtyText,
     viewInvoice, clearSale, draftInvoice, refreshAfterLoad, renderInvoices, renderInvoice, refreshLive,
     getDebtUi: () => state.debtUi,
+    productSuggestions, renderProductSuggestions, useSuggestion, searchInvoices, setInvoiceSort, clearInvoiceFilters, invoiceView, planInvoiceEdit, applyInvoiceEdit, lineStockTaken, startEditInvoice, editInput, editDirty, editPlan, addEditLine, removeEditLine,
+    saveInvoiceEdit, cancelInvoiceEdit, renderInvoiceEdit, refreshEditLive, getInvoiceEdit: () => state.invoiceEdit,
+    addPhoneRow, removePhoneRow, setPhoneRow, saveBusinessSettings, fillSettingsForm, businessPhonesHtml,
+    saleDoneAction, openSaleDoneDialog, getSaleDone: () => state.saleDone, printInvoice,
+    businessPhonesHtml, fillSettingsForm, saveBusinessSettings, addPhoneRow, removePhoneRow, setPhoneRow, renderPhoneRows,
+    getPhoneRows: () => state.phoneRows,
   });
 } else {
   bindEvents();

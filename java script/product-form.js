@@ -203,6 +203,7 @@
                 <label for="${ids.name}"><span data-i18n="stock.productName">${esc(t("stock.productName"))}</span> <span class="req" aria-hidden="true">*</span></label>
                 <input type="text" id="${ids.name}" autocomplete="off" aria-required="true"${attr("name")}>
               </div>
+              ${prefix === "p" ? `<div class="similar-box" id="productSimilar" aria-live="polite" hidden></div>` : ""}
               <div class="field">
                 <label for="${ids.productType}" data-i18n="stock.productType">${esc(t("stock.productType"))}</label>
                 <select id="${ids.productType}">${typeOptions}</select>

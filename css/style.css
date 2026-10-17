@@ -138,7 +138,7 @@ main {
   padding: 20px 20px 20px 0;
   overflow-y: auto;
 }
-.app:not([data-view="sell"]) .preview-panel { display: none; }
+.app:not([data-view="sell"]):not([data-view="editinvoice"]) .preview-panel { display: none; }
 
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
@@ -721,3 +721,56 @@ input:disabled, select:disabled, textarea:disabled { background: #f1f3f6; color:
   .collection-print .inv-sub { color: #555; font-size: 9pt; }
   html[data-paper="a5"] .collection-print { padding: 10mm; font-size: 10pt; }
 }
+
+/* ---------- Several phone numbers: Settings list, supplier contacts, printed business header ---------- */
+
+.phone-rows, .contact-rows { display: grid; gap: 6px; margin-bottom: 8px; }
+.phone-row { display: flex; gap: 8px; align-items: center; }
+.phone-row .phone-input { flex: 1 1 auto; min-width: 0; }
+.contact-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.contacts-hint { margin: 0 0 6px; }
+@media (max-width: 720px) {
+  .contact-row { grid-template-columns: 1fr auto; }
+  .contact-row .contact-name { grid-column: 1 / -1; }
+}
+/* On the invoice the numbers share one line and wrap between numbers, never inside one. */
+.inv-phones { line-height: 1.35; }
+.inv-phone { white-space: nowrap; }
+.inv-sep { color: #555; }
+
+/* ---------- The question after a sale ---------- */
+
+.sale-done-dialog { width: min(420px, calc(100vw - 24px)); padding: 22px 22px 18px; text-align: center; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--text); background: var(--panel); }
+.sale-done-dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+.sale-done-icon { display: inline-flex; align-items: center; justify-content: center; width: 52px; height: 52px; margin-bottom: 8px; border-radius: 50%; color: #1b6e3c; background: #e7f4ec; }
+.sale-done-dialog h2 { margin: 0 0 2px; font-size: 18px; }
+.sale-done-dialog p { margin: 2px 0; }
+.sale-done-question { margin-top: 10px !important; }
+.sale-done-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 16px; }
+.sale-done-actions .btn { min-width: 112px; }
+.sale-done-actions .btn.primary { min-width: 140px; }
+
+/* ---------- Editing a saved invoice ---------- */
+
+.edit-add { margin-top: 12px; }
+.edit-add-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 8px; }
+.edit-add-row .add-qty input { width: 110px; }
+.edit-notes-list { margin: 0; padding-left: 18px; }
+.table tr.edit-new td:first-child { border-left: 3px solid var(--accent, #1b6e3c); }
+.edit-line-note { margin-top: 2px; }
+.totals .edit-warn { color: var(--danger); font-weight: 600; }
+
+/* ----- Invoice history: filters and sortable headers ----- */
+.invoice-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.invoice-filters select { width: auto; min-width: 140px; }
+.invoice-filters .muted { margin-left: auto; }
+.table th[aria-sort] .th-sort { color: var(--text); }
+.sort-mark { display: inline-block; min-width: 1em; margin-left: 4px; }
+
+/* ----- Stock form: similar products ----- */
+.similar-box { margin: -4px 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2, transparent); }
+.similar-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.similar-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.similar-text { display: flex; flex-direction: column; min-width: 0; }
+.similar-same { color: var(--warn, #b45309); }
+.similar-actions { display: flex; gap: 6px; }

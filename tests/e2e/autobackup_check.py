@@ -17,6 +17,7 @@ It uses a brand new browser profile and a disposable IndexedDB, so no real busin
 import json, os, subprocess, sys, tempfile, time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+from e2e_common import SKIP_SALE_DIALOG
 
 ROOT = Path(__file__).resolve().parents[2]
 PORT = int(os.environ.get("INVOISY_PORT", "8765"))
@@ -115,6 +116,7 @@ try:
             ctx = p.chromium.launch_persistent_context(PROFILE, accept_downloads=True)
             ctx.add_init_script(INIT)
             page = ctx.new_page()
+            page.add_init_script(SKIP_SALE_DIALOG)
             page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
             page.on("pageerror", lambda e: errors.append("PAGEERROR " + str(e)))
             page.on("dialog", lambda d: d.accept())

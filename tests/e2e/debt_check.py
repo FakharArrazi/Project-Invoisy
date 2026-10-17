@@ -5,6 +5,7 @@ Optional and manual, like browser_check.py:   python3 tests/e2e/debt_check.py
 import os, sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+from e2e_common import SKIP_SALE_DIALOG
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()
 problems = []
@@ -27,6 +28,7 @@ def add_item(page, qty):
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_context().new_page()
+    page.add_init_script(SKIP_SALE_DIALOG)
     errors = []
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
     page.on("pageerror", lambda e: errors.append("PAGEERROR " + str(e)))

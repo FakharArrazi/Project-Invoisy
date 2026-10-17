@@ -405,6 +405,29 @@
     }).slice(0, 5);
   }
 
+  // The products to suggest while a name is being typed in the Stock form (a live "did you mean one of these?" list).
+  // Case, accents, spaces and punctuation do not matter ("Cotto-Bianco", "cotto  bianco" and "COTTOBIANCO" are alike). A product
+  // matches when the typed text is inside its name, manufacturer, tile size or type, or when every word typed is somewhere in
+  // them. Best matches first (the same name, then names that start with it). Only suggests: nothing is merged or refused here.
+  // `products` is the list already in memory (no database read), `exceptId` the product being edited.
+  function suggestProducts(query, products, options) {
+    const opts = options || {};
+    const plain = (v) => String(v == null ? "" : v).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const words = String(query == null ? "" : query).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    const typed = words.join("");
+    if (!typed) return [];
+    const ranked = [];
+    for (const p of products || []) {
+      if (!p || (opts.exceptId != null && p.id === opts.exceptId)) continue;
+      const name = plain(p.name);
+      const all = name + plain(p.manufacturer) + plain(p.tileSize) + plain(p.productType);
+      const rank = name === typed ? 0 : name.startsWith(typed) ? 1 : name.includes(typed) ? 2 : all.includes(typed) || words.every((w) => all.includes(w)) ? 3 : -1;
+      if (rank >= 0) ranked.push({ p, rank, name: String(p.name) });
+    }
+    ranked.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name));
+    return ranked.slice(0, opts.limit || 6).map((x) => x.p);
+  }
+
   // THE one place a product typed into a form is checked, so every way of adding a product follows the same rules:
   // the Stock form calls it, and so does a purchase that creates a product (again when the draft is confirmed).
   //   raw  what was typed: { name, manufacturer, tileSize, coveragePerBox, description, sku, category,
@@ -527,6 +550,55 @@
     return { ...clean, id: String(inv.id || uid()), payments };
   }
 
+  /* ---------- The business phone numbers ----------
+     A business can have several phone numbers. They are saved as `phones` (a list of text) in the settings. The older single
+     `phone` is kept equal to the first number, so nothing that reads it breaks, and a business saved before the list existed
+     is simply read as a list of one (businessPhones): nothing is rewritten until the settings are saved again. */
+
+  const MAX_BUSINESS_PHONES = 10;
+  const MAX_PHONE_LENGTH = 40;
+
+  // The numbers as a clean list: trimmed, single spaces, blanks left out, and the same number only once ("0555 12 34 56" and
+  // "+213 555 12 34 56" are one number, the first spelling is kept).
+  function cleanPhoneList(list) {
+    const seen = new Set();
+    const out = [];
+    for (const raw of Array.isArray(list) ? list : []) {
+      const phone = String(raw == null ? "" : raw).replace(/\s+/g, " ").trim();
+      if (!phone) continue;
+      const key = phoneDigits(phone) || phone.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(phone);
+    }
+    return out;
+  }
+
+  // The numbers of the settings, or of the business details saved inside an invoice: the `phones` list when there is one,
+  // otherwise the single `phone` older data has. [] when there is none.
+  function businessPhones(source) {
+    const s = source || {};
+    if (Array.isArray(s.phones)) {
+      const list = cleanPhoneList(s.phones);
+      if (list.length) return list;
+    }
+    return cleanPhoneList([s.phone]);
+  }
+
+  // The business details an invoice keeps as they were when it was made. With one number (or none) it has exactly the shape it
+  // always had; the list is only added when there are several.
+  function businessSnapshot(settings) {
+    const s = settings || {};
+    const phones = businessPhones(s);
+    return {
+      name: s.businessName,
+      address: s.address,
+      phone: phones.length > 1 ? phones[0] : (String(s.phone || "") || phones[0] || ""),
+      ...(phones.length > 1 ? { phones } : {}),
+      email: s.email,
+    };
+  }
+
   function normalizeSettings(stored) {
     const settings = { ...DEFAULT_SETTINGS };
     if (stored && typeof stored === "object") {
@@ -538,6 +610,8 @@
         if (key in DEFAULT_SETTINGS) continue;
         if (value === null || ["string", "number", "boolean"].includes(typeof value)) settings[key] = value;
       }
+      // The list of phone numbers (the one setting that is a list). Only present when it was saved: older settings keep their shape.
+      if (Array.isArray(stored.phones)) settings.phones = cleanPhoneList(stored.phones.filter(isStr)).slice(0, MAX_BUSINESS_PHONES);
     }
     if (!settings.currency.trim()) settings.currency = CURRENCY;
     if (!settings.logo.startsWith("data:image/")) settings.logo = "";
@@ -781,6 +855,9 @@
     if (s.currency !== undefined && !s.currency.trim()) return t("problem.currency");
     if (s.paper !== undefined && !["A4", "A5"].includes(s.paper)) return t("problem.paper");
     if (s.logo && !s.logo.startsWith("data:image/")) return t("problem.logo");
+    if (s.phones !== undefined) {
+      if (!Array.isArray(s.phones) || s.phones.length > MAX_BUSINESS_PHONES || s.phones.some((p) => !isStr(p) || p.length > MAX_PHONE_LENGTH)) return t("problem.phones", { max: MAX_BUSINESS_PHONES });
+    }
     return "";
   }
 
@@ -1277,7 +1354,8 @@
     isTracked, deliveryDetail, collectionNumber, receiptNumber, collectionReceipts, deliveryProblem, deliveryHistoryProblem, DELIVERY_EPSILON, DELIVERY_NOTE_MAX,
     normalizeName, phoneDigits, isWalkInName, customerKeys, customerGroups, findGroup, sameCustomer,
     transferProblem, ledgerProblems,
-    isTileSize, normalizeTileSize, normalizeProduct, readProductInput, findDuplicateProduct, findSimilarProducts, normalizeInvoice, normalizeSettings, paymentSummary, paymentDetail, stripDerived,
+    MAX_BUSINESS_PHONES, MAX_PHONE_LENGTH, cleanPhoneList, businessPhones, businessSnapshot,
+    isTileSize, normalizeTileSize, normalizeProduct, readProductInput, findDuplicateProduct, findSimilarProducts, suggestProducts, normalizeInvoice, normalizeSettings, paymentSummary, paymentDetail, stripDerived,
     productProblem, invoiceProblem, invoiceWarnings, settingsProblem, legacyProductIssue, legacyInvoiceIssue,
     buildData, hasMeaningfulData, countsOf, buildBackup, prepareBackupFile, parseBackup, backupFileName,
     readLegacyStorage, prepareLegacyCopy, backupReminder,

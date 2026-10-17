@@ -257,17 +257,34 @@
           <label class="sr-only" for="invoiceFilter" data-i18n="invoices.searchLabel">Search invoices</label>
           <input type="search" id="invoiceFilter" placeholder="Search invoice, customer or phone..." data-i18n-placeholder="invoices.searchPlaceholder" autocomplete="off">
         </div>
+        <div class="invoice-filters" id="invoiceFilters">
+          <label class="sr-only" for="invoicePayFilter" data-i18n="invoices.filterPayLabel">Payment status</label>
+          <select id="invoicePayFilter">
+            <option value="all" data-i18n="invoices.payAll">All payments</option>
+            <option value="unpaid" data-i18n="invoices.payUnpaid">Unpaid</option>
+            <option value="partial" data-i18n="invoices.payPartial">Partially paid</option>
+            <option value="paid" data-i18n="invoices.payPaid">Paid</option>
+          </select>
+          <label class="sr-only" for="invoiceDeliveryFilter" data-i18n="invoices.filterDelLabel">Delivery status</label>
+          <select id="invoiceDeliveryFilter">
+            <option value="all" data-i18n="invoices.delAll">All deliveries</option>
+            <option value="delivered" data-i18n="invoices.delDelivered">Delivered</option>
+            <option value="notDelivered" data-i18n="invoices.delNot">Not delivered</option>
+          </select>
+          <button type="button" class="btn small" id="invoiceClear" data-i18n="invoices.clearFilters" hidden>Clear filters</button>
+          <span class="muted small" id="invoiceCount" aria-live="polite"></span>
+        </div>
         <div class="table-wrap">
           <table class="table" id="invoiceTable">
             <thead>
               <tr>
-                <th data-i18n="col.invoice">Invoice</th>
-                <th data-i18n="col.date">Date</th>
-                <th data-i18n="col.customer">Customer</th>
-                <th class="num" data-i18n="col.total">Total</th>
+                <th data-sort-th="number"><button type="button" class="th-sort" data-sort="number"><span data-i18n="col.invoice">Invoice</span><span class="sort-mark" aria-hidden="true"></span></button></th>
+                <th data-sort-th="date"><button type="button" class="th-sort" data-sort="date"><span data-i18n="col.date">Date</span><span class="sort-mark" aria-hidden="true"></span></button></th>
+                <th data-sort-th="customer"><button type="button" class="th-sort" data-sort="customer"><span data-i18n="col.customer">Customer</span><span class="sort-mark" aria-hidden="true"></span></button></th>
+                <th class="num" data-sort-th="total"><button type="button" class="th-sort" data-sort="total"><span data-i18n="col.total">Total</span><span class="sort-mark" aria-hidden="true"></span></button></th>
                 <th class="num" data-i18n="col.paid">Paid</th>
                 <th class="num" data-i18n="col.remaining">Remaining</th>
-                <th data-i18n="col.status">Status</th>
+                <th data-sort-th="status"><button type="button" class="th-sort" data-sort="status"><span data-i18n="col.status">Status</span><span class="sort-mark" aria-hidden="true"></span></button></th>
                 <th class="num" data-i18n="col.actions">Actions</th>
               </tr>
             </thead>
@@ -275,6 +292,113 @@
           </table>
         </div>
         <div class="empty" id="invoiceEmpty" hidden></div>
+      </div>
+    </section>
+
+    <!-- EDIT A SAVED INVOICE (opened from Invoices or from a saved invoice; has no menu button) -->
+    <section class="view" id="view-editinvoice" hidden>
+      <h1 class="sr-only" data-i18n="edit.title">Edit invoice</h1>
+      <div class="panel">
+        <h2 id="editHeading"></h2>
+        <p class="muted small" data-i18n="edit.intro">Correct this invoice without creating a new one. The invoice number, the date and every recorded payment stay as they are.</p>
+        <p class="warn-box" id="editNotes" hidden></p>
+        <form id="editForm" novalidate>
+          <fieldset>
+            <legend data-i18n="edit.customer">Customer</legend>
+            <div class="grid-2">
+              <div class="field">
+                <label for="editName" data-i18n="sell.name">Name</label>
+                <input type="text" id="editName" placeholder="Walk-in Customer" data-i18n-placeholder="sell.walkIn" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="editPhone" data-i18n="sell.phone">Phone</label>
+                <input type="text" id="editPhone" autocomplete="off">
+              </div>
+            </div>
+            <div class="field">
+              <label for="editAddress" data-i18n="sell.address">Address</label>
+              <input type="text" id="editAddress" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="editName2" data-i18n="sell.secondName">Builder / Group (optional)</label>
+              <input type="text" id="editName2" autocomplete="off">
+            </div>
+          </fieldset>
+
+          <h3 data-i18n="edit.products">Products</h3>
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th data-i18n="col.product">Product</th>
+                  <th class="num" data-i18n="col.qty">Qty</th>
+                  <th class="num" data-i18n="col.unitPrice">Unit price</th>
+                  <th class="num" data-i18n="col.total">Total</th>
+                  <th><span class="sr-only" data-i18n="common.remove">Remove</span></th>
+                </tr>
+              </thead>
+              <tbody id="editBody"></tbody>
+            </table>
+          </div>
+
+          <fieldset class="edit-add">
+            <legend data-i18n="edit.addProduct">Add a product</legend>
+            <label class="sr-only" for="editSearch" data-i18n="sell.searchLabel">Search products</label>
+            <input type="search" id="editSearch" placeholder="Search products to add..." data-i18n-placeholder="edit.searchPlaceholder" autocomplete="off">
+            <div class="results" id="editResults" role="listbox" aria-label="Products" data-i18n-aria-label="sell.productsAria"></div>
+            <div class="edit-add-row">
+              <div class="add-qty">
+                <label for="editAddQty" data-i18n="sell.quantity">Quantity</label>
+                <input type="number" id="editAddQty" min="0" step="any" value="1">
+              </div>
+              <div class="add-unit">
+                <label for="editAddUnit" data-i18n="sell.unit">Unit</label>
+                <select id="editAddUnit">
+                  <option value="piece" data-i18n="unit.piece">Piece</option>
+                  <option value="box" data-i18n="unit.box">Box</option>
+                  <option value="m2" data-i18n="unit.m2">m²</option>
+                  <option value="kg" data-i18n="unit.kg">kg</option>
+                  <option value="m" data-i18n="unit.m">m</option>
+                </select>
+              </div>
+              <button type="button" class="btn" id="editAdd" data-i18n="edit.addBtn">Add to invoice</button>
+            </div>
+            <p class="error" id="editAddError" role="alert"></p>
+          </fieldset>
+
+          <fieldset>
+            <legend data-i18n="sell.discountTaxLegend">Discount and tax</legend>
+            <div class="grid-2">
+              <div class="field">
+                <label for="editDiscountValue" data-i18n="sell.discount">Discount</label>
+                <div class="with-unit">
+                  <input type="number" id="editDiscountValue" min="0" step="any" placeholder="0">
+                  <select id="editDiscountType" aria-label="Discount type" data-i18n-aria-label="sell.discountType">
+                    <option value="amount" data-currency></option>
+                    <option value="percent">%</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field">
+                <label for="editTaxValue" data-i18n="sell.tax">Tax</label>
+                <div class="with-unit">
+                  <input type="number" id="editTaxValue" min="0" step="any" placeholder="0">
+                  <select id="editTaxType" aria-label="Tax type" data-i18n-aria-label="sell.taxType">
+                    <option value="amount" data-currency></option>
+                    <option value="percent">%</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </fieldset>
+
+          <div class="totals" id="editSummary"></div>
+          <p class="error" id="editError" role="alert"></p>
+          <div class="actions">
+            <button type="button" class="btn" id="editCancel" data-i18n="common.cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="editSave" data-i18n="edit.save">Save changes</button>
+          </div>
+        </form>
       </div>
     </section>
 
@@ -363,15 +487,14 @@
             <label for="sAddress" data-i18n="sell.address">Address</label>
             <input type="text" id="sAddress" autocomplete="off">
           </div>
-          <div class="grid-2">
-            <div class="field">
-              <label for="sPhone" data-i18n="sell.phone">Phone</label>
-              <input type="text" id="sPhone" autocomplete="off">
-            </div>
-            <div class="field">
-              <label for="sEmail" data-i18n="settings.email">Email</label>
-              <input type="text" id="sEmail" autocomplete="off">
-            </div>
+          <div class="field phones-field">
+            <label id="sPhonesLabel" data-i18n="settings.phones">Phone numbers</label>
+            <div class="phone-rows" id="sPhones" role="group" aria-labelledby="sPhonesLabel"></div>
+            <button type="button" class="btn small" id="addPhone" data-i18n="settings.addPhone">Add phone number</button>
+          </div>
+          <div class="field">
+            <label for="sEmail" data-i18n="settings.email">Email</label>
+            <input type="text" id="sEmail" autocomplete="off">
           </div>
           <div class="field">
             <label for="sCurrency" data-i18n="settings.currency">Currency</label>
@@ -419,6 +542,7 @@
       <span class="muted" id="previewStatus"></span>
       <div class="preview-buttons">
         <button type="button" class="btn" id="backToSale" data-i18n="preview.back" hidden>Back to current sale</button>
+        <button type="button" class="btn" id="editInvoiceBtn" data-i18n="edit.editBtn" hidden>Edit Invoice</button>
         <button type="button" class="btn primary" id="printBtn" data-i18n="preview.print">Print / PDF</button>
       </div>
     </div>
@@ -486,6 +610,21 @@
       <button type="submit" class="btn primary" id="debtDialogConfirm" data-i18n="debt.dialogConfirm">Add to sale</button>
     </div>
   </form>
+</dialog>
+
+<!-- After a sale is saved: print it now, start the next sale, or decide later. Opened only once the sale is committed. -->
+<dialog class="sale-done-dialog no-print" id="saleDoneDialog" aria-labelledby="saleDoneTitle">
+  <div class="sale-done-icon" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>
+  </div>
+  <h2 id="saleDoneTitle" data-i18n="saleDone.title">Sale completed successfully.</h2>
+  <p class="muted small" id="saleDoneNumber"></p>
+  <p class="sale-done-question" data-i18n="saleDone.question">What would you like to do?</p>
+  <div class="sale-done-actions">
+    <button type="button" class="btn primary" id="saleDonePrint" autofocus data-i18n="saleDone.print">Print Invoice</button>
+    <button type="button" class="btn" id="saleDoneNew" data-i18n="saleDone.new">New Sale</button>
+    <button type="button" class="btn" id="saleDoneLater" data-i18n="saleDone.later">Later</button>
+  </div>
 </dialog>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>

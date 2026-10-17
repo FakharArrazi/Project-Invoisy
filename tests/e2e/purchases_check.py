@@ -10,6 +10,7 @@ import json, os, sys, tempfile
 from datetime import date, timedelta
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+from e2e_common import SKIP_SALE_DIALOG
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()
 OUT = tempfile.mkdtemp(prefix="invoisy-purchases-e2e-")
@@ -61,6 +62,7 @@ with sync_playwright() as p:
     browser = p.chromium.launch()
     ctx = browser.new_context(accept_downloads=True, viewport={"width": 1400, "height": 900})
     page = ctx.new_page()
+    page.add_init_script(SKIP_SALE_DIALOG)
     errors = []
     dialogs = []
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
@@ -95,8 +97,10 @@ with sync_playwright() as p:
     page.click("#sf-save")
     check("name" in text(page, "#sf-error").lower(), "a supplier needs a name")
     page.fill("#sf-name", "Timgad Ceramic")
-    page.fill("#sf-contactName", "Karim")
-    page.fill("#sf-phone", "0555 12 34 56")
+    page.locator("#supContacts .contact-name").first.fill("Karim")
+    page.locator("#supContacts .contact-phone").first.fill("0555 12 34 56")
+    page.click("#supAddContact")
+    page.locator("#supContacts .contact-phone").nth(1).fill("0661 22 33 44")
     page.fill("#sf-email", "bad-email")
     page.click("#sf-save")
     check("email" in text(page, "#sf-error").lower(), "an invalid email is refused")

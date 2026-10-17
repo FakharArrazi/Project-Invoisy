@@ -121,6 +121,49 @@
   const SUPPLIER_TEXT_FIELDS = ["contactName", "phone", "email", "address", "city", "country", "taxId", "website", "currency", "notes"];
   const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+  /* ---------- Supplier contacts ----------
+     A supplier can have several contacts, each a name and a phone number: `contacts: [{ name, phone }]`. Either part may be
+     blank (a name with no number yet, or just another number). The older single `contactName` and `phone` stay equal to the
+     first contact, so everything that reads them keeps working. A supplier saved before the list existed has no `contacts`:
+     it is read as one contact made of its old name and phone (supplierContacts), and nothing is rewritten until that supplier
+     is saved again. */
+
+  const MAX_CONTACTS = 20;
+
+  function cleanContacts(list) {
+    const out = [];
+    for (const raw of Array.isArray(list) ? list : []) {
+      if (!isObj(raw)) continue;
+      const contact = { name: text(raw.name).trim(), phone: text(raw.phone).trim() };
+      if (contact.name || contact.phone) out.push(contact);
+    }
+    return out;
+  }
+
+  // The contacts of a supplier, whichever way it was saved: [{ name, phone }], blank ones left out.
+  function supplierContacts(supplier) {
+    if (!isObj(supplier)) return [];
+    if (Array.isArray(supplier.contacts)) return cleanContacts(supplier.contacts);
+    return cleanContacts([{ name: supplier.contactName, phone: supplier.phone }]);
+  }
+
+  // The phone numbers of a supplier, each once ("0555-12-34-56" and "0555 12 34 56" are one number).
+  function supplierPhones(supplier) {
+    const seen = new Set();
+    const phones = [];
+    for (const c of supplierContacts(supplier)) {
+      if (!c.phone) continue;
+      const key = digitsOf(c.phone) || c.phone.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      phones.push(c.phone);
+    }
+    return phones;
+  }
+
+  // The names of the contact persons of a supplier, each once.
+  const supplierContactNames = (supplier) => [...new Set(supplierContacts(supplier).map((c) => c.name).filter(Boolean))];
+
   // Fills in the fields a supplier may not have. A value that is present but unusable is replaced by the
   // default here, so callers check supplierProblem() BEFORE normalizing (a restore never repairs).
   function normalizeSupplier(raw) {
@@ -140,6 +183,8 @@
       revision: Number.isInteger(raw.revision) && raw.revision >= 1 ? raw.revision : 1,
     };
     for (const key of SUPPLIER_TEXT_FIELDS) out[key] = text(raw[key]).trim();
+    // The list is only there when it was saved: a supplier from before it existed keeps its exact shape.
+    if (Array.isArray(raw.contacts)) out.contacts = cleanContacts(raw.contacts);
     return out;
   }
 
@@ -151,6 +196,10 @@
       if (s[key] !== undefined && (!isStr(s[key]) || s[key].length > MAX_TEXT)) return t("problem.badField", { field: key });
     }
     if (s.email && !EMAIL_PATTERN.test(s.email.trim())) return t("problem.badField", { field: "email" });
+    if (s.contacts !== undefined) {
+      if (!Array.isArray(s.contacts) || s.contacts.length > MAX_CONTACTS) return t("problem.badField", { field: "contacts" });
+      if (s.contacts.some((c) => !isObj(c) || !isStr(c.name) || !isStr(c.phone) || c.name.length > MAX_TEXT || c.phone.length > MAX_TEXT)) return t("problem.badField", { field: "contacts" });
+    }
     if (s.paymentTermsDays !== undefined && (!Number.isInteger(s.paymentTermsDays) || s.paymentTermsDays < 0 || s.paymentTermsDays > MAX_TERMS_DAYS)) return t("problem.badField", { field: "paymentTermsDays" });
     if (s.creditLimit !== undefined && s.creditLimit !== null && (!isNum(s.creditLimit) || s.creditLimit < 0)) return t("problem.badField", { field: "creditLimit" });
     if (s.archived !== undefined && typeof s.archived !== "boolean") return t("problem.badField", { field: "archived" });
@@ -165,14 +214,15 @@
   // This only WARNS; nothing is ever merged.
   function findSupplierDuplicates(suppliers, candidate, exceptId) {
     const name = normText(candidate.name);
-    const phone = digitsOf(candidate.phone);
+    // Every phone number of the candidate against every phone number of the other supplier (a contact list or the old single phone).
+    const phones = supplierPhones(candidate).map(digitsOf).filter((d) => d.length >= 6);
     const tax = alnumOf(candidate.taxId);
     const found = [];
     for (const s of suppliers) {
       if (s.id === exceptId) continue;
       const reasons = [];
       if (name && normText(s.name) === name) reasons.push("name");
-      if (phone.length >= 6 && digitsOf(s.phone) === phone) reasons.push("phone");
+      if (phones.length && supplierPhones(s).some((p) => phones.includes(digitsOf(p)))) reasons.push("phone");
       if (tax.length >= 3 && alnumOf(s.taxId) === tax) reasons.push("taxId");
       if (reasons.length) found.push({ supplier: s, reasons });
     }
@@ -187,6 +237,11 @@
     for (const key of SUPPLIER_TEXT_FIELDS) {
       if (get(key).length > MAX_TEXT) return fail(key, t("sup.err.tooLong"));
     }
+    // The contacts: a list from the form, or (older callers) the single contactName and phone.
+    const listed = Array.isArray(input.contacts);
+    const contacts = cleanContacts(listed ? input.contacts : [{ name: input.contactName, phone: input.phone }]);
+    if (contacts.length > MAX_CONTACTS) return fail("contacts", t("sup.err.tooManyContacts", { max: MAX_CONTACTS }));
+    if (contacts.some((c) => c.name.length > MAX_TEXT || c.phone.length > MAX_TEXT)) return fail("contacts", t("sup.err.tooLong"));
     const email = get("email");
     if (email && !EMAIL_PATTERN.test(email)) return fail("email", t("sup.err.email"));
     const website = get("website");
@@ -206,7 +261,10 @@
     }
     return {
       values: {
-        name, contactName: get("contactName"), phone: get("phone"), email, address: get("address"), city: get("city"),
+        // contactName and phone always follow the first contact, so older readers see the main contact.
+        name, contactName: contacts.length ? contacts[0].name : "", phone: contacts.length ? contacts[0].phone : "",
+        ...(listed ? { contacts } : {}),
+        email, address: get("address"), city: get("city"),
         country: get("country"), taxId: get("taxId"), website, paymentTermsDays, creditLimit, notes: text(input.notes).trim(),
       },
     };
@@ -226,7 +284,10 @@
 
     const at = isoOf(ctx);
     if (existing) {
-      Object.assign(existing, read.values, { updatedAt: at, revision: (existing.revision || 1) + 1 });
+      const values = { ...read.values };
+      // An edit that only knows the single contact (not the list) keeps the supplier's list in line with it.
+      if (!values.contacts && Array.isArray(existing.contacts)) values.contacts = cleanContacts([{ name: values.contactName, phone: values.phone }]);
+      Object.assign(existing, values, { updatedAt: at, revision: (existing.revision || 1) + 1 });
       return { supplier: existing };
     }
     const supplier = normalizeSupplier({
@@ -1549,7 +1610,7 @@
     PURCHASE_STATUSES, RECEIPT_STATUSES, PAYMENT_STATUSES, DISCOUNT_TYPES, TAX_TYPES, TAX_MODES,
     ATTACHMENT_TYPES, ATTACHMENT_MAX_BYTES, REFERENCE_PREFIX, MAX_TERMS_DAYS, CONFIRMED_EDITABLE,
     isDay, toDay, addDays, daysBetween, normText, readNumber,
-    normalizeSupplier, supplierProblem, findSupplierDuplicates, saveSupplier, setSupplierArchived, deleteSupplier, supplierHasHistory,
+    normalizeSupplier, supplierProblem, supplierContacts, supplierPhones, supplierContactNames, MAX_CONTACTS, findSupplierDuplicates, saveSupplier, setSupplierArchived, deleteSupplier, supplierHasHistory,
     lineTotalOf, lineBaseQty, computeTotals, discountAmount, taxAmount, autoFactor,
     composePurchase, previewPurchase, purchaseToInput, duplicateInvoice, duplicateReference,
     normalizePurchase, purchaseProblem, purchaseWarnings, attachmentProblem, attachmentMetaProblem, attachmentMeta, withKeys, stripKeys,
