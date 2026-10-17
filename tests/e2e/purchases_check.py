@@ -43,6 +43,12 @@ def toast(page):
 def wait_toast(page, contains):
     page.wait_for_function("(s) => document.getElementById('toast').textContent.includes(s)", arg=contains, timeout=8000)
 
+def pick_product(page, lid, query):
+    """Chooses a product on a purchase line the way a person does: type in its search box, then Enter."""
+    page.click(f"#pl-{lid}-search")
+    page.keyboard.type(query)
+    page.keyboard.press("Enter")
+
 def stock_of(page, name):
     go(page, "stock")
     row = page.locator("#stockBody tr", has_text=name).first
@@ -121,9 +127,8 @@ with sync_playwright() as p:
     page.fill("#pf-invoiceNo", "FA-2026-001")
     row = page.locator(".pl-row").first
     lid = row.get_attribute("data-line")
-    options = page.locator(f"#pl-{lid}-product option").all_inner_texts()
-    tile = [o for o in options if o.startswith("Tile A")][0]
-    page.select_option(f"#pl-{lid}-product", label=tile)
+    pick_product(page, lid, "tile a")
+    check(page.input_value(f"#pl-{lid}-search").startswith("Tile A"), "typing in the product box and pressing Enter chooses the product")
     check(page.input_value(f"#pl-{lid}-unit") == "m2", "unit defaults from the product")
     page.select_option(f"#pl-{lid}-unit", "box")
     page.fill(f"#pl-{lid}-qty", "200")
@@ -189,8 +194,9 @@ with sync_playwright() as p:
     page.locator("#pd-PriceRows input[data-field=price]").first.fill("700")
     page.select_option("#pd-StockUnit", "m2")
     page.click("#purProductSave")
-    wait_toast(page, "added")
+    wait_toast(page, "Tile B")   # not just "added": the supplier's own "was added" toast may still be showing
     check("Tile B" in page.eval_on_selector(f"#pl-{lid}-product", "s => s.options[s.selectedIndex].text"), "the new product is saved and selected on the line")
+    check("Tile B" in page.input_value(f"#pl-{lid}-search"), "the product box shows the new product")
     check(page.input_value("#pf-invoiceNo") == "FA-2026-001", "what was typed in the purchase is kept")
     page.select_option(f"#pl-{lid}-unit", "box")
     page.fill(f"#pl-{lid}-qty", "10")
@@ -207,8 +213,7 @@ with sync_playwright() as p:
     page.click('#supRows tr:has-text("Sétif") [data-act="pur-new"]')
     page.fill("#pf-invoiceNo", "FA-2026-001")
     lid = page.locator(".pl-row").first.get_attribute("data-line")
-    tile = [o for o in page.locator(f"#pl-{lid}-product option").all_inner_texts() if o.startswith("Tile A")][0]
-    page.select_option(f"#pl-{lid}-product", label=tile)
+    pick_product(page, lid, "tile a")
     page.fill(f"#pl-{lid}-qty", "1"); page.fill(f"#pl-{lid}-price", "1")
     page.click("#pf-saveDraft")
     check("already used" in text(page, "#pf-error"), "same supplier + same invoice number is refused")
@@ -221,8 +226,7 @@ with sync_playwright() as p:
     page.fill("#pf-date", iso(today - timedelta(days=60)))
     page.fill("#pf-due", iso(today - timedelta(days=30)))
     lid = page.locator(".pl-row").first.get_attribute("data-line")
-    tile = [o for o in page.locator(f"#pl-{lid}-product option").all_inner_texts() if o.startswith("Tile A")][0]
-    page.select_option(f"#pl-{lid}-product", label=tile)
+    pick_product(page, lid, "tile a")
     page.select_option(f"#pl-{lid}-unit", "box")
     page.fill(f"#pl-{lid}-qty", "5"); page.fill(f"#pl-{lid}-price", "1000")
     page.uncheck("#pf-receive")

@@ -1445,6 +1445,42 @@
       .sort((a, b) => b.total - a.total);
   }
 
+  /* ---------- Finding a product while typing (the purchase line's product selector) ---------- */
+
+  // The text a product is searched by: lower case, no accents, single spaces, and a tile size written 60*60, 60x60 or
+  // 60 × 60 always as "60x60".
+  const searchKey = (s) => normText(s).replace(/(\d)\s*[x×*]\s*(?=\d)/g, "$1x");
+  const compactKey = (s) => searchKey(s).replace(/[^a-z0-9]/g, "");
+
+  // The products that match what was typed, best first. Case, accents and spacing never matter: "barcelona crema",
+  // "BARCELONACREMA" and "crema barc" all find "BARCELONA Crema", and "60 x 60" finds "60*60". Every word typed must be
+  // found somewhere in the product's name, tile size, manufacturer, SKU or category (`extra(product)` adds more text, such as
+  // the product type as it is shown). Names that start with the text come first, then names with a word that starts with it,
+  // then names that contain it, then the other fields; ties stay in alphabetical order. Nothing typed lists every product.
+  function matchProducts(products, query, extra) {
+    const list = Array.isArray(products) ? products : [];
+    const byName = (a, b) => text(a.name).localeCompare(text(b.name)) || text(a.tileSize).localeCompare(text(b.tileSize));
+    const all = [...list].sort(byName);
+    const compactQuery = compactKey(query);
+    if (!compactQuery) return all;   // nothing typed, or only spaces and punctuation
+    const words = searchKey(query).split(" ").map((w) => w.replace(/[^a-z0-9]/g, "")).filter(Boolean);
+    const scored = [];
+    for (const product of all) {
+      const own = [product.name, product.tileSize, product.manufacturer, product.sku, product.category].map(text).join(" ");
+      const hay = compactKey(own + " " + (extra ? text(extra(product)) : ""));
+      const name = compactKey(product.name);
+      const wordsOfName = searchKey(product.name).split(/[^a-z0-9]+/).filter(Boolean);
+      const found = (compactQuery && hay.includes(compactQuery)) || (words.length > 0 && words.every((w) => hay.includes(w)));
+      if (!found) continue;
+      let rank = 3;
+      if (name.startsWith(compactQuery) || words.every((w) => name.startsWith(w))) rank = 0;
+      else if (words.length && words.every((w) => wordsOfName.some((n) => n.startsWith(w)))) rank = 1;
+      else if (name.includes(compactQuery) || words.every((w) => name.includes(w))) rank = 2;
+      scored.push({ product, rank });
+    }
+    return scored.sort((a, b) => a.rank - b.rank).map((s) => s.product);   // stable: ties stay alphabetical
+  }
+
   // Every confirmed purchase line of one product (optionally of one supplier), newest first.
   function productHistory(d, productId, supplierId) {
     const { purchases, suppliers } = dataOf(d);
@@ -1522,7 +1558,7 @@
     saveDraft, deleteDraft, confirmPurchase, creditCheck, receiveDelivery, reverseReceipt, cancelPurchase, deletePurchase, deletionPreview, updatePurchaseDetails, setAttachmentMeta,
     recordPayment, updatePayment, voidPayment,
     linkProblems,
-    purchasesInPeriod, periodReport, outstandingReport, purchasesBySupplier, productHistory, supplierProducts, paymentsReport, overview,
+    purchasesInPeriod, periodReport, outstandingReport, purchasesBySupplier, productHistory, supplierProducts, matchProducts, paymentsReport, overview,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = globalThis.Purchases;
 })();

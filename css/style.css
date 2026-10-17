@@ -607,12 +607,37 @@ input:disabled, select:disabled, textarea:disabled { background: #f1f3f6; color:
 .pl-main .field { margin-bottom: 0; }
 .pl-total strong { display: block; padding: 7px 0; text-align: right; }
 .pl-total .label { font-size: 13px; }
-.pl-remove { align-self: end; margin-bottom: 4px; }
-.pl-sub { min-height: 18px; margin-top: 4px; }
+.pl-remove { align-self: end; justify-self: start; margin-bottom: 4px; }
+/* The row under the fields: "+ Add new product", then what is known about the chosen product and the conversion. It has its
+   own row, so nothing beside the product box (Quantity ... Line total) is ever pushed out of line by it. */
+.pl-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 28px; margin-top: 6px; }
 .pl-sub .conv { font-weight: 600; color: var(--accent-dark); }
 .pl-sub .conv.conv-error { color: var(--danger, #b42318); }
-.pl-sub .btn { margin-left: 6px; }
-.pl-add-product { display: inline-block; margin-top: 4px; padding: 0; }
+.pl-add-product { flex: none; color: var(--accent); border-color: var(--accent); background: var(--accent-tint); white-space: nowrap; }
+.pl-add-product:hover { background: #d6e4f6; }
+
+/* The product box of a line: a search box that is also a list (see "The product selector" in purchases-ui.js). */
+.combo { position: relative; }
+.combo-input {
+  padding-right: 28px; text-overflow: ellipsis;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%235f6b7a' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center;
+}
+.combo-list {
+  position: absolute; z-index: 30; left: 0; top: 100%; width: max(100%, 380px); max-width: calc(100vw - 32px); margin: 2px 0 0; padding: 4px 0; list-style: none;
+  background: var(--panel); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  max-height: 320px; overflow-y: auto;
+}
+.combo-opt { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 7px 10px; cursor: pointer; border-left: 3px solid transparent; }
+.combo-opt:hover, .combo-opt.active { background: var(--accent-tint); }
+.combo-opt.active { border-left-color: var(--accent); }
+.combo-opt.chosen strong { color: var(--accent-dark); }
+.combo-main { display: flex; flex-direction: column; min-width: 0; }
+.combo-meta { display: block; font-size: 12px; color: var(--muted); }
+.combo-stock { flex: none; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.combo-empty, .combo-more { padding: 8px 10px; color: var(--muted); }
+.combo-empty { color: var(--text); }
+.combo-more { font-size: 12px; }
+.combo-foot { position: sticky; bottom: -4px; margin-top: 4px; padding: 6px 10px 2px; background: var(--panel); border-top: 1px solid var(--border); }
 .product-dialog { width: min(760px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; padding: 18px 20px; border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); background: var(--panel); }
 .product-dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
 .product-dialog h2 { margin-bottom: 6px; }

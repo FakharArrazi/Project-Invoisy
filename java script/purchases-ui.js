@@ -874,8 +874,14 @@
     const selected = np ? NEW : line.productId;
     return `<div class="pl-row" data-line="${esc(id)}" data-pid="${esc(np ? line.productId : "")}">
       <div class="pl-main">
-        <div class="field pl-product"><label for="pl-${id}-product">${esc(t("col.product"))}</label><select id="pl-${id}-product">${productOptions(selected)}</select>
-          <button type="button" class="link small pl-add-product" data-act="pur-product-new" data-line="${esc(id)}">${esc(t("pur.addNewProduct"))}</button></div>
+        <div class="field pl-product"><label for="pl-${id}-search">${esc(t("col.product"))}</label>
+          <div class="combo" data-combo="${esc(id)}">
+            <input type="text" class="combo-input" id="pl-${id}-search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-${id}-list"
+              autocomplete="off" spellcheck="false" placeholder="${esc(t("pur.productSearch"))}" value="${esc(comboLabelOf(selected))}">
+            <ul class="combo-list no-print" id="pl-${id}-list" role="listbox" aria-label="${esc(t("pur.productListAria"))}" hidden></ul>
+            <!-- The list the page reads and saves from (what is chosen, as a product id); the search box above only drives it. -->
+            <select id="pl-${id}-product" class="combo-native" tabindex="-1" aria-hidden="true" hidden>${productOptions(selected)}</select>
+          </div></div>
         <div class="field"><label for="pl-${id}-qty">${esc(t("pur.line.qty"))}</label><input type="number" id="pl-${id}-qty" min="0" step="any" value="${esc(line.qty)}"></div>
         <div class="field"><label for="pl-${id}-unit">${esc(t("pur.line.unit"))}</label><select id="pl-${id}-unit">${unitOptions(line.unit)}</select></div>
         <div class="field"><label for="pl-${id}-price">${esc(t("pur.line.price"))}</label><input type="number" id="pl-${id}-price" min="0" step="any" value="${esc(line.unitPrice)}"></div>
@@ -883,7 +889,9 @@
         <div class="field pl-total"><span class="label">${esc(t("pur.line.subtotal"))}</span><strong id="pl-${id}-total">0</strong></div>
         <button type="button" class="btn small danger pl-remove" data-act="pur-line-remove" data-line="${esc(id)}" aria-label="${esc(t("common.remove"))}">✕</button>
       </div>
-      <div class="pl-sub"><span class="muted small" id="pl-${id}-hint"></span> <span class="conv" id="pl-${id}-conv" aria-live="polite"></span>
+      <div class="pl-sub">
+        <button type="button" class="btn small pl-add-product" data-act="pur-product-new" data-line="${esc(id)}">${esc(t("pur.addNewProduct"))}</button>
+        <span class="muted small" id="pl-${id}-hint"></span> <span class="conv" id="pl-${id}-conv" aria-live="polite"></span>
         <button type="button" class="btn small" id="pl-${id}-edit" data-act="pur-product-edit" data-line="${esc(id)}" hidden>${esc(t("pur.editProduct"))}</button></div>
       <div class="pl-new" id="pl-${id}-newbox"${np ? "" : " hidden"}>
         <h4>${esc(t("pur.newProductTitle"))}</h4>
@@ -924,7 +932,8 @@
     if (host) clearInvalid(host);
   }
 
-  function openProductDialog(lineId, mode, productId) {
+  // presetName: what was typed in the product search when nothing matched, so the new product starts with that name.
+  function openProductDialog(lineId, mode, productId, presetName) {
     const dialog = $("purProductDialog");
     if (!dialog) return;
     const product = mode === "edit" ? S().products.find((p) => p.id === productId) : null;
@@ -941,9 +950,11 @@
     $("purProductNote").textContent = t(mode === "edit" ? "pur.productDialog.editNote" : "pur.productDialog.addNote");
     $("purProductHost").innerHTML = mode === "edit" ? form.html(product) : form.html();
     $("purProductSave").textContent = t(mode === "edit" ? "stock.saveChanges" : "pur.productDialog.save");
+    $("purProductSave").disabled = false;
     resetProductDialogMessages();
-    if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
     const first = $(DIALOG_PREFIX + "Name");
+    if (mode === "add" && presetName && first) first.value = presetName;
+    if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
     if (first && first.focus) first.focus();
   }
 
@@ -954,13 +965,15 @@
     ui.pur.productDialog = null;
   }
 
-  // Redraws every line's product list (a product was added) without touching what is chosen or typed.
+  // Redraws every line's product list (a product was added or changed) without touching what is chosen or typed.
   function refreshProductSelects() {
     for (const row of $("pfLines").querySelectorAll(".pl-row")) {
-      const select = $(`pl-${row.dataset.line}-product`);
+      const lineId = row.dataset.line;
+      const select = $(`pl-${lineId}-product`);
       const current = select.value;
       select.innerHTML = productOptions(current);
       select.value = current;
+      if (!(combo.lineId === lineId && combo.typed)) syncCombo(lineId);   // a search being typed is left alone
     }
   }
 
@@ -970,7 +983,152 @@
     if (!select) return;
     select.value = productId;
     onProductPicked(lineId, productId);
+    syncCombo(lineId);
     updatePurchasePreview();
+  }
+
+  // The person carries on with the line they just chose a product for: quantity next.
+  function focusQuantity(lineId) {
+    const qty = $(`pl-${lineId}-qty`);
+    if (qty && qty.focus) qty.focus();
+  }
+
+  /* ---------- The product selector: a search box and a list in one ----------
+     The real value of a line is still the (hidden) <select id="pl-…-product">, so reading the form, the conversions and
+     the totals work exactly as before. This box only filters the products as you type (purchases.js: matchProducts) and
+     picks one into that select. */
+  const COMBO_LIMIT = 60;
+  const combo = { lineId: "", matches: [], index: -1, typed: false };   // the one list that is open: its line, rows, highlighted row
+
+  function comboLabelOf(value) {
+    if (!value) return "";
+    if (value === NEW) return t("pur.newProduct");
+    const product = S().products.find((p) => p.id === value);
+    return product ? h.productLabel(product) : "";
+  }
+
+  // The search box shows what the line has chosen (its name, size and manufacturer), or nothing.
+  function syncCombo(lineId) {
+    const input = $(`pl-${lineId}-search`);
+    const select = $(`pl-${lineId}-product`);
+    if (input && select) input.value = comboLabelOf(select.value);
+  }
+
+  const typeLabel = (p) => (p.productType ? t("productType." + p.productType) : "");
+
+  function comboMatches(query) {
+    return P.matchProducts(S().products, query, typeLabel);
+  }
+
+  function comboRowHtml(lineId, p, i, chosenId) {
+    const meta = [p.tileSize, p.manufacturer, typeLabel(p)].filter(Boolean).join(" · ");
+    const active = i === combo.index;
+    return `<li role="option" id="pl-${lineId}-opt-${i}" class="combo-opt${active ? " active" : ""}${p.id === chosenId ? " chosen" : ""}" data-id="${esc(p.id)}" aria-selected="${active}">
+      <span class="combo-main"><strong>${esc(p.name)}</strong>${meta ? `<span class="combo-meta">${esc(meta)}</span>` : ""}</span>
+      <span class="combo-stock">${esc(t("pur.hint.stock", { stock: h.stockText(p) }))}</span></li>`;
+  }
+
+  function drawCombo(lineId) {
+    const input = $(`pl-${lineId}-search`);
+    const list = $(`pl-${lineId}-list`);
+    const query = combo.typed ? input.value : "";
+    const found = comboMatches(query);
+    combo.matches = found.slice(0, COMBO_LIMIT);
+    if (combo.index >= combo.matches.length) combo.index = combo.matches.length - 1;
+    const chosenId = $(`pl-${lineId}-product`).value;
+    let html = combo.matches.map((p, i) => comboRowHtml(lineId, p, i, chosenId)).join("");
+    if (!combo.matches.length) {
+      const none = S().products.length ? t("pur.productNoMatch", { q: input.value.trim() }) : t("pur.productNone");
+      html = `<li class="combo-empty" role="presentation">${esc(none)}<span class="combo-meta">${esc(t("pur.productAddHint"))}</span></li>`;
+    } else if (found.length > combo.matches.length) {
+      html += `<li class="combo-more" role="presentation">${esc(t("pur.productMore", { n: COMBO_LIMIT }))}</li>`;
+    }
+    // Always reachable, so a product that is not in the list can be added without leaving the purchase.
+    html += `<li class="combo-foot" role="presentation"><button type="button" class="btn small" tabindex="-1" data-act="pur-product-new" data-line="${esc(lineId)}" data-name="${esc(combo.typed ? input.value.trim() : "")}">${esc(t("pur.addNewProduct"))}</button></li>`;
+    list.innerHTML = html;
+  }
+
+  function markComboRow(lineId) {
+    const input = $(`pl-${lineId}-search`);
+    const rows = [...$(`pl-${lineId}-list`).querySelectorAll(".combo-opt")];
+    rows.forEach((row, i) => {
+      row.classList.toggle("active", i === combo.index);
+      row.setAttribute("aria-selected", String(i === combo.index));
+    });
+    const row = rows[combo.index];
+    if (row) {
+      input.setAttribute("aria-activedescendant", row.id);
+      if (row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+    } else input.removeAttribute("aria-activedescendant");
+  }
+
+  function showCombo(lineId) {
+    if (combo.lineId && combo.lineId !== lineId) hideCombo(combo.lineId);
+    combo.lineId = lineId;
+    const chosenId = $(`pl-${lineId}-product`).value;
+    if (!combo.typed) combo.index = comboMatches("").findIndex((p) => p.id === chosenId);   // the list opens on the chosen product (nothing highlighted if none)
+    drawCombo(lineId);
+    $(`pl-${lineId}-list`).hidden = false;
+    $(`pl-${lineId}-search`).setAttribute("aria-expanded", "true");
+    markComboRow(lineId);
+  }
+
+  function hideCombo(lineId) {
+    const list = $(`pl-${lineId}-list`);
+    const input = $(`pl-${lineId}-search`);
+    if (list) list.hidden = true;
+    if (input) { input.setAttribute("aria-expanded", "false"); input.removeAttribute("aria-activedescendant"); }
+    if (combo.lineId === lineId) { combo.lineId = ""; combo.typed = false; combo.index = -1; combo.matches = []; }
+  }
+
+  const comboIsOpen = (lineId) => combo.lineId === lineId && !$(`pl-${lineId}-list`).hidden;
+
+  // A product was picked from the list: it goes into the line like any chosen product, then the quantity is next.
+  function pickCombo(lineId, productId) {
+    hideCombo(lineId);
+    chooseProduct(lineId, productId);
+    focusQuantity(lineId);
+  }
+
+  // The search box was left: what is shown goes back to what the line really has. Only an emptied box clears the choice.
+  function leaveCombo(lineId) {
+    const input = $(`pl-${lineId}-search`);
+    const select = $(`pl-${lineId}-product`);
+    if (!input || !select) return;
+    const cleared = combo.lineId === lineId && combo.typed && input.value.trim() === "" && select.value !== "";
+    hideCombo(lineId);
+    if (cleared) chooseProduct(lineId, ""); else syncCombo(lineId);
+  }
+
+  function onComboFocus(input) {
+    const lineId = input.closest(".combo").dataset.combo;
+    combo.typed = false;
+    showCombo(lineId);
+    if (input.select) input.select();   // typing at once replaces the shown name and filters the list
+  }
+
+  function onComboKey(e, input) {
+    const lineId = input.closest(".combo").dataset.combo;
+    const open = comboIsOpen(lineId);
+    const last = combo.matches.length - 1;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) { showCombo(lineId); return; }
+      if (last < 0) return;
+      combo.index = e.key === "ArrowDown" ? (combo.index >= last ? 0 : combo.index + 1) : (combo.index <= 0 ? last : combo.index - 1);
+      markComboRow(lineId);
+    } else if (e.key === "Enter") {
+      e.preventDefault();   // never submits the purchase form
+      if (e.isComposing) return;
+      if (!open) { showCombo(lineId); return; }
+      if (combo.index >= 0 && combo.matches[combo.index]) pickCombo(lineId, combo.matches[combo.index].id);
+      else if (!combo.matches.length) { const name = combo.typed ? input.value.trim() : ""; hideCombo(lineId); openProductDialog(lineId, "add", "", name); }
+    } else if (e.key === "Escape") {
+      if (open) { e.preventDefault(); e.stopPropagation(); hideCombo(lineId); syncCombo(lineId); if (input.select) input.select(); }
+    } else if (e.key === "Tab") {
+      // Leaving after typing a name only one product answers to chooses that product; anything else keeps what was chosen.
+      if (open && combo.typed && combo.matches.length === 1) { const only = combo.matches[0].id; hideCombo(lineId); chooseProduct(lineId, only); }
+    }
   }
 
   function showSimilarProducts(list) {
@@ -993,7 +1151,11 @@
       const similar = Validation.findSimilarProducts(values, S().products);
       if (similar.length) { showSimilarProducts(similar); return; }
     }
-    return act((d) => {
+    // One save at a time: the button is off until this one has finished (guard() also refuses a second run), so a double
+    // click or a repeated Enter can never add the product twice. A failed save turns it back on so it can be retried.
+    const saveButton = $("purProductSave");
+    if (saveButton) saveButton.disabled = true;
+    return Promise.resolve(act((d) => {
       if (state.mode === "edit") {
         const product = d.products.find((p) => p.id === state.productId);
         if (!product) return { error: t("product.gone") };
@@ -1012,10 +1174,13 @@
         const adding = state.mode === "add";
         closeProductDialog();
         refreshProductSelects();
-        if (adding) chooseProduct(state.lineId, r.product.id);
+        if (adding) { chooseProduct(state.lineId, r.product.id); focusQuantity(state.lineId); }
         else updatePurchasePreview();
         h.notify(t(adding ? "product.added" : "product.updated", { label: h.productLabel(r.product) }));
       },
+    })).finally(() => {
+      const button = $("purProductSave");
+      if (button) button.disabled = false;
     });
   }
 
@@ -1729,7 +1894,7 @@
       updatePurchasePreview();
     },
     "pur-confirm-now"() { return submitPurchase(true); },
-    "pur-product-new"(el) { openProductDialog(el.dataset.line, "add"); },
+    "pur-product-new"(el) { openProductDialog(el.dataset.line, "add", "", el.dataset.name || ""); },
     "pur-product-edit"(el) { openProductDialog(el.dataset.line, "edit", $(`pl-${el.dataset.line}-product`).value); },
     "pur-product-save"() { return saveProductDialog(false); },
     "pur-product-anyway"() { return saveProductDialog(true); },
@@ -1737,7 +1902,7 @@
     "pur-product-use"(el) {
       const state = ui.pur.productDialog;
       closeProductDialog();
-      if (state) chooseProduct(state.lineId, el.dataset.id);
+      if (state) { chooseProduct(state.lineId, el.dataset.id); focusQuantity(state.lineId); }
     },
     "pf-att-remove"(el) {
       const form = ui.pur.form;
@@ -1781,7 +1946,14 @@
     // Add or remove a selling price of a new product: the product form handles it, then the conversions are redrawn.
     if (ProductForm.route(e)) { updatePurchasePreview(); return; }
     const el = e.target.closest("[data-act]");
-    if (!el) return;
+    if (!el) {
+      // Not a button: a row of a product list picks that product, a click into the search box opens its list.
+      const row = e.target.closest(".combo-opt");
+      if (row) { pickCombo(row.closest(".combo").dataset.combo, row.dataset.id); return; }
+      const box = e.target.closest(".combo-input");
+      if (box) { const lineId = box.closest(".combo").dataset.combo; if (!comboIsOpen(lineId)) showCombo(lineId); }
+      return;
+    }
     const handler = actions[el.dataset.act];
     if (!handler) return;
     if (el.tagName === "BUTTON") e.preventDefault();
@@ -1816,6 +1988,12 @@
     const el = e.target;
     const id = el.id || "";
     if (el.closest && el.closest("#purProductDialog")) { ProductForm.route(e); return; }   // typing in the product dialog
+    if (el.classList && el.classList.contains("combo-input")) {                              // typing in a line's product search
+      const lineId = el.closest(".combo").dataset.combo;
+      combo.lineId = lineId; combo.typed = true; combo.index = 0;
+      showCombo(lineId);
+      return;
+    }
     if (id === "supSearch") { ui.sup.q = el.value; refreshSupplierRows(); return; }
     if (id === "purSearch") { ui.pur.q = el.value; $("purRows").innerHTML = purchaseListRows(); return; }
     if (el.closest && el.closest("#purchaseForm")) {
@@ -1832,6 +2010,7 @@
     const el = e.target;
     const id = el.id || "";
     if (el.closest && el.closest("#purProductDialog")) { ProductForm.route(e); return; }
+    if (el.classList && el.classList.contains("combo-input")) return;   // the product search only acts while it is typed in
     if (id === "supStatus") { ui.sup.status = el.value; refreshSupplierRows(); }
     else if (id === "sf-terms") { $("sf-termsCustom").disabled = el.value !== "custom"; if (el.value !== "custom") $("sf-termsCustom").value = ""; }
     else if (id === "purStatus") { ui.pur.status = el.value; $("purRows").innerHTML = purchaseListRows(); }
@@ -1842,6 +2021,42 @@
     else if (id === "pfFile") { addFormAttachments([...el.files]).then(() => { el.value = ""; }); }
     else if (id === "dtFile") { addDetailAttachments([...el.files]).then(() => { el.value = ""; }); }
     else if (el.closest && el.closest("#purchaseForm")) onInput(e);
+  }
+
+  // Keys: the product search (arrows, Enter, Escape, Tab), and Enter in the product dialog saves it like the Stock form.
+  function onKeyDown(e) {
+    const input = e.target.closest ? e.target.closest(".combo-input") : null;
+    if (input) { onComboKey(e, input); return; }
+    if (e.key === "Enter" && !e.isComposing && e.target.closest && e.target.closest("#purProductDialog") && e.target.tagName === "INPUT") {
+      e.preventDefault();
+      const result = saveProductDialog(false);
+      if (result && result.catch) result.catch((err) => h.notify(t("app.somethingWrong", { error: (err && err.message) || "" }), "error"));
+    }
+  }
+
+  function onFocusIn(e) {
+    const input = e.target.closest ? e.target.closest(".combo-input") : null;
+    if (input) onComboFocus(input);
+  }
+
+  function onFocusOut(e) {
+    const input = e.target.closest ? e.target.closest(".combo-input") : null;
+    if (input) leaveCombo(input.closest(".combo").dataset.combo);
+  }
+
+  // The list keeps the search box focused while it is clicked; the first click into the box selects its text.
+  function onMouseDown(e) {
+    if (e.target.closest && e.target.closest(".combo-list")) { e.preventDefault(); return; }
+    const input = e.target.closest ? e.target.closest(".combo-input") : null;
+    if (input && document.activeElement !== input) { e.preventDefault(); input.focus(); }
+  }
+
+  // Closing the product dialog with Escape: forget its form and what it was for, like Cancel does.
+  function onDialogClose(e) {
+    if (e.target && e.target.id === "purProductDialog" && !e.target.open) {
+      ProductForm.drop(DIALOG_PREFIX);
+      ui.pur.productDialog = null;
+    }
   }
 
   /* ---------- Hooks from the page ---------- */
@@ -1857,6 +2072,11 @@
       root.addEventListener("submit", onSubmit);
       root.addEventListener("input", onInput);
       root.addEventListener("change", onChange);
+      root.addEventListener("keydown", onKeyDown);
+      root.addEventListener("focusin", onFocusIn);
+      root.addEventListener("focusout", onFocusOut);
+      root.addEventListener("mousedown", onMouseDown);
+      root.addEventListener("close", onDialogClose, true);   // "close" does not bubble
     }
   }
 
