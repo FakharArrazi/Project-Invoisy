@@ -40,12 +40,26 @@ means Later. Nothing navigates away on its own.
 - **One transaction.** The corrected invoice and every stock change (stock given back for a lowered or removed line, extra
   stock taken for a raised or added line) are written together by `commit()`. If anything fails (not enough stock, invalid
   number, a conflicting change from another window) nothing is written and the screen stays open with what was typed.
-- **Totals, balance and status** are recalculated. A change that would leave the recorded payments above the new total is
-  refused with an explanation: payments are never deleted or changed. Lower the price only as far as the payments allow, or
-  deal with the payment first.
+- **Totals, balance and status** are recalculated.
+- **Returns are an edit.** A customer brings back a box: open the invoice, **Edit Invoice**, lower the quantity (15 → 14),
+  and save. The line total, subtotal, discount and tax (a percentage follows the new subtotal; a fixed amount stays),
+  total and balance follow. Exactly the difference goes back to stock (never the whole new quantity), in the product's own
+  stock unit: 1 box, 2 pieces (half a box when a box holds 4), 5 m². Saving without a change moves nothing, and every
+  edit starts from the quantity saved now, so editing several times never repeats an adjustment.
+- **Paid more than the new total.** The edit is saved. Payments are never deleted, changed or added to: no cash is recorded
+  as refunded. The difference is shown as **Refund / credit due to customer** (edit screen, pay box, invoice list and the
+  printed invoice) and the status stays PAID. It is worked out from the payments and the total, never stored as a
+  payment, and it disappears if a later edit raises the total again. The app has no customer-credit or refund-payment
+  feature, so settling it is done outside the app. Debt carried to a newer invoice still limits how far an old invoice can
+  be lowered.
+- **Save and print** saves first and then prints the saved invoice (not the typed values). If the browser can not print, the
+  edit is already saved and Print / PDF on the invoice tries again.
 - **Invoices that track deliveries** keep their quantities and lines (the delivery log refers to them); customer details and
   prices can still be corrected.
-- An edited invoice records `updatedAt` and `edits: [{ at, totalBefore, totalAfter }]`.
+- An edited invoice records `updatedAt` and one `edits` entry per saved edit:
+  `{ at, totalBefore, totalAfter, paid, refundDue?, lines?: [{ name, unit, qtyBefore, qtyAfter, priceBefore?, priceAfter? }],
+  stock?: [{ productId, name, unit, change }] }`. Earlier entries (only `at` and the two totals) stay valid. Restoring a
+  backup does not warn about payments above the total when the latest entry's `refundDue` explains them.
 - Leaving the screen with typed changes (Cancel, the menu, closing the page) asks first.
 - Printing an edited invoice prints the corrected details under the same number.
 

@@ -1376,9 +1376,9 @@ function salePaid(sale, total) {
 // Total paid, remaining balance and status are always calculated from the payments list
 // (the sums are in validation.js; the status is worded here in the current language).
 function paymentInfo(inv) {
-  const { payments, paid, remaining, cls, due, transferredOut, carried } = Validation.paymentDetail(inv, state.debtTransfers);
+  const { payments, paid, remaining, cls, due, transferredOut, carried, refundDue } = Validation.paymentDetail(inv, state.debtTransfers);
   const status = t({ paid: "inv.status.paid", partial: "inv.status.partial", unpaid: "inv.status.unpaid", transferred: "inv.status.transferred" }[cls]);
-  return { payments, paid, remaining, status, cls, due, transferredOut, carried };
+  return { payments, paid, remaining, status, cls, due, transferredOut, carried, refundDue };
 }
 // "INV-000030" or "INV-000030, INV-000031": where an invoice's balance was carried forward to.
 function carriedToNumbers(inv, transfers = state.debtTransfers) {
@@ -1834,7 +1834,11 @@ async function recordCollection(id, entries, note) {
        size and coverage it was sold with). Only a quantity or price that was edited changes, and the line total follows. A
        new line is made like a sale line, from the product as it is now.
      - Money: subtotal, discount, tax and total are recalculated only when something financial was edited. Payments are never
-       edited or removed; if the new amount due would be lower than what is already paid, the edit is refused.
+       edited or removed. When the new amount due is lower than what is already paid (a box returned on a paid invoice), the
+       edit is allowed and the difference is a REFUND OR CREDIT DUE to the customer: shown on the screen and the printed invoice,
+       never recorded as a payment, because no cash has actually been handed back.
+     - History: each saved edit adds one entry to invoice.edits (when, totals before and after, what was paid, the quantity and
+       price of every line that changed, and the stock moved), so the original values stay available for troubleshooting.
      - An invoice sold in several deliveries keeps its products and quantities (its delivery log is a record); prices,
        customer, discount and tax can still be corrected.
    applyInvoiceEdit() saves through commit(): invoice + stock in ONE transaction, with the usual revision check and backup. */
@@ -1865,7 +1869,7 @@ const clean = (v) => String(v == null ? "" : v).trim();
 //           discountType, discountValue, taxType, taxValue, baseItems? }
 //     origIndex = the position of the line on the saved invoice (a kept line); null = a line added now.
 //     baseItems = the lines the person started from: when the invoice changed meanwhile (another window), the edit is refused.
-// Returns { skip: true } (nothing to change) or { invoice, stockChanges: Map(productId -> new stock), overpaid }, or { error }.
+// Returns { skip: true } (nothing to change) or { invoice, stockChanges: Map(productId -> new stock), refundDue }, or { error }.
 // A problem found after the corrected invoice could be worked out still carries it as `invoice` (the live preview uses it).
 function planInvoiceEdit(d, invoiceId, edit) {
   const inv = d.invoices.find((i) => i.id === invoiceId);
@@ -1956,6 +1960,22 @@ function planInvoiceEdit(d, invoiceId, edit) {
     const product = findProduct(orig.productId, d);
     if (product) bump(restore, product.id, lineStockTaken(orig));
   });
+  // What changed on each line, kept for the history (a line that stayed the same is not listed).
+  const lineLog = [];
+  lines.forEach((line, n) => {
+    const item = items[n];
+    if (line.origIndex != null) {
+      const orig = inv.items[line.origIndex];
+      if (item.qty === orig.qty && item.unitPrice === orig.unitPrice) return;
+      lineLog.push({ name: invoiceItemLabel(orig), unit: orig.sellingUnit, qtyBefore: orig.qty, qtyAfter: item.qty,
+        ...(item.unitPrice !== orig.unitPrice ? { priceBefore: orig.unitPrice, priceAfter: item.unitPrice } : {}) });
+    } else {
+      lineLog.push({ name: invoiceItemLabel(item), unit: item.sellingUnit, qtyBefore: 0, qtyAfter: item.qty, priceAfter: item.unitPrice });
+    }
+  });
+  inv.items.forEach((orig, index) => {
+    if (!used.has(index)) lineLog.push({ name: invoiceItemLabel(orig), unit: orig.sellingUnit, qtyBefore: orig.qty, qtyAfter: 0, priceBefore: orig.unitPrice });
+  });
   if (tracked && (items.length !== inv.items.length || items.some((i, n) => i.lineId !== inv.items[n].lineId || i.qty !== inv.items[n].qty))) return { error: t("edit.trackedLines") };
 
   // ----- the discount and the tax -----
@@ -2002,10 +2022,9 @@ function planInvoiceEdit(d, invoiceId, edit) {
   if (Validation.sameValue(updated, inv)) return { skip: true, invoice: inv };
   const now = new Date().toISOString();
   updated.updatedAt = now;
-  updated.edits = [...(Array.isArray(inv.edits) ? inv.edits : []), { at: now, totalBefore: inv.total, totalAfter: updated.total }];
-
   const stockChanges = new Map();
-  const result = { invoice: updated, stockChanges, overpaid: false };
+  const stockLog = [];
+  const result = { invoice: updated, stockChanges, refundDue: 0 };
   // ----- the stock: given back and taken, per product, as one net change -----
   for (const productId of new Set([...restore.keys(), ...take.keys()])) {
     const product = findProduct(productId, d);
@@ -2015,15 +2034,23 @@ function planInvoiceEdit(d, invoiceId, edit) {
       return { ...result, error: t("edit.noStock", { name: product.name, needed: stockText(product, needed), available: stockText(product, available) }) };
     }
     const next = Math.max(0, Calc.cleanNumber(available - needed));
-    if (next !== product.stock) stockChanges.set(productId, next);
+    if (next !== product.stock) {
+      stockChanges.set(productId, next);
+      stockLog.push({ productId, name: product.name, unit: product.stockUnit || null, change: Calc.cleanNumber(next - product.stock) });
+    }
   }
-  // ----- the money: payments stay, and can never be more than what is due -----
+  // ----- the money: payments stay exactly as recorded. Paid MORE than the new amount due is a refund or credit owed to the
+  //       customer: it is worked out and shown, but never turned into a payment record. -----
   const paid = Validation.paidTotal(inv);
   const due = round2(toNumber(updated.total) + Validation.carriedTotal(inv));
-  if (paid > due + 0.01) {
-    result.overpaid = true;
-    return { ...result, error: t("edit.overpaid", { paid: money(paid, inv.currency), due: money(due, inv.currency) }) };
-  }
+  result.refundDue = Math.max(0, round2(paid - due));
+  // ----- the history: this edit's entry, added to the earlier ones -----
+  updated.edits = [...(Array.isArray(inv.edits) ? inv.edits : []), {
+    at: now, totalBefore: inv.total, totalAfter: updated.total, paid,
+    ...(result.refundDue > 0 ? { refundDue: result.refundDue } : {}),
+    ...(lineLog.length ? { lines: lineLog } : {}),
+    ...(stockLog.length ? { stock: stockLog } : {}),
+  }];
   // ----- what the database would refuse anyway, said plainly first -----
   const why = Validation.invoiceProblem(updated);
   if (why) return { ...result, error: t("edit.invalid", { number: inv.invoiceNumber, problem: why }) };
@@ -2158,6 +2185,20 @@ function renderEditResults() {
     : `<div class="empty"><p class="muted">${esc(t("results.noMatch", { query }))}</p></div>`;
 }
 
+// The stock this edit would give back or take, one summary row per product (nothing while the edit has a problem).
+function editStockRows(plan, row) {
+  if (plan.error || !plan.stockChanges) return "";
+  let html = "";
+  for (const [productId, next] of plan.stockChanges) {
+    const product = findProduct(productId);
+    if (!product) continue;
+    const change = Calc.cleanNumber(next - product.stock);
+    if (change === 0) continue;
+    html += row(t(change > 0 ? "edit.stockBack" : "edit.stockTaken"), `${productLabel(product)}: ${stockText(product, Math.abs(change))}`);
+  }
+  return html;
+}
+
 // Updates the line totals, the summary, the problem line and the preview without redrawing the inputs (keeps focus).
 function refreshEditLive() {
   const edit = state.invoiceEdit;
@@ -2178,10 +2219,14 @@ function refreshEditLive() {
     row(t("sell.subtotal"), money(toNumber(shown.subtotal), cur)) + row(t("sell.discount"), money(toNumber(shown.discount), cur)) + row(t("sell.tax"), money(toNumber(shown.tax), cur)) +
     row(t("edit.newDue"), money(pay.due, cur), "grand") +
     row(t("edit.paid"), money(pay.paid, cur)) +
-    row(t("edit.remainingAfter"), money(pay.remaining, cur), plan.overpaid ? "due edit-warn" : "due") +
-    row(t("edit.statusAfter"), pay.status);
+    row(t("edit.remainingAfter"), money(pay.remaining, cur), "due") +
+    // Paid more than the new amount due: the customer is owed the difference. It is shown, never recorded as paid back.
+    (pay.refundDue > 0 ? row(t("edit.refundDue"), money(pay.refundDue, cur), "due edit-warn") : "") +
+    row(t("edit.statusAfter"), pay.status) +
+    editStockRows(plan, row);
   $("editError").textContent = plan.error || "";
   $("editSave").disabled = Boolean(plan.error);
+  $("editSavePrint").disabled = Boolean(plan.error);
   if (state.view === "editinvoice") renderInvoice();
 }
 
@@ -2231,7 +2276,7 @@ function cancelInvoiceEdit() {
 
 // Save changes: ONE transaction for the invoice and the stock (see applyInvoiceEdit). On any problem nothing is changed and
 // the screen stays open with what was typed.
-function saveInvoiceEdit() {
+function saveInvoiceEdit(options = {}) {
   return guard(async () => {
     const edit = state.invoiceEdit;
     if (!edit) return;
@@ -2246,6 +2291,15 @@ function saveInvoiceEdit() {
     leaveEdit(edit.id, edit.fromPreview, true);
     notify(t(r.skip ? "edit.nothingChanged" : "edit.saved", { number }));
     onDebtDataChanged();
+    // Save and print: the invoice is already saved above, and the print is of that saved invoice (never of the screen's typed values).
+    if (options.print) {
+      const saved = state.invoices.find((i) => i.id === edit.id);
+      try {
+        if (saved) printInvoice(saved);
+      } catch (e) {
+        notify(t("edit.printFailed", { number }), "error");
+      }
+    }
   });
 }
 
@@ -2597,8 +2651,12 @@ function invoiceHtml(inv) {
   const movedRow = pay.transferredOut > 0
     ? `<tr class="moved"><td>${esc(t("inv.transferredOut", { numbers: carriedToNumbers(inv) }))}</td><td>${esc(money(pay.transferredOut, cur))}</td></tr>`
     : "";
+  // Paid more than the invoice now asks for (after a return): the amount owed back to the customer, on its own line.
+  const refundRow = pay.refundDue > 0
+    ? `<tr class="due refund"><td>${esc(t("inv.refundDue"))}</td><td>${esc(money(pay.refundDue, cur))}</td></tr>`
+    : "";
   const paidRows = hasItems
-    ? `<tr><td>${esc(t("inv.totalPaid"))}</td><td>${esc(money(pay.paid, cur))}</td></tr>${movedRow}<tr class="due"><td>${esc(t("inv.remaining"))}</td><td>${esc(money(pay.remaining, cur))}</td></tr>`
+    ? `<tr><td>${esc(t("inv.totalPaid"))}</td><td>${esc(money(pay.paid, cur))}</td></tr>${movedRow}<tr class="due"><td>${esc(t("inv.remaining"))}</td><td>${esc(money(pay.remaining, cur))}</td></tr>${refundRow}`
     : "";
   const history = hasItems
     ? `<div class="inv-status"><span class="${pay.cls}">${esc(t("inv.status"))} ${esc(pay.status)}</span></div>
@@ -2704,6 +2762,8 @@ function renderPayBox() {
   $("payTotal").textContent = money(info.due, cur);
   $("payPaid").textContent = money(info.paid, cur);
   $("payRemaining").textContent = money(info.remaining, cur);
+  $("payRefundRow").hidden = !(info.refundDue > 0);
+  $("payRefund").textContent = info.refundDue > 0 ? money(info.refundDue, cur) : "";
   // How the payments on this invoice are shared with the debt it carries (oldest debt first), and where its own balance went.
   const breakdown = Validation.carriedBreakdown(inv);
   $("payCarriedRow").hidden = !(info.carried > 0);
@@ -2906,6 +2966,7 @@ function renderInvoices() {
     const notes = [];
     if (pay.carried > 0) notes.push(t("invoices.inclCarried", { amount: money(pay.carried, inv.currency) }));
     if (pay.transferredOut > 0) notes.push(t("invoices.carriedTo", { amount: money(pay.transferredOut, inv.currency), numbers: carriedToNumbers(inv) }));
+    if (pay.refundDue > 0) notes.push(t("invoices.refundDue", { amount: money(pay.refundDue, inv.currency) }));
     // Delivery is its own status, shown under the payment status.
     const delivery = Validation.deliveryDetail(inv);
     const deliveryBadge = delivery.tracked
@@ -4088,6 +4149,7 @@ function bindEvents() {
     $("editSearch").focus();
   });
   $("editForm").addEventListener("submit", (e) => { e.preventDefault(); saveInvoiceEdit(); });
+  $("editSavePrint").addEventListener("click", () => saveInvoiceEdit({ print: true }));
   $("editCancel").addEventListener("click", cancelInvoiceEdit);
   // Closing or reloading the page with typed changes asks first.
   window.addEventListener("beforeunload", (e) => {

@@ -759,6 +759,8 @@ input:disabled, select:disabled, textarea:disabled { background: #f1f3f6; color:
 .table tr.edit-new td:first-child { border-left: 3px solid var(--accent, #1b6e3c); }
 .edit-line-note { margin-top: 2px; }
 .totals .edit-warn { color: var(--danger); font-weight: 600; }
+.pay-summary .refund-due { color: var(--danger); font-weight: 600; }
+.inv-totals .refund td { border-top: 1px dashed #000; }
 
 /* ----- Invoice history: filters and sortable headers ----- */
 .invoice-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }

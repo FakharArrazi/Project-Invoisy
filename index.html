@@ -397,6 +397,7 @@
           <div class="actions">
             <button type="button" class="btn" id="editCancel" data-i18n="common.cancel">Cancel</button>
             <button type="submit" class="btn primary" id="editSave" data-i18n="edit.save">Save changes</button>
+            <button type="button" class="btn primary" id="editSavePrint" data-i18n="edit.saveAndPrint">Save and print</button>
           </div>
         </form>
       </div>
@@ -554,6 +555,7 @@
         <div id="payCarriedRow" hidden><span data-i18n="pay.carried">Includes carried-forward debt</span><span id="payCarried"></span></div>
         <div id="payTransferredRow" hidden><span data-i18n="pay.transferred">Carried to other invoices</span><span id="payTransferred"></span></div>
         <div class="grand"><span data-i18n="pay.remaining">Remaining</span><span id="payRemaining"></span></div>
+        <div id="payRefundRow" class="refund-due" hidden><span data-i18n="pay.refund">Refund / credit due to customer</span><span id="payRefund"></span></div>
       </div>
       <form id="payForm" novalidate>
         <label for="payAmount" data-i18n="pay.new">New payment</label>

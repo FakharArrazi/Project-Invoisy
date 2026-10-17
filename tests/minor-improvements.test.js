@@ -429,26 +429,25 @@ test("edit: invalid inputs are refused (zero, negative or fractional box quantit
   assert.equal(invoiceById(ctx.api, inv.id).items[0].qty, 2);
 });
 
-test("edit: a price cut that would leave payments above the new total is explained and refused; payments are never deleted", async () => {
+test("edit: a price cut below what is already paid is saved; payments are never deleted and the difference is a refund due, not a payment", async () => {
   const ctx = await boot();
   const a = await addTile(ctx);
   const inv = await sell(ctx, a, { qty: "2", paid: "2000" });   // total 2304, 2000 paid
   const edit = openEdit(ctx, inv);
   edit.lines[0].unitPrice = "100";   // new total 200 < 2000 paid
   const plan = ctx.api.editPlan();
-  assert.equal(plan.overpaid, true);
-  assert.match(plan.error, /./);
+  assert.equal(plan.error, undefined, "an overpayment is no longer a reason to refuse the edit");
+  assert.equal(plan.refundDue, 1800);
   await ctx.api.saveInvoiceEdit();
   const saved = invoiceById(ctx.api, inv.id);
-  assert.deepEqual(plain(saved.payments), plain(inv.payments));
-  assert.equal(saved.items[0].unitPrice, 1152);
-  // Cutting it only as far as the payments allow works.
-  edit.lines[0].unitPrice = "1000";   // total 2000 = paid
-  assert.equal(ctx.api.editPlan().error, undefined);
-  await ctx.api.saveInvoiceEdit();
-  const fixed = invoiceById(ctx.api, inv.id);
-  assert.equal(ctx.api.paymentInfo(fixed).remaining, 0);
-  assert.match(ctx.api.paymentInfo(fixed).status, /paid/i);
+  assert.deepEqual(plain(saved.payments), plain(inv.payments), "payment history is exactly as it was");
+  assert.equal(saved.items[0].unitPrice, 100);
+  assert.equal(saved.total, 200);
+  const info = ctx.api.paymentInfo(saved);
+  assert.equal(info.paid, 2000, "nothing was recorded as paid back");
+  assert.equal(info.remaining, 0);
+  assert.equal(info.refundDue, 1800);
+  assert.match(info.status, /paid/i);
 });
 
 test("edit: leaving with unsaved changes asks first; cancelling the question keeps the screen and what was typed", async () => {

@@ -112,6 +112,10 @@
   const carriedTotal = (inv) => round2(carriedLines(inv).reduce((sum, l) => sum + toNumber(l && l.amount), 0));
   // What the invoice asks the customer to pay: this purchase plus the debt carried onto it.
   const amountDue = (inv) => round2(toNumber(inv && inv.total) + carriedTotal(inv));
+  // What the customer is owed back when the payments received are MORE than the invoice now asks for (an invoice whose total
+  // was lowered by an edit, for example a returned box, after it had been paid). Derived, never stored, and never a payment:
+  // no cash is recorded as refunded, and the payment history is never changed to hide it.
+  const refundDue = (inv) => Math.max(0, round2(paidTotal(inv) - amountDue(inv)));
   // How much of this invoice's balance was carried forward to other invoices.
   function transferredOut(inv, transfers) {
     if (!inv || !Array.isArray(transfers)) return 0;
@@ -638,7 +642,7 @@
     let cls;
     if (remaining > 0) cls = paid > 0 ? "partial" : "unpaid";
     else cls = moved > 0 && round2(due - paid) > 0 ? "transferred" : "paid";
-    return { payments, paid, remaining, cls, due, transferredOut: moved, carried: carriedTotal(inv) };
+    return { payments, paid, remaining, cls, due, transferredOut: moved, carried: carriedTotal(inv), refundDue: refundDue(inv) };
   }
 
   function paymentSummary(inv, transfers) {
@@ -816,6 +820,14 @@
     return deliveryProblem(inv);
   }
 
+  // Payments above the total are expected after an edit lowered the total of a paid invoice: that edit recorded the refund
+  // it left due. Overpayment that no recorded edit explains is still reported.
+  function overpaymentExplainedByEdit(inv, paid) {
+    const edits = Array.isArray(inv.edits) ? inv.edits : [];
+    const last = edits[edits.length - 1];
+    return Boolean(last) && isNum(last.refundDue) && Math.abs(round2(paid - amountDue(inv)) - last.refundDue) <= MONEY_TOLERANCE;
+  }
+
   // Not rejected (older data may not follow today's arithmetic exactly), but always shown to the person
   // before a restore. The stored values are never changed to make them add up.
   function invoiceWarnings(inv) {
@@ -824,7 +836,7 @@
     const number = inv.invoiceNumber;
     const payments = Array.isArray(inv.payments) ? inv.payments : [];
     const paid = round2(payments.reduce((sum, p) => sum + toNumber(p && p.amount), 0));
-    if (isNum(inv.total) && paid > amountDue(inv) + MONEY_TOLERANCE) {
+    if (isNum(inv.total) && paid > amountDue(inv) + MONEY_TOLERANCE && !overpaymentExplainedByEdit(inv, paid)) {
       warnings.push(t("warn.paidMoreThanTotal", { number }));
     }
     if (isNum(inv.subtotal) && isNum(inv.discount) && isNum(inv.tax) && isNum(inv.total)) {
@@ -1350,7 +1362,7 @@
     DEFAULT_SETTINGS, SELLING_UNITS, PRODUCT_TYPES, normalizeProductType, INVOICE_STATUSES, DERIVED_INVOICE_FIELDS, WALK_IN,
     isObj, isStr, isNum, isDate, round2, toNumber, uid, sameValue,
     formatInvoiceNumber, invoiceSequence, highestInvoiceNumber,
-    carriedLines, paidTotal, carriedTotal, amountDue, transferredOut, carriedBreakdown,
+    carriedLines, paidTotal, carriedTotal, amountDue, refundDue, transferredOut, carriedBreakdown,
     isTracked, deliveryDetail, collectionNumber, receiptNumber, collectionReceipts, deliveryProblem, deliveryHistoryProblem, DELIVERY_EPSILON, DELIVERY_NOTE_MAX,
     normalizeName, phoneDigits, isWalkInName, customerKeys, customerGroups, findGroup, sameCustomer,
     transferProblem, ledgerProblems,
