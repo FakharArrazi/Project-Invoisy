@@ -1,0 +1,1100 @@
+From 7d01dfc52604d08058f68137b63507ccd452e729 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 19 Oct 2026 09:42:42 +0100
+Subject: [PATCH] Fix multi-page printed invoice pagination and layout
+
+The printed invoice relied on the browser to split one long page. With @page margin 0
+(needed to hide Chrome's own date/URL header) the later pages had no margin, no header
+and no page numbers, and the payment status could be pushed onto page 2 alone, away
+from the totals.
+
+Just before printing, the invoice is now laid out on explicit paper-sized pages
+(java script/invoice-print.js), measured in the real browser:
+
+- Financial summary (subtotal, discount, tax, total, paid, remaining and the payment
+  status) is one block that is never split; it stays under the products when it fits.
+- Product rows flow across pages, one row per entry, with the column headings repeated.
+- Payment history and delivery history flow independently; heading + first entry stay
+  together, later pages repeat the heading as "(continued)".
+- Pages 2+ get a compact "INVOICE - CONTINUED" header (company, number, date, customer).
+- Every page has consistent margins and a "Page X of N" footer; N is the real count.
+- The thank-you message follows the last section and only moves when it does not fit.
+- If laying out the pages fails, the browser prints the preview as before.
+
+Invoice data, calculations, screen preview and the purchase / collection documents are
+unchanged. Adds layout unit tests, markup tests and a real-browser PDF check.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QrzXvz2i7oxp7kXaUKHaeR
+---
+ css/style.css                         |  52 ++++-
+ index.html                            |   3 +
+ java script/invoice-print.js          | 103 +++++++++
+ java script/lang/en.js                |   3 +
+ java script/lang/fr.js                |   3 +
+ java script/script.js                 | 195 ++++++++++++----
+ tests/e2e/invoice_pagination_check.py | 313 ++++++++++++++++++++++++++
+ tests/invoice-print-markup.test.js    | 122 ++++++++++
+ tests/invoice-print.test.js           | 124 ++++++++++
+ 9 files changed, 872 insertions(+), 46 deletions(-)
+ create mode 100644 java script/invoice-print.js
+ create mode 100644 tests/e2e/invoice_pagination_check.py
+ create mode 100644 tests/invoice-print-markup.test.js
+ create mode 100644 tests/invoice-print.test.js
+
+diff --git a/css/style.css b/css/style.css
+index d8865fb..cb93377 100644
+--- a/css/style.css
++++ b/css/style.css
+@@ -550,13 +550,63 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
+   .inv-biz-name { font-size: 15pt; }
+   .inv-title { font-size: 20pt; }
+   .inv-table th, .inv-table td { font-size: 10.5pt; }
+-  .inv-table tr, .inv-totals, .inv-status, .inv-payments, .inv-carried { page-break-inside: avoid; }
++  .inv-table tr, .inv-totals, .inv-summary, .inv-status, .inv-payments, .inv-carried { page-break-inside: avoid; }
+   html[data-paper="a5"] .invoice { padding: 10mm; font-size: 10pt; }
+   html[data-paper="a5"] .inv-biz-name { font-size: 13pt; }
+   html[data-paper="a5"] .inv-title { font-size: 17pt; }
+   html[data-paper="a5"] .inv-table th, html[data-paper="a5"] .inv-table td { font-size: 9.5pt; }
+ }
+ 
++/* ---------- Printed invoice pages ---------- */
++
++/* Just before printing, invoice-print.js lays the invoice out on paper-sized pages (#invoicePages), each with its own margins,
++   a continuation header (pages 2 and up) and a "Page X of N" footer. The rules below hold on screen as well as in print, because
++   the pages are measured on screen first; their sizes are the ones the plain print rules above give the invoice. */
++.inv-pages { display: none; }
++.inv-pages.measuring { display: block; position: absolute; left: -10000px; top: 0; visibility: hidden; }   /* laid out off screen, never seen */
++
++#invoicePages .inv-page {
++  --page-w: 210mm; --page-h: 296.5mm;          /* a hair under the sheet, so a page can never spill onto an extra blank sheet */
++  --pad-x: 15mm; --pad-top: 15mm; --pad-bottom: 20mm; --foot: 9mm;
++  position: relative; width: var(--page-w); height: var(--page-h); padding: var(--pad-top) var(--pad-x) var(--pad-bottom);
++  overflow: hidden; color: #000; background: #fff; font: 11pt/1.4 Arial, Helvetica, sans-serif;
++  break-after: page; page-break-after: always;
++}
++#invoicePages .inv-page:last-child { break-after: auto; page-break-after: auto; }
++html[data-paper="a5"] #invoicePages .inv-page { --page-w: 148mm; --page-h: 209.5mm; --pad-x: 10mm; --pad-top: 10mm; --pad-bottom: 16mm; --foot: 6mm; font-size: 10pt; }
++
++#invoicePages .inv-page-body { height: 100%; display: flow-root; }
++#invoicePages .inv-page-body > :first-child { margin-top: 0; }
++#invoicePages .inv-biz-name { font-size: 15pt; }
++#invoicePages .inv-title { font-size: 20pt; }
++#invoicePages .inv-table th, #invoicePages .inv-table td { font-size: 10.5pt; }
++html[data-paper="a5"] #invoicePages .inv-biz-name { font-size: 13pt; }
++html[data-paper="a5"] #invoicePages .inv-title { font-size: 17pt; }
++html[data-paper="a5"] #invoicePages .inv-table th, html[data-paper="a5"] #invoicePages .inv-table td { font-size: 9.5pt; }
++
++/* The header of a continuation page: compact, same black rule as the first page's header. */
++#invoicePages .inv-cont-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; padding-bottom: 6px; border-bottom: 2px solid #000; }
++#invoicePages .inv-cont-head + * { margin-top: 10px; }
++#invoicePages .inv-cont-left, #invoicePages .inv-cont-right { min-width: 0; }
++#invoicePages .inv-cont-right { text-align: right; }
++#invoicePages .inv-cont-biz { font-size: 12pt; font-weight: 700; }
++#invoicePages .inv-cont-title { font-size: 10pt; font-weight: 700; letter-spacing: 1px; }
++#invoicePages .inv-cont-sub { font-size: 9pt; color: #333; overflow-wrap: anywhere; }
++#invoicePages .inv-cont-sub .label { color: #555; }
++/* A history section that starts a page sits right under that header: no extra gap, no second rule. */
++#invoicePages .inv-cont-head + .inv-payments { padding-top: 0; border-top: 0; }
++
++#invoicePages .inv-page-foot {
++  position: absolute; left: var(--pad-x); right: var(--pad-x); bottom: var(--foot);
++  display: flex; justify-content: space-between; gap: 12px; padding-top: 4px; border-top: 1px solid #ddd; font-size: 8.5pt; color: #666;
++}
++
++@media print {
++  /* With the pages built, they are all that is printed. */
++  html[data-invoice-pages] body:not([data-printing]) > *:not(#invoicePages) { display: none !important; }
++  html[data-invoice-pages] body:not([data-printing]) #invoicePages { display: block; }
++}
++
+ /* ==========================================================================
+    Suppliers and Purchases
+    ========================================================================== */
+diff --git a/index.html b/index.html
+index c4eb336..2d8c1cf 100644
+--- a/index.html
++++ b/index.html
+@@ -594,6 +594,8 @@
+ <article class="invoice purchase-print" id="purchasePrint"></article>
+ <!-- What is printed for goods still to collect (hidden on screen, shown only when printing) -->
+ <article class="invoice collection-print" id="collectionPrint"></article>
++<!-- The invoice laid out page by page, built just before printing (invoice-print.js); hidden on screen -->
++<div class="inv-pages" id="invoicePages" aria-hidden="true"></div>
+ <!-- Confirmation before old debt is added to the sale being prepared. Nothing is saved from here. -->
+ <dialog class="debt-dialog no-print" id="debtDialog" aria-labelledby="debtDialogTitle">
+   <form id="debtForm" novalidate>
+@@ -642,6 +644,7 @@
+ <script src="java script/database.js"></script>
+ <script src="java script/autobackup.js"></script>
+ <script src="java script/purchases-ui.js"></script>
++<script src="java script/invoice-print.js"></script>
+ <script src="java script/script.js"></script>
+ </body>
+ </html>
+diff --git a/java script/invoice-print.js b/java script/invoice-print.js
+new file mode 100644
+index 0000000..07c14da
+--- /dev/null
++++ b/java script/invoice-print.js	
+@@ -0,0 +1,103 @@
++"use strict";
++
++/* ==========================================================================
++   Invoice print - lays a printed invoice out over as many pages as it needs.
++
++   Plain script (no modules, so index.html still works when opened directly). Loaded before script.js.
++
++   Why the app paginates by itself
++     The browser prints with `@page { margin: 0 }` (a bigger page margin makes Chrome print its own date / address
++     header and footer). With no page margin the browser can not give the second and later pages a margin, a header
++     or a "Page 2 of 3" footer, and it knows nothing about which parts of an invoice belong together. So just before
++     printing, script.js hands the invoice to this file as a list of items, and this file lays them out on paper-sized
++     pages that carry their own margins, continuation header and footer. The number of pages is known before anything
++     is printed, so the numbering is always right.
++
++   The items (in printing order)
++     { kind: "block", html }
++         Stays whole: it is never split between two pages. The financial summary (totals and payment status) is one.
++     { kind: "flow", lead, build(entries, continued), entries }
++         Many entries that may run over several pages: the product table (rows), the payment history, the delivery
++         history. `build` returns the markup of one piece holding the given entries (`continued` is true for a piece
++         that does not start the section, so it can repeat the table heading / section title). `lead` is markup that
++         goes just before the first piece and stays with it. A piece always holds at least one entry, and the first
++         piece (lead, heading and first entry) is never left alone at the bottom of a page.
++
++   layout() is pure: it only needs a function that says whether some markup fits on a page, so the rules can be tested
++   without a browser. paginate() supplies that function by measuring a real page in the document.
++   ========================================================================== */
++
++(function () {
++  // items: see above.  fits(fragments, pageIndex): would a page holding exactly these fragments (after the continuation
++  // header when pageIndex > 0) stay inside the printable area?  Returns the pages, each a list of markup fragments.
++  function layout(items, fits) {
++    const pages = [[]];
++    const current = () => pages[pages.length - 1];
++    const next = () => { pages.push([]); };
++    const fitsHere = (fragments) => fits(current().concat(fragments), pages.length - 1);
++
++    // Fragments that stay together go on the current page when they fit after what is already there, otherwise on a new
++    // one. An empty page takes them whatever their size: nothing could do better, and the next one would be no different.
++    function together(fragments) {
++      if (current().length && !fitsHere(fragments)) next();
++      current().push(...fragments);
++    }
++
++    for (const item of items) {
++      if (item.kind === "block") {
++        together([item.html]);
++        continue;
++      }
++      const entries = item.entries;
++      if (!entries.length) {
++        together((item.lead ? [item.lead] : []).concat(item.build([], false)));
++        continue;
++      }
++      let start = 0;       // the entries of the piece on the current page are entries[start .. k]
++      together((item.lead ? [item.lead] : []).concat(item.build(entries.slice(0, 1), false)));
++      for (let k = 1; k < entries.length; k++) {
++        const grown = item.build(entries.slice(start, k + 1), start > 0);
++        if (fits(current().slice(0, -1).concat(grown), pages.length - 1)) {
++          current()[current().length - 1] = grown;
++        } else {
++          next();
++          start = k;
++          current().push(item.build(entries.slice(k, k + 1), true));
++        }
++      }
++    }
++    return pages;
++  }
++
++  // Builds the printed pages inside `host` (the element that is shown only when printing). options:
++  //   continuation: markup for the top of every page after the first
++  //   footer(page, total): markup for the bottom of a page
++  // Returns the number of pages.
++  function paginate(host, items, options) {
++    const probe = document.createElement("section");
++    probe.className = "inv-page";
++    const probeBody = document.createElement("div");
++    probeBody.className = "inv-page-body";
++    probe.appendChild(probeBody);
++    host.textContent = "";
++    host.appendChild(probe);
++    host.classList.add("measuring");      // laid out off screen, so it can be measured but never shows
++    try {
++      const top = (pageIndex) => (pageIndex > 0 ? options.continuation : "");
++      const fits = (fragments, pageIndex) => {
++        probeBody.innerHTML = top(pageIndex) + fragments.join("");
++        return probeBody.scrollHeight <= probeBody.clientHeight + 1;    // + 1: sub-pixel rounding
++      };
++      const pages = layout(items, fits);
++      host.innerHTML = pages.map((fragments, index) =>
++        `<section class="inv-page"><div class="inv-page-body">${top(index)}${fragments.join("")}</div>${options.footer(index + 1, pages.length)}</section>`
++      ).join("");
++      return pages.length;
++    } finally {
++      host.classList.remove("measuring");
++    }
++  }
++
++  globalThis.InvoicePrint = { layout, paginate };
++  if (typeof module !== "undefined" && module.exports) module.exports = globalThis.InvoicePrint;
++})();
+diff --git a/java script/lang/en.js b/java script/lang/en.js
+index d1948ac..7bdd3f6 100644
+--- a/java script/lang/en.js	
++++ b/java script/lang/en.js	
+@@ -220,6 +220,9 @@ I18n.register("en", "English", {
+   "inv.paidLine": "Paid: {amount}",
+   "inv.noPayments": "No payments yet.",
+   "inv.thanks": "Thank you for your purchase.",
++  "inv.continued": "INVOICE — CONTINUED",
++  "inv.continuedHeading": "{title} (continued)",
++  "inv.pageOf": "Page {page} of {total}",
+ 
+   // ----- Settings -----
+   "settings.language": "Language / Langue",
+diff --git a/java script/lang/fr.js b/java script/lang/fr.js
+index ae22e55..9e43ddf 100644
+--- a/java script/lang/fr.js	
++++ b/java script/lang/fr.js	
+@@ -224,6 +224,9 @@
+     "inv.paidLine": "Payé : {amount}",
+     "inv.noPayments": "Aucun paiement pour le moment.",
+     "inv.thanks": "Merci pour votre achat.",
++    "inv.continued": "FACTURE — SUITE",
++    "inv.continuedHeading": "{title} (suite)",
++    "inv.pageOf": "Page {page} sur {total}",
+ 
+     // ----- Settings -----
+     "settings.language": "Langue / Language",
+diff --git a/java script/script.js b/java script/script.js
+index 4c68a34..84b9bc8 100644
+--- a/java script/script.js	
++++ b/java script/script.js	
+@@ -2697,7 +2697,9 @@ function refreshLive() {
+   renderInvoice();
+ }
+ 
+-function invoiceHtml(inv) {
++// The invoice as separate pieces of markup. The preview on screen puts them together (invoiceHtml); the printed pages
++// are laid out from the same pieces (buildPrintPages), so what is printed is what the preview shows.
++function invoiceParts(inv) {
+   const cur = inv.currency || state.settings.currency;
+   const biz = inv.business || Validation.businessSnapshot(state.settings);
+   const cust = inv.customer || { name: WALK_IN, phone: "", address: "" };
+@@ -2718,8 +2720,8 @@ function invoiceHtml(inv) {
+           ? `<div class="inv-sub inv-open">${esc(t("inv.deliveredOf", { delivered: qtyText(left.delivered, i.sellingUnit), remaining: qtyText(left.remaining, i.sellingUnit) }))}</div>`
+           : "";
+         return `<tr><td>${esc(invoiceItemLabel(i))}${invoiceItemTypeHtml(i)}</td><td class="num">${num(i.qty)}${i.sellingUnit ? ` ${esc(unitLabel(i.sellingUnit, i.qty))}` : ""}${inPriceUnit}${toCollect}</td><td class="num">${num(shown.price)}${shown.unit ? ` <span class="inv-unit">/ ${esc(unitLabel(shown.unit))}</span>` : ""}</td><td class="num">${num(i.total != null ? i.total : Calc.calculateLineTotal(i.qty, i.unitPrice))}</td></tr>`;
+-      }).join("")
+-    : `<tr><td colspan="4" class="none">${esc(t("inv.noItems"))}</td></tr>`;
++      })
++    : [`<tr><td colspan="4" class="none">${esc(t("inv.noItems"))}</td></tr>`];   // one row per product: a row is never split between two printed pages
+ 
+   const pay = paymentInfo(inv);
+   const hasItems = inv.items.length > 0;
+@@ -2746,54 +2748,153 @@ function invoiceHtml(inv) {
+   const paidRows = hasItems
+     ? `<tr><td>${esc(t("inv.totalPaid"))}</td><td>${esc(money(pay.paid, cur))}</td></tr>${movedRow}<tr class="due"><td>${esc(t("inv.remaining"))}</td><td>${esc(money(pay.remaining, cur))}</td></tr>${refundRow}`
+     : "";
+-  const history = hasItems
+-    ? `<div class="inv-status"><span class="${pay.cls}">${esc(t("inv.status"))} ${esc(pay.status)}</span></div>
+-    <section class="inv-payments"><h3>${esc(t("inv.history"))}</h3>${
+-      pay.payments.length
+-        ? pay.payments.map((p) => `<div class="inv-pay"><span class="when">${esc(formatDateTime(p.timestamp))}</span><span>${esc(t("inv.paidLine", { amount: money(p.amount, cur) }))}</span></div>`).join("")
+-        : `<div class="inv-pay"><span class="when">${esc(t("inv.noPayments"))}</span></div>`
+-    }</section>`
++  // The payment status belongs to the totals: together they are the financial summary, one block that is never split
++  // between two printed pages (the status must never be left alone at the top of the next one).
++  const statusHtml = hasItems
++    ? `<div class="inv-status"><span class="${pay.cls}">${esc(t("inv.status"))} ${esc(pay.status)}</span></div>`
+     : "";
++  const summary = `<div class="inv-summary">
++      <table class="inv-totals">
++        <tr><td>${esc(t("inv.subtotal"))}</td><td>${esc(money(toNumber(inv.subtotal), cur))}</td></tr>
++        <tr><td>${esc(t("inv.discount"))}${pct(inv.discountPercent)}</td><td>${esc(money(toNumber(inv.discount), cur))}</td></tr>
++        <tr><td>${esc(t("inv.tax"))}${pct(inv.taxPercent)}</td><td>${esc(money(toNumber(inv.tax), cur))}</td></tr>
++        ${totalRows}
++        ${paidRows}
++      </table>
++      ${statusHtml}
++    </div>`;
++  // Payment history and delivery history are sections that may run over several pages, one entry per line.
++  const payments = hasItems
++    ? {
++        cls: "inv-payments", lead: "", title: t("inv.history"),
++        entries: pay.payments.length
++          ? pay.payments.map((p) => `<div class="inv-pay"><span class="when">${esc(formatDateTime(p.timestamp))}</span><span>${esc(t("inv.paidLine", { amount: money(p.amount, cur) }))}</span></div>`)
++          : [`<div class="inv-pay"><span class="when">${esc(t("inv.noPayments"))}</span></div>`],
++      }
++    : null;
+   // Delivery is shown apart from payment: a paid invoice can still have goods waiting.
+-  const deliveryBlock = hasItems && delivery.tracked
+-    ? `<div class="inv-status inv-delivery-status"><span class="dlv-${delivery.status}">${esc(t("inv.deliveryStatus"))} ${esc(t("inv.delivery." + delivery.status))}</span></div>
+-    <section class="inv-payments inv-deliveries"><h3>${esc(t("inv.deliveryHistory"))}</h3>${
+-      inv.deliveries.length
+-        ? inv.deliveries.map((d, n) => {
+-            const what = d.type === "sale" ? t("inv.deliverySale") : t("inv.deliveryCollection", { number: Validation.receiptNumber(inv, inv.deliveries.slice(0, n + 1).filter((x) => x.type === "collection").length) });
+-            const things = d.lines.map((l) => {
+-              const item = inv.items.find((i) => i.lineId === l.lineId);
+-              return t("inv.deliveryLine", { quantity: qtyText(l.qty, item && item.sellingUnit), name: item ? invoiceItemLabel(item) : "" });
+-            }).join(", ");
+-            return `<div class="inv-pay"><span class="when">${esc(formatDateTime(d.date))}</span><span>${esc(what)}: ${esc(things)}${d.note ? ` (${esc(d.note)})` : ""}</span></div>`;
+-          }).join("")
+-        : `<div class="inv-pay"><span class="when">${esc(t("inv.noDeliveries"))}</span></div>`
+-    }</section>`
+-    : "";
++  const deliveries = hasItems && delivery.tracked
++    ? {
++        cls: "inv-payments inv-deliveries", title: t("inv.deliveryHistory"),
++        lead: `<div class="inv-status inv-delivery-status"><span class="dlv-${delivery.status}">${esc(t("inv.deliveryStatus"))} ${esc(t("inv.delivery." + delivery.status))}</span></div>`,
++        entries: inv.deliveries.length
++          ? inv.deliveries.map((d, n) => {
++              const what = d.type === "sale" ? t("inv.deliverySale") : t("inv.deliveryCollection", { number: Validation.receiptNumber(inv, inv.deliveries.slice(0, n + 1).filter((x) => x.type === "collection").length) });
++              const things = d.lines.map((l) => {
++                const item = inv.items.find((i) => i.lineId === l.lineId);
++                return t("inv.deliveryLine", { quantity: qtyText(l.qty, item && item.sellingUnit), name: item ? invoiceItemLabel(item) : "" });
++              }).join(", ");
++              return `<div class="inv-pay"><span class="when">${esc(formatDateTime(d.date))}</span><span>${esc(what)}: ${esc(things)}${d.note ? ` (${esc(d.note)})` : ""}</span></div>`;
++            })
++          : [`<div class="inv-pay"><span class="when">${esc(t("inv.noDeliveries"))}</span></div>`],
++      }
++    : null;
+ 
+-  return `<header class="inv-head">
++  return {
++    head: `<header class="inv-head">
+       <div>${logo}<div class="inv-biz-name">${esc(biz.name)}</div>${line(biz.address)}${businessPhonesHtml(biz)}${line(biz.email)}</div>
+       <div class="inv-title">${esc(t("inv.title"))}</div>
+-    </header>
+-    <div class="inv-meta">
++    </header>`,
++    meta: `<div class="inv-meta">
+       ${customerBlockHtml(inv, cust)}
+       <div class="right"><div><span class="label">${esc(t("inv.number"))}</span> ${esc(inv.invoiceNumber)}</div><div><span class="label">${esc(t("inv.date"))}</span> ${esc(formatDateTime(inv.date))}</div></div>
+-    </div>
+-    <table class="inv-table">
+-      <thead><tr><th>${esc(t("inv.product"))}</th><th class="num">${esc(t("inv.qty"))}</th><th class="num">${esc(t("inv.price", { currency: cur }))}</th><th class="num">${esc(t("inv.lineTotal", { currency: cur }))}</th></tr></thead>
+-      <tbody>${rows}</tbody>
+-    </table>
+-    ${carriedBlock}
+-    <table class="inv-totals">
+-      <tr><td>${esc(t("inv.subtotal"))}</td><td>${esc(money(toNumber(inv.subtotal), cur))}</td></tr>
+-      <tr><td>${esc(t("inv.discount"))}${pct(inv.discountPercent)}</td><td>${esc(money(toNumber(inv.discount), cur))}</td></tr>
+-      <tr><td>${esc(t("inv.tax"))}${pct(inv.taxPercent)}</td><td>${esc(money(toNumber(inv.tax), cur))}</td></tr>
+-      ${totalRows}
+-      ${paidRows}
+-    </table>
+-    ${history}
+-    ${deliveryBlock}
+-    <p class="inv-thanks">${esc(t("inv.thanks"))}</p>`;
++    </div>`,
++    thead: `<thead><tr><th>${esc(t("inv.product"))}</th><th class="num">${esc(t("inv.qty"))}</th><th class="num">${esc(t("inv.price", { currency: cur }))}</th><th class="num">${esc(t("inv.lineTotal", { currency: cur }))}</th></tr></thead>`,
++    rows,
++    carried: carriedBlock,
++    summary,
++    payments,
++    deliveries,
++    thanks: `<p class="inv-thanks">${esc(t("inv.thanks"))}</p>`,
++  };
++}
++
++// The product table holding the given rows; the heading row is part of every piece, so a table that continues on the next page repeats it.
++function invoiceTableHtml(parts, rows) {
++  return `<table class="inv-table">
++      ${parts.thead}
++      <tbody>${rows.join("")}</tbody>
++    </table>`;
++}
++
++// A flowing section (payment history, delivery history) holding the given entries. A piece that continues on a
++// later page says so in its title.
++function invoiceSectionHtml(section, entries, continued) {
++  const title = continued ? t("inv.continuedHeading", { title: section.title }) : section.title;
++  return `<section class="${section.cls}"><h3>${esc(title)}</h3>${entries.join("")}</section>`;
++}
++
++function invoiceHtml(inv) {
++  const p = invoiceParts(inv);
++  return `${p.head}
++    ${p.meta}
++    ${invoiceTableHtml(p, p.rows)}
++    ${p.carried}
++    ${p.summary}
++    ${p.payments ? invoiceSectionHtml(p.payments, p.payments.entries, false) : ""}
++    ${p.deliveries ? p.deliveries.lead + invoiceSectionHtml(p.deliveries, p.deliveries.entries, false) : ""}
++    ${p.thanks}`;
++}
++
++/* ---------- Printing the invoice over several pages (the layout rules are in invoice-print.js) ---------- */
++
++// The small header at the top of every printed page after the first: whose invoice this is.
++function continuationHeadHtml(inv) {
++  const biz = inv.business || Validation.businessSnapshot(state.settings);
++  const cust = inv.customer || { name: WALK_IN, phone: "", address: "" };
++  const second = secondCustomerName(inv);
++  const customer = customerLabel(cust.name) + (second ? " / " + second : "");
++  return `<div class="inv-cont-head">
++      <div class="inv-cont-left"><div class="inv-cont-biz">${esc(biz.name)}</div><div class="inv-cont-sub"><span class="label">${esc(t("inv.customer"))}</span> ${esc(customer)}</div></div>
++      <div class="inv-cont-right"><div class="inv-cont-title">${esc(t("inv.continued"))}</div><div class="inv-cont-sub"><span class="label">${esc(t("inv.number"))}</span> ${esc(inv.invoiceNumber)} &nbsp; <span class="label">${esc(t("inv.date"))}</span> ${esc(formatDate(inv.date))}</div></div>
++    </div>`;
++}
++
++// The invoice as the list of items invoice-print.js lays out: what stays whole, and what may continue on the next page.
++function printItems(inv) {
++  const p = invoiceParts(inv);
++  const items = [
++    { kind: "block", html: p.head + p.meta },
++    { kind: "flow", lead: "", entries: p.rows, build: (rows) => invoiceTableHtml(p, rows) },
++  ];
++  if (p.carried) items.push({ kind: "block", html: p.carried });
++  items.push({ kind: "block", html: p.summary });
++  for (const section of [p.payments, p.deliveries]) {
++    if (section) items.push({ kind: "flow", lead: section.lead, entries: section.entries, build: (entries, continued) => invoiceSectionHtml(section, entries, continued) });
++  }
++  items.push({ kind: "block", html: p.thanks });
++  return items;
++}
++
++// What is shown in the preview now: the corrected invoice while one is being edited, else the saved or the draft invoice.
++function previewedInvoice() {
++  const editing = state.view === "editinvoice" && state.invoiceEdit;
++  return editing ? editPreviewInvoice() : state.previewInvoice || draftInvoice();
++}
++
++function clearPrintPages() {
++  $("invoicePages").textContent = "";
++  delete document.documentElement.dataset.invoicePages;
++}
++
++// Runs just before the browser prints (the Print button, Ctrl+P, the browser menu). Anything that goes wrong leaves the
++// browser's own pagination of the preview, which is how invoices were printed before.
++function buildPrintPages() {
++  if (document.body.dataset.printing || typeof InvoicePrint === "undefined") return;   // a purchase or collection document is printed instead
++  try {
++    const inv = previewedInvoice();
++    if (!inv) { clearPrintPages(); return; }
++    const host = $("invoicePages");
++    InvoicePrint.paginate(host, printItems(inv), {
++      continuation: continuationHeadHtml(inv),
++      footer: (page, total) => `<div class="inv-page-foot"><span>${esc(inv.invoiceNumber)}</span><span>${esc(t("inv.pageOf", { page, total }))}</span></div>`,
++    });
++    document.documentElement.dataset.invoicePages = "1";
++    // A logo that is still loading has no height yet, so the pages were measured too short: lay them out again once it is there.
++    host.querySelectorAll("img").forEach((img) => { if (!img.complete) img.addEventListener("load", buildPrintPages, { once: true }); });
++  } catch (e) {
++    clearPrintPages();
++  }
+ }
+ 
+ // The collection document: what is still to collect on an invoice, and nothing else. It is NOT an invoice: it has no
+@@ -2896,8 +2997,9 @@ function renderInvoice() {
+   // While an invoice is being corrected the preview shows the corrected invoice (not saved yet) and nothing can be printed from it.
+   const editing = state.view === "editinvoice" && state.invoiceEdit;
+   const saved = state.previewInvoice;
+-  const shown = editing ? editPreviewInvoice() : saved || draftInvoice();
++  const shown = previewedInvoice();
+   $("invoice").innerHTML = invoiceHtml(shown);
++  clearPrintPages();   // the printed pages are laid out again just before printing (buildPrintPages), so none can be out of date
+   $("previewStatus").textContent = t(editing ? "edit.previewStatus" : saved ? "preview.saved" : "preview.live");
+   $("backToSale").hidden = Boolean(editing) || !saved;
+   $("editInvoiceBtn").hidden = Boolean(editing) || !saved;
+@@ -4248,6 +4350,8 @@ function bindEvents() {
+ 
+   // Preview
+   $("printBtn").addEventListener("click", () => printInvoice());
++  // The printed pages are laid out whenever the browser is about to print: the Print button, Ctrl+P or the browser menu.
++  window.addEventListener("beforeprint", buildPrintPages);
+   $("backToSale").addEventListener("click", () => {
+     state.previewInvoice = null;
+     renderInvoice();
+@@ -4410,6 +4514,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
+     saveInvoiceEdit, cancelInvoiceEdit, renderInvoiceEdit, refreshEditLive, getInvoiceEdit: () => state.invoiceEdit,
+     addPhoneRow, removePhoneRow, setPhoneRow, saveBusinessSettings, fillSettingsForm, businessPhonesHtml,
+     saleDoneAction, openSaleDoneDialog, getSaleDone: () => state.saleDone, printInvoice,
++    invoiceParts, invoiceHtml, printItems, continuationHeadHtml,
+     businessPhonesHtml, fillSettingsForm, saveBusinessSettings, addPhoneRow, removePhoneRow, setPhoneRow, renderPhoneRows,
+     getPhoneRows: () => state.phoneRows,
+   });
+diff --git a/tests/e2e/invoice_pagination_check.py b/tests/e2e/invoice_pagination_check.py
+new file mode 100644
+index 0000000..d61a1fb
+--- /dev/null
++++ b/tests/e2e/invoice_pagination_check.py
+@@ -0,0 +1,313 @@
++"""Real-browser check of the printed invoice (file://, disposable profile): pages, margins, page numbers, what stays together.
++
++Optional and manual, like browser_check.py:   python3 tests/e2e/invoice_pagination_check.py
++Needs Playwright with Chromium and pdfplumber (pip install pdfplumber).
++
++It builds invoices of many shapes in the running app, prints each one to a PDF the way the browser's Print / Save as PDF does
++(window "beforeprint" included), and reads the PDFs back. The PDFs are kept (INVOISY_PDF_DIR, else a temporary folder) so they can be looked at.
++"""
++import os, re, sys, tempfile
++from pathlib import Path
++from playwright.sync_api import sync_playwright
++import pdfplumber
++
++URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()
++OUT = Path(os.environ.get("INVOISY_PDF_DIR") or tempfile.mkdtemp(prefix="invoisy-pdfs-"))
++OUT.mkdir(parents=True, exist_ok=True)
++problems = []
++MM = 72 / 25.4   # points per millimetre
++
++def check(cond, label):
++    print(("PASS " if cond else "FAIL ") + label)
++    if not cond:
++        problems.append(label)
++
++# Builds an invoice in the app and shows it in the preview (the same thing the Print button prints).
++BUILD_JS = """
++(spec) => {
++  const items = [];
++  const base = spec.longNames ? "Golden Era Super Polished Rectified Glazed Wall And Floor Tile Extra Long Product Name Number" : "Golden Era";
++  for (let i = 0; i < spec.items; i++) {
++    const qty = 2 + (i % 5), unitPrice = 1500 + i * 10;
++    items.push({ lineId: "l" + i, productId: "p" + i, name: "P" + String(i + 1).padStart(3, "0") + " " + base, manufacturer: "Garnada", tileSize: "60*120",
++      coveragePerBox: 2.88, sellingUnit: "box", sku: "S" + i, qty, unitPrice, total: qty * unitPrice, priceUnit: "box", productPrice: unitPrice,
++      productType: i % 2 ? "Porcelain" : "Faience" });
++  }
++  const subtotal = items.reduce((s, i) => s + i.total, 0);
++  const discount = spec.discount === undefined ? 100 : spec.discount, tax = spec.tax || 0, total = subtotal - discount + tax;
++  const payments = [];
++  for (let k = 0; k < (spec.payments || 0); k++) payments.push({ amount: 1000 + k, timestamp: new Date(2026, 9, 1 + (k % 28), 9, k % 60).toISOString() });
++  const inv = {
++    id: "i-test-" + Math.random().toString(36).slice(2), invoiceNumber: "INV-000018", date: new Date(2026, 9, 17, 14, 32).toISOString(),
++    customer: { name: spec.customer || "Yacine Benali", phone: "0555 11 22 33", address: "" },
++    items, subtotal, discount, tax, total, payments, discountPercent: null, taxPercent: null, currency: "DA",
++    business: { name: "Hedjazi Ceramic", address: "Zone industrielle, Sétif", phone: "0555 12 34 56", email: "contact@hedjazi.example" },
++  };
++  if (spec.secondCustomer) inv.secondCustomer = { name: spec.secondCustomer };
++  if (spec.deliveries) {
++    inv.items.forEach((it) => { it.deliveredNow = it.qty; });
++    inv.deliveries = spec.deliveries.map((d, n) => ({ type: n === 0 ? "sale" : "collection", date: new Date(2026, 9, 17 + n, 10, 0).toISOString(), note: "", lines: [{ lineId: "l0", qty: 1 }] }));
++  }
++  if (spec.logo) state.settings.logo = spec.logo;
++  state.invoices = [inv];
++  state.previewInvoice = null;
++  viewInvoice(inv.id);
++  return inv.id;
++}
++"""
++
++def read_pdf(path):
++    pages = []
++    with pdfplumber.open(path) as pdf:
++        for pg in pdf.pages:
++            words = pg.extract_words()
++            pages.append({"w": float(pg.width), "h": float(pg.height), "words": words, "text": pg.extract_text() or ""})
++    return pages
++
++def print_invoice(page, name, spec, paper="A4", language="en"):
++    page.evaluate("([p, l]) => { state.settings.paper = p; applyPaperSize(); if (I18n.has(l)) { I18n.setLanguage(l); } state.settings.logo = ''; }", [paper, language])
++    page.evaluate(BUILD_JS, spec)
++    path = OUT / f"{name}.pdf"
++    page.pdf(path=str(path), prefer_css_page_size=True, print_background=True)   # fires "beforeprint" like the print dialog
++    return read_pdf(path)
++
++SUMMARY = ["Subtotal", "Discount", "Tax", "Total Paid", "Remaining", "STATUS:"]
++SUMMARY_FR = ["Sous-total", "Remise", "Taxe", "Total payé", "Reste à payer", "STATUT :"]
++
++def pages_with(pages, needle):
++    return [i for i, p in enumerate(pages) if needle in p["text"]]
++
++def summary_together(pages, keys=SUMMARY):
++    """The whole financial summary (subtotal, discount, tax, total, paid, remaining, status) is on ONE page."""
++    where = {k: pages_with(pages, k) for k in keys}
++    total_page = [i for i, p in enumerate(pages) if re.search(r"^TOTAL\b", p["text"], re.M)]
++    return all(len(v) == 1 for v in where.values()) and len(total_page) == 1 and len({v[0] for v in where.values()} | {total_page[0]}) == 1
++
++def product_numbers(pages):
++    # a product row starts a line with its number (delivery history lines mention products too, in the middle of a line)
++    return [[int(n) for n in re.findall(r"^P(\d{3})\b", p["text"], re.M)] for p in pages]
++
++def every_product_once(pages, n):
++    flat = [x for page in product_numbers(pages) for x in page]
++    return flat == list(range(1, n + 1))
++
++def rows_whole(pages):
++    """On every page the products and their type lines match up: no row is cut in two."""
++    for p in pages:
++        rows = len(re.findall(r"^P\d{3}\b", p["text"], re.M))
++        types = len(re.findall(r"\b(?:Faience|Porcelain)\b", p["text"]))
++        if rows != types:
++            return False
++    return True
++
++def continuation_ok(pages, customer="Yacine Benali"):
++    if "CONTINUED" in pages[0]["text"]:
++        return False
++    for p in pages[1:]:
++        t = p["text"]
++        if not all(s in t for s in ("Hedjazi Ceramic", "INVOICE — CONTINUED", "INV-000018", "17/10/2026", customer)):
++            return False
++    return True
++
++def numbering_ok(pages):
++    total = len(pages)
++    return all(f"Page {i + 1} of {total}" in p["text"] for i, p in enumerate(pages))
++
++def headings_repeat(pages):
++    """Every page that carries products repeats the column headings."""
++    for p in pages:
++        if re.search(r"^P\d{3}\b", p["text"], re.M):
++            if not all(h in p["text"] for h in ("Product", "Qty", "Price (DA)", "Total (DA)")):
++                return False
++    return True
++
++def inside_margins(pages, side_mm=14, top_mm=14, bottom_mm=7):
++    """No text outside the printable area; the content never reaches the footer zone."""
++    for p in pages:
++        if not p["words"]:
++            return False
++        if min(w["x0"] for w in p["words"]) < side_mm * MM or max(w["x1"] for w in p["words"]) > p["w"] - side_mm * MM:
++            return False
++        if min(w["top"] for w in p["words"]) < top_mm * MM or max(w["bottom"] for w in p["words"]) > p["h"] - bottom_mm * MM:
++            return False
++    return True
++
++def content_clear_of_footer(pages, footer_top_mm=15.5):
++    """Apart from the footer line, nothing is printed in the bottom margin."""
++    for p in pages:
++        for w in p["words"]:
++            if w["bottom"] > p["h"] - footer_top_mm * MM and w["top"] < p["h"] - 8 * MM:
++                if not re.match(r"^(Page|\d+|of|sur|INV-\d+)$", w["text"]):
++                    return False
++    return True
++
++def no_overlap(pages):
++    for p in pages:
++        ws = p["words"]
++        for i in range(len(ws)):
++            a = ws[i]
++            for j in range(i + 1, len(ws)):
++                b = ws[j]
++                dx = min(a["x1"], b["x1"]) - max(a["x0"], b["x0"])
++                dy = min(a["bottom"], b["bottom"]) - max(a["top"], b["top"])
++                if dx > 1 and dy > 1:
++                    area = dx * dy
++                    small = min((a["x1"] - a["x0"]) * (a["bottom"] - a["top"]), (b["x1"] - b["x0"]) * (b["bottom"] - b["top"]))
++                    if small and area / small > 0.2:
++                        return False
++    return True
++
++def no_blank_page(pages):
++    return all(re.search(r"\bP\d{3}\b|STATUS:|PAYMENT|DELIVERY|Thank you|Merci|Paid:|Payé|BALANCE", p["text"]) for p in pages)
++
++LOGO = "data:image/svg+xml;utf8," + "<svg xmlns='http://www.w3.org/2000/svg' width='300' height='200'><rect width='300' height='200' fill='%23446'/></svg>".replace("#", "%23")
++
++with sync_playwright() as p:
++    browser = p.chromium.launch()
++    page = browser.new_context().new_page()
++    errors = []
++    page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
++    page.on("pageerror", lambda e: errors.append("PAGEERROR " + str(e)))
++    page.goto(URL)
++    page.click('.nav-btn[data-view="settings"]')
++    page.wait_for_function("document.getElementById('dataState').textContent === 'Ready'", timeout=10000)
++    print("PDFs are written to", OUT)
++
++    # 1. Short invoice: one page, nothing blank, numbered, no continuation header.
++    pdf = print_invoice(page, "01-short", {"items": 3, "payments": 1})
++    check(len(pdf) == 1, "1. short invoice is one page (%d)" % len(pdf))
++    check(summary_together(pdf) and every_product_once(pdf, 3) and "Thank you for your purchase." in pdf[0]["text"], "1. short invoice holds everything once")
++    check(numbering_ok(pdf) and continuation_ok(pdf), "1. short invoice is numbered 'Page 1 of 1' and has no continuation header")
++    check(inside_margins(pdf), "1. short invoice stays inside the margins")
++
++    # 2 + 7. Multi-page and large invoices: products flow, headings repeat, headers and numbers on every later page.
++    for n, name in ((28, "02-multipage"), (100, "07-large")):
++        pdf = print_invoice(page, name, {"items": n, "payments": 2})
++        label = "%d products, %d pages" % (n, len(pdf))
++        check(len(pdf) >= (2 if n == 28 else 3), "2/7. %s: expected page count" % label)
++        check(every_product_once(pdf, n), "2/7. %s: no product lost or repeated, in order" % label)
++        check(rows_whole(pdf) and headings_repeat(pdf), "2/7. %s: rows whole, column headings repeated on every page" % label)
++        check(continuation_ok(pdf) and numbering_ok(pdf), "2/7. %s: continuation header and 'Page i of N' on every page" % label)
++        check(summary_together(pdf) and inside_margins(pdf) and content_clear_of_footer(pdf) and no_overlap(pdf) and no_blank_page(pdf), "2/7. %s: summary together, margins, no overlap, no blank page" % label)
++
++    # 3. The summary at the page boundary, at EVERY product count: always whole, and only moved when it does not fit.
++    moved, stayed = [], []
++    for n in range(1, 46):
++        pdf = print_invoice(page, "03-sweep-%02d" % n, {"items": n, "payments": 1})
++        ok = summary_together(pdf) and every_product_once(pdf, n) and rows_whole(pdf) and numbering_ok(pdf) and continuation_ok(pdf) \
++            and inside_margins(pdf) and content_clear_of_footer(pdf) and no_blank_page(pdf) and headings_repeat(pdf)
++        check(ok, "3. sweep, %d products (%d page%s): everything whole, numbered, inside the margins" % (n, len(pdf), "" if len(pdf) == 1 else "s"))
++        status_page = pages_with(pdf, "STATUS:")[0]
++        last_product_page = max(i for i, nums in enumerate(product_numbers(pdf)) if nums)
++        (moved if status_page > last_product_page else stayed).append(n)
++    check(bool(moved) and bool(stayed), "3. the summary stays under the products when it fits (%s ...) and moves whole when it does not (%s ...)" % (stayed[-3:], moved[:3]))
++    print("INFO summary under the last product for %s; moved whole to the next page for %s" % (stayed, moved))
++
++    # 4. Payment history spanning pages: entries continue, the summary is not disturbed.
++    pdf = print_invoice(page, "04-payments", {"items": 9, "payments": 70})
++    paid = [int(x.replace(",", "")) for pg in pdf for x in re.findall(r"Paid: ([\d,]+) DA", pg["text"])]
++    check(len(pdf) >= 3 and paid == list(range(1000, 1070)), "4. 70 payments over %d pages, each exactly once and in order" % len(pdf))
++    check(summary_together(pdf) and pages_with(pdf, "STATUS:") == [0] and every_product_once(pdf, 9), "4. summary stays whole on page 1 while the history flows on")
++    history_pages = pages_with(pdf, "Paid:")
++    first, later = history_pages[0], history_pages[1:]
++    check(first >= 1 and "PAYMENT HISTORY\n" in pdf[first]["text"] + "\n" and "(continued)" not in pdf[first]["text"].split("PAYMENT HISTORY")[1].split("\n")[0]
++          and bool(later) and all("PAYMENT HISTORY (continued)" in pdf[i]["text"] for i in later) and history_pages == list(range(first, len(pdf))),
++          "4. the history starts with its heading and first entry together (page %d) and later pages repeat it as 'continued'" % (first + 1))
++    check(numbering_ok(pdf) and continuation_ok(pdf), "4. header and 'Page i of N' present on every page")
++    check(inside_margins(pdf) and content_clear_of_footer(pdf) and no_overlap(pdf), "4. payment pages inside the margins, no overlap")
++
++    # 5. No payments: the existing message, cleanly, and no mostly empty extra page.
++    pdf = print_invoice(page, "05-no-payments", {"items": 5, "payments": 0})
++    check(len(pdf) == 1 and "No payments yet." in pdf[0]["text"] and summary_together(pdf), "5. 'No payments yet.' on a one-page invoice")
++    for n in range(8, 36):
++        pdf = print_invoice(page, "05-no-payments-%02d" % n, {"items": n, "payments": 0})
++        ok = len(pages_with(pdf, "No payments yet.")) == 1 and len(pages_with(pdf, "PAYMENT HISTORY")) == 1 \
++            and pages_with(pdf, "No payments yet.") == pages_with(pdf, "PAYMENT HISTORY") and summary_together(pdf) and no_blank_page(pdf)
++        if not ok:
++            check(False, "5. %d products without payments: heading and message together, summary whole" % n)
++    check(not [x for x in problems if x.startswith("5.")], "5. with no payments the heading and message always stay together at 8-35 products")
++
++    # 6. Long product names wrap inside their row; a row's lines are never separated or overlapping.
++    for n in (6, 14, 30):
++        pdf = print_invoice(page, "06-long-names-%02d" % n, {"items": n, "payments": 1, "longNames": True})
++        check(every_product_once(pdf, n) and rows_whole(pdf) and summary_together(pdf) and no_overlap(pdf) and inside_margins(pdf) and content_clear_of_footer(pdf) and numbering_ok(pdf),
++              "6. %d products with long names (%d pages): rows whole, no overlap" % (n, len(pdf)))
++
++    # 8. The final page: the thank-you comes last, once, and never on a page of its own when it fits.
++    for n in (3, 10, 14, 22, 30, 45):
++        pdf = print_invoice(page, "08-final-%02d" % n, {"items": n, "payments": 3})
++        thanks = pages_with(pdf, "Thank you for your purchase.")
++        body = pdf[-1]["text"]
++        after_history = body.index("Thank you") > body.index("Paid:") if "Paid:" in body else True
++        check(thanks == [len(pdf) - 1] and after_history, "8. %d products: thank-you is once, last, after the payment history (page %d of %d)" % (n, thanks[0] + 1 if thanks else 0, len(pdf)))
++    fits_on_summary_page = print_invoice(page, "08-final-fit", {"items": 12, "payments": 1})
++    check(len(fits_on_summary_page) == 1 or "Thank you for your purchase." in fits_on_summary_page[-1]["text"], "8. no extra page just for the thank-you when it fits")
++
++    # 9. Margins on every page, on both paper sizes.
++    pdf = print_invoice(page, "09-margins-a4", {"items": 40, "payments": 4})
++    check(inside_margins(pdf) and abs(pdf[0]["w"] - 210 * MM) < 2, "9. A4: %d pages, nothing clipped, same spacing on all pages" % len(pdf))
++    lefts = {round(min(w["x0"] for w in p["words"])) for p in pdf}
++    tops = {round(min(w["top"] for w in p["words"]) / 4) for p in pdf[1:]}
++    check(len(lefts) == 1 and len(tops) == 1, "9. A4: identical left margin on every page (%s), identical top on continuation pages" % sorted(lefts))
++    pdf = print_invoice(page, "09-margins-a5", {"items": 30, "payments": 4}, paper="A5")
++    check(abs(pdf[0]["w"] - 148 * MM) < 2 and inside_margins(pdf, side_mm=9, top_mm=9, bottom_mm=5) and numbering_ok(pdf) and continuation_ok(pdf) and summary_together(pdf) and every_product_once(pdf, 30),
++          "9. A5: %d pages, margins, numbering, continuation header, summary whole, all products" % len(pdf))
++
++    # Other shapes: French, delivery history, second customer, a logo (measured while it loads).
++    pdf = print_invoice(page, "10-french", {"items": 30, "payments": 2}, language="fr")
++    check(len(pdf) >= 2 and all(f"Page {i + 1} sur {len(pdf)}" in p["text"] for i, p in enumerate(pdf)) and all("FACTURE — SUITE" in p["text"] for p in pdf[1:]) and "CONTINUED" not in " ".join(p["text"] for p in pdf),
++          "10. French: 'Page i sur N' on every page, 'FACTURE — SUITE' on every later page (%d pages)" % len(pdf))
++    check(summary_together(pdf, SUMMARY_FR) and every_product_once(pdf, 30), "10. French: the whole summary is on one page and every product appears once")
++    pdf = print_invoice(page, "10-delivery", {"items": 16, "payments": 2, "deliveries": [1] * 30})
++    check(len(pdf) >= 2 and every_product_once(pdf, 16) and numbering_ok(pdf) and inside_margins(pdf) and no_overlap(pdf) and "DELIVERY HISTORY" in " ".join(p["text"] for p in pdf),
++          "10. delivery history flows with its status label (%d pages)" % len(pdf))
++    pdf = print_invoice(page, "10-second-customer", {"items": 28, "payments": 1, "secondCustomer": "Builder Co"})
++    check(continuation_ok(pdf, customer="Yacine Benali / Builder Co"), "10. continuation header names both customers")
++    page.evaluate("l => { state.settings.logo = l; }", LOGO)
++    page.evaluate("() => { state.previewInvoice = null; }")
++    spec = {"items": 14, "payments": 1}
++    page.evaluate(BUILD_JS, spec)
++    page.evaluate("l => { state.settings.logo = l; renderInvoice(); }", LOGO)
++    path = OUT / "10-logo.pdf"
++    page.pdf(path=str(path), prefer_css_page_size=True, print_background=True)
++    pdf = read_pdf(path)
++    check(summary_together(pdf) and every_product_once(pdf, 14) and inside_margins(pdf) and content_clear_of_footer(pdf), "10. invoice with a logo (%d pages)" % len(pdf))
++
++    # Stale pages: changing the previewed invoice must not leave old pages behind.
++    stale = page.evaluate("() => { renderInvoice(); return [document.getElementById('invoicePages').children.length, document.documentElement.dataset.invoicePages || '']; }")
++    check(stale == [0, ""], "no printed pages are left behind once the preview is drawn again")
++
++    # The screen: the invoice preview is the same as before and the built pages never show.
++    page.evaluate(BUILD_JS, {"items": 30, "payments": 2})
++    shown = page.evaluate("() => getComputedStyle(document.getElementById('invoicePages')).display")
++    check(shown == "none", "the printed pages are not visible on screen")
++    check(page.locator("#invoice .inv-summary .inv-status").count() == 1 and page.locator("#invoice .inv-table tbody tr").count() == 30, "the preview still shows the whole invoice, with the status inside the summary")
++
++    # Other printed documents are untouched: the collection document printed right after an invoice (whose pages are still built)
++    # is that document alone, with no invoice pages, continuation headers or page numbers.
++    print_invoice(page, "12-before-collection", {"items": 30, "payments": 2, "deliveries": [1, 1]})
++    built = page.evaluate("() => document.getElementById('invoicePages').children.length")
++    page.evaluate("() => { const inv = state.invoices[0]; document.getElementById('collectionPrint').innerHTML = collectionHtml(inv); document.body.dataset.printing = 'collection'; }")
++    path = OUT / "12-collection.pdf"
++    page.pdf(path=str(path), prefer_css_page_size=True, print_background=True)
++    page.evaluate("() => { delete document.body.dataset.printing; }")
++    pdf = read_pdf(path)
++    alltext = " ".join(p["text"] for p in pdf)
++    check(built >= 2 and "COL-000018" in alltext and "STATUS:" not in alltext and "Page 1 of" not in alltext and "INVOICE — CONTINUED" not in alltext,
++          "the collection document prints alone, even right after an invoice was printed (%d pages built before)" % built)
++
++    # The fall-back: if pages can not be built the browser prints the preview as before.
++    page.evaluate("() => { window.__real = InvoicePrint.paginate; InvoicePrint.paginate = () => { throw new Error('boom'); }; }")
++    page.evaluate(BUILD_JS, {"items": 5, "payments": 1})
++    path = OUT / "11-fallback.pdf"
++    page.pdf(path=str(path), prefer_css_page_size=True, print_background=True)
++    pdf = read_pdf(path)
++    check(len(pdf) == 1 and "STATUS:" in pdf[0]["text"] and "Page 1 of" not in pdf[0]["text"], "if laying out the pages fails, the invoice still prints the old way")
++    page.evaluate("() => { InvoicePrint.paginate = window.__real; }")
++
++    check(not errors, "no console errors: %s" % errors[:3])
++    browser.close()
++
++print()
++print("FAILED: %d" % len(problems) if problems else "All checks passed.")
++sys.exit(1 if problems else 0)
+diff --git a/tests/invoice-print-markup.test.js b/tests/invoice-print-markup.test.js
+new file mode 100644
+index 0000000..8027c5b
+--- /dev/null
++++ b/tests/invoice-print-markup.test.js
+@@ -0,0 +1,122 @@
++"use strict";
++
++// What the printed invoice is made of: the financial summary is one block (totals AND payment status), the product rows,
++// payment entries and deliveries are separate entries that can be laid out one by one, and the continuation header is built from
++// the invoice's own data. The page layout itself is tested in invoice-print.test.js and, in a real browser, in tests/e2e.
++const assert = require("node:assert/strict");
++const test = require("node:test");
++const { loadProductApi } = require("./helpers");
++
++function item(n, extra) {
++  return { lineId: "l" + n, productId: "p" + n, name: "Tile " + n, manufacturer: "Garnada", tileSize: "60*120", coveragePerBox: 2.88, sellingUnit: "box", sku: "S" + n,
++    qty: n, unitPrice: 1000, total: n * 1000, priceUnit: "box", productPrice: 1000, productType: "Faience", ...extra };
++}
++
++function invoice(overrides = {}) {
++  const items = overrides.items || [item(1), item(2), item(3)];
++  const subtotal = items.reduce((s, i) => s + i.total, 0);
++  return {
++    id: "i-1", invoiceNumber: "INV-000042", date: "2026-10-17T13:32:00.000Z", customer: { name: "Amine Rahmani", phone: "0555", address: "" },
++    items, subtotal, discount: 100, tax: 0, total: subtotal - 100, payments: [], discountPercent: null, taxPercent: null, currency: "DA",
++    business: { name: "Zenith Carrelage", address: "", phone: "", email: "" }, ...overrides,
++  };
++}
++
++function load(language) {
++  const { api } = loadProductApi();
++  api.applyData({ products: [], invoices: [], settings: { ...api.DEFAULT_SETTINGS, language: language || "en" }, counter: 0, lastSaved: "" });
++  return api;
++}
++
++const count = (text, re) => (text.match(re) || []).length;
++
++test("the payment status is inside the financial summary block, whatever the payment state", () => {
++  const api = load();
++  for (const [payments, status] of [[[], "UNPAID"], [[{ amount: 500, timestamp: "2026-10-17T14:00:00.000Z" }], "PARTIALLY PAID"], [[{ amount: 5900, timestamp: "2026-10-17T14:00:00.000Z" }], "PAID"]]) {
++    const parts = api.invoiceParts(invoice({ payments }));
++    assert.match(parts.summary, /^<div class="inv-summary">/);
++    for (const label of ["Subtotal", "Discount", "Tax", "TOTAL", "Total Paid", "Remaining"]) assert.ok(parts.summary.includes(label), `${status}: ${label} is in the summary`);
++    assert.ok(parts.summary.includes("STATUS: " + status), `${status}: the status is in the summary`);
++    assert.ok(parts.summary.indexOf("inv-totals") < parts.summary.indexOf("inv-status"), "the status follows the totals");
++    assert.equal(count(parts.payments ? parts.payments.entries.join("") : "", /STATUS/g), 0, "the payment history does not carry the status");
++  }
++});
++
++test("the screen preview shows the same invoice as before, in the same order", () => {
++  const api = load();
++  const inv = invoice({ payments: [{ amount: 500, timestamp: "2026-10-17T14:00:00.000Z" }, { amount: 300, timestamp: "2026-10-18T14:00:00.000Z" }] });
++  const html = api.invoiceHtml(inv);
++  const order = ["inv-head", "inv-meta", "inv-table", "inv-summary", "inv-totals", "inv-status", "inv-payments", "inv-thanks"].map((c) => html.indexOf(c));
++  assert.ok(order.every((n) => n >= 0), "every part is there");
++  assert.deepEqual(order, order.slice().sort((a, b) => a - b), "head, customer, products, totals, status, payment history, thank-you");
++  assert.equal(count(html, /<tr><td>Tile \d/g), 3, "three product rows");
++  assert.equal(count(html, /class="inv-pay"/g), 2, "two payments");
++  for (const figure of ["6,000 DA", "100 DA", "5,900 DA", "800 DA", "5,100 DA"]) assert.ok(html.includes(figure), figure);
++});
++
++test("an invoice with no payments keeps the existing empty message as a single entry", () => {
++  const api = load();
++  const parts = api.invoiceParts(invoice());
++  assert.equal(parts.payments.entries.length, 1);
++  assert.match(parts.payments.entries[0], /No payments yet\./);
++  assert.match(api.invoiceHtml(invoice()), /PAYMENT HISTORY<\/h3>/);
++});
++
++test("print items: every product, payment and delivery is its own entry, and the summary is a single block", () => {
++  const api = load();
++  const items = Array.from({ length: 25 }, (_, i) => item(i + 1));
++  const payments = Array.from({ length: 12 }, (_, i) => ({ amount: 100 + i, timestamp: new Date(Date.UTC(2026, 9, 1 + i, 9)).toISOString() }));
++  const list = api.printItems(invoice({ items, payments }));
++  const kinds = [...list.map((x) => x.kind)];   // copied: the app runs in its own vm realm
++  assert.deepEqual(kinds, ["block", "flow", "block", "flow", "block"], "header, product rows, summary, payment history, thank-you");
++  assert.equal(list[1].entries.length, 25);
++  assert.equal(list[3].entries.length, 12);
++  assert.ok(list[2].html.includes("STATUS:") && list[2].html.includes("Remaining"), "the summary block holds the totals and the status");
++  assert.match(list[4].html, /Thank you for your purchase\./);
++  assert.ok(list[1].entries.every((row) => /^<tr>/.test(row)), "one table row per product");
++  // a piece of the product table always carries the column headings
++  assert.match(list[1].build(list[1].entries.slice(5, 7), true), /<thead>.*<th>Product<\/th>.*<tbody><tr>.*<\/tr><tr>.*<\/tr><\/tbody>/s);
++  // a piece of the history that continues says so; the first one does not
++  assert.match(list[3].build(list[3].entries.slice(0, 1), false), /<h3>PAYMENT HISTORY<\/h3>/);
++  assert.match(list[3].build(list[3].entries.slice(4, 6), true), /<h3>PAYMENT HISTORY \(continued\)<\/h3>/);
++});
++
++test("carried-forward debt stays its own block between the products and the summary", () => {
++  const api = load();
++  const inv = invoice({ carriedForward: [{ transferId: "t-1", sourceInvoiceId: "i-0", sourceInvoiceNumber: "INV-000007", sourceDate: "2026-09-01T10:00:00.000Z", amount: 700 }] });
++  const list = api.printItems(inv);
++  const blocks = list.filter((x) => x.kind === "block").map((x) => x.html);
++  assert.ok(blocks.some((h) => /inv-carried/.test(h) && !/inv-summary/.test(h)), "its own block");
++  assert.ok(list.findIndex((x) => /inv-carried/.test(x.html || "")) < list.findIndex((x) => /inv-summary/.test(x.html || "")), "before the summary");
++});
++
++test("the continuation header uses the invoice's own company, number, date and customer", () => {
++  const api = load();
++  const head = api.continuationHeadHtml(invoice());
++  for (const text of ["Zenith Carrelage", "INVOICE — CONTINUED", "INV-000042", "17/10/2026", "Amine Rahmani"]) assert.ok(head.includes(text), text);
++  assert.ok(!head.includes("Hedjazi") && !head.includes("INV-000018"), "no example value is hard-coded");
++  const named = api.continuationHeadHtml(invoice({ secondCustomer: { name: "Builders & Co" }, business: { name: "A <b> Shop", address: "", phone: "", email: "" } }));
++  assert.ok(named.includes("Amine Rahmani / Builders &amp; Co"), "both customer names, escaped");
++  assert.ok(named.includes("A &lt;b&gt; Shop") && !named.includes("<b>"), "the company name is escaped");
++  assert.ok(api.continuationHeadHtml(invoice({ customer: { name: "", phone: "", address: "" } })).includes("Walk-in"), "a sale without a customer reads as the walk-in customer");
++});
++
++test("French: continuation header and wording follow the language", () => {
++  const api = load("fr");
++  assert.ok(api.continuationHeadHtml(invoice()).includes("FACTURE — SUITE"));
++  const list = api.printItems(invoice({ payments: [{ amount: 1, timestamp: "2026-10-17T14:00:00.000Z" }] }));
++  assert.match(list[3].build(list[3].entries, true), /\(suite\)/);
++});
++
++test("delivery history is a flowing section with its status label as the lead", () => {
++  const api = load();
++  const inv = invoice({
++    items: [item(1, { deliveredNow: 0 }), item(2, { deliveredNow: 2 })],
++    deliveries: [{ type: "sale", date: "2026-10-17T13:32:00.000Z", note: "", lines: [{ lineId: "l2", qty: 2 }] }],
++  });
++  const list = api.printItems(inv);
++  const delivery = list.find((x) => x.kind === "flow" && /DELIVERY HISTORY/.test(x.build(x.entries, false)));
++  assert.ok(delivery, "a partly delivered invoice has a delivery history section");
++  assert.match(delivery.lead, /inv-delivery-status/);
++  assert.equal(delivery.entries.length, 1);
++});
+diff --git a/tests/invoice-print.test.js b/tests/invoice-print.test.js
+new file mode 100644
+index 0000000..1edecd7
+--- /dev/null
++++ b/tests/invoice-print.test.js
+@@ -0,0 +1,124 @@
++"use strict";
++
++// The rules that lay a printed invoice out over pages (java script/invoice-print.js). layout() is pure: it only needs a
++// function saying whether some markup fits on a page, so a fake page of a fixed height (each fragment has a height) stands in
++// for the browser here. The real thing, in Chrome, is checked by tests/e2e/invoice_pagination_check.py.
++
++const assert = require("node:assert/strict");
++const fs = require("node:fs");
++const path = require("node:path");
++const test = require("node:test");
++const vm = require("node:vm");
++
++const context = { globalThis: null };
++context.globalThis = context;
++vm.createContext(context);
++vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "java script", "invoice-print.js"), "utf8"), context, { filename: "invoice-print.js" });
++// The script runs in its own vm context, so the arrays it returns come from another realm; copy them so deepEqual compares them.
++const layout = (items, fits) => JSON.parse(JSON.stringify(context.InvoicePrint.layout(items, fits)));
++
++// A fragment is written "name:height". A built piece such as "[head:5|row1:5,row2:5]" is as tall as everything inside it (every
++// ":N" counts: 5 + 5 + 5). A page holds PAGE units; a continuation header (pages 2 and up) takes HEAD of them.
++const PAGE = 100;
++const HEAD = 10;
++const height = (fragment) => [...String(fragment).matchAll(/:(\d+)/g)].reduce((sum, m) => sum + Number(m[1]), 0);
++const fits = (fragments, pageIndex) => (pageIndex > 0 ? HEAD : 0) + fragments.reduce((sum, f) => sum + height(f), 0) <= PAGE;
++
++const rows = (n, h) => Array.from({ length: n }, (_, i) => `row${i + 1}:${h}`);
++const table = (entries) => `[head:5|${entries.join(",")}]`;                       // the heading repeats in every piece
++const section = (title) => (entries, continued) => `<${continued ? title + "(cont)" : title}:6|${entries.join(",")}>`;
++const flow = (entries, build, lead) => ({ kind: "flow", lead: lead || "", entries, build });
++const block = (name, h) => ({ kind: "block", html: `${name}:${h}` });
++
++// What a piece of markup holds, for the checks: the entries inside [..] or <..>.
++const entriesIn = (page) => page.flatMap((f) => (f.match(/row\d+|pay\d+/g) || []));
++const pageHeight = (page, index) => (index > 0 ? HEAD : 0) + page.reduce((sum, f) => sum + height(f), 0);
++
++test("a short invoice is one page, in order", () => {
++  const pages = layout([block("head", 20), flow(rows(3, 5), table), block("summary", 20), block("thanks", 5)], fits);
++  assert.equal(pages.length, 1);
++  assert.equal(pages[0][0], "head:20");
++  assert.equal(pages[0].at(-1), "thanks:5");
++});
++
++test("product rows continue on the next page, each exactly once and in order, and every piece repeats the heading", () => {
++  const pages = layout([block("head", 20), flow(rows(30, 5), table), block("summary", 20)], fits);
++  assert.ok(pages.length >= 3);
++  assert.deepEqual(pages.flatMap(entriesIn).filter((x) => x.startsWith("row")), rows(30, 5).map((r) => r.split(":")[0]));
++  for (const page of pages.slice(0, -1)) assert.ok(page.some((f) => f.startsWith("[head:5|")), "a page of products shows the heading");
++  pages.forEach((page, i) => assert.ok(pageHeight(page, i) <= PAGE, `page ${i + 1} is within the page`));
++});
++
++test("the financial summary is never split: it stays under the products when it fits and moves whole when it does not", () => {
++  for (let n = 1; n <= 40; n++) {
++    const pages = layout([block("head", 20), flow(rows(n, 5), table), block("summary", 30), block("thanks", 5)], fits);
++    const holding = pages.map((p, i) => (p.includes("summary:30") ? i : -1)).filter((i) => i >= 0);
++    assert.equal(holding.length, 1, `${n} rows: the summary appears once`);
++    const lastRows = Math.max(...pages.map((p, i) => (entriesIn(p).length ? i : -1)));
++    const onSamePage = pages[lastRows].includes("summary:30");
++    const wouldFit = fits(pages[lastRows].concat("summary:30"), lastRows);
++    if (!onSamePage) assert.equal(wouldFit, false, `${n} rows: the summary only moves to a new page when it does not fit under the products`);
++  }
++});
++
++test("the summary is not forced onto a new page when there is room", () => {
++  const pages = layout([block("head", 20), flow(rows(4, 5), table), block("summary", 30)], fits);
++  assert.equal(pages.length, 1);
++});
++
++test("payment history: its heading never sits alone at the bottom of a page, and its entries flow over pages", () => {
++  const pay = Array.from({ length: 60 }, (_, i) => `pay${i + 1}:4`);
++  for (let n = 1; n <= 20; n++) {
++    const pages = layout([block("head", 20), flow(rows(n, 5), table), block("summary", 30), flow(pay, section("HISTORY"))], fits);
++    assert.deepEqual(pages.flatMap(entriesIn).filter((x) => x.startsWith("pay")), pay.map((p) => p.split(":")[0]), `${n} rows: each payment once, in order`);
++    pages.forEach((page, i) => {
++      assert.ok(pageHeight(page, i) <= PAGE, `${n} rows: page ${i + 1} is within the page`);
++      const last = page.at(-1);
++      if (last.startsWith("<")) assert.ok(/pay\d+/.test(last), `${n} rows: a history piece always holds at least one payment`);
++    });
++    const firstPiece = pages.flat().findIndex((f) => f.startsWith("<HISTORY:"));
++    assert.ok(firstPiece >= 0 && /pay1\b/.test(pages.flat()[firstPiece]), `${n} rows: the heading is with the first payment`);
++    assert.equal(pages.flat().filter((f) => f.startsWith("<HISTORY(cont)")).length > 0, pages.flat().filter((f) => f.startsWith("<HISTORY")).length > 1);
++  }
++});
++
++test("the lead of a section (the delivery status) stays with the section's first piece", () => {
++  for (let n = 1; n <= 25; n++) {
++    const pages = layout([flow(rows(n, 5), table), block("summary", 30), flow(["pay1:4", "pay2:4"], section("DELIVERY"), "status:8")], fits);
++    const flat = pages.map((p) => p.slice());
++    const at = flat.findIndex((p) => p.includes("status:8"));
++    assert.ok(at >= 0, `${n} rows: the status is there`);
++    assert.ok(flat[at].some((f) => f.startsWith("<DELIVERY:")), `${n} rows: the status is on the same page as the delivery heading`);
++    assert.ok(flat[at].indexOf("status:8") < flat[at].findIndex((f) => f.startsWith("<DELIVERY:")), `${n} rows: the status comes first`);
++  }
++});
++
++test("a section with no entries (nothing to list) still prints its heading and stays together", () => {
++  const pages = layout([flow(rows(2, 5), table), block("summary", 30), flow([], (entries) => `<EMPTY:6|${entries.join(",")}>`)], fits);
++  assert.equal(pages.length, 1);
++  assert.ok(pages[0].includes("<EMPTY:6|>"));
++});
++
++test("the thank-you follows the last section and gets a page of its own only when it does not fit", () => {
++  const fitting = layout([flow(rows(3, 5), table), block("summary", 30), flow(["pay1:4"], section("HISTORY")), block("thanks", 10)], fits);
++  assert.equal(fitting.length, 1);
++  assert.equal(fitting[0].at(-1), "thanks:10");
++  const tight = layout([flow(rows(3, 5), table), block("summary", 30), flow(["pay1:4"], section("HISTORY")), block("thanks", 40)], fits);
++  assert.equal(tight.length, 1);
++  const over = layout([flow(rows(3, 5), table), block("summary", 30), flow(["pay1:4"], section("HISTORY")), block("thanks", 60)], fits);
++  assert.equal(over.length, 2);
++  assert.equal(over[1].join(), "thanks:60");
++});
++
++test("something taller than a page is still printed (alone on its page) instead of looping or vanishing", () => {
++  const pages = layout([block("head", 20), block("huge", 250), flow(rows(2, 5), table)], fits);
++  assert.ok(pages.some((p) => p.includes("huge:250")));
++  assert.deepEqual(pages.flatMap(entriesIn), ["row1", "row2"]);
++});
++
++test("no page is ever empty", () => {
++  for (let n = 0; n <= 60; n++) {
++    const pages = layout([block("head", 25), flow(rows(n, 7), table), block("summary", 33), flow(Array.from({ length: n % 9 }, (_, i) => `pay${i}:4`), section("HISTORY")), block("thanks", 9)], fits);
++    for (const page of pages) assert.ok(page.length > 0, `${n} rows`);
++  }
++});
+-- 
+2.43.0
+

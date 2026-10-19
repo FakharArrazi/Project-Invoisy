@@ -550,11 +550,61 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
   .inv-biz-name { font-size: 15pt; }
   .inv-title { font-size: 20pt; }
   .inv-table th, .inv-table td { font-size: 10.5pt; }
-  .inv-table tr, .inv-totals, .inv-status, .inv-payments, .inv-carried { page-break-inside: avoid; }
+  .inv-table tr, .inv-totals, .inv-summary, .inv-status, .inv-payments, .inv-carried { page-break-inside: avoid; }
   html[data-paper="a5"] .invoice { padding: 10mm; font-size: 10pt; }
   html[data-paper="a5"] .inv-biz-name { font-size: 13pt; }
   html[data-paper="a5"] .inv-title { font-size: 17pt; }
   html[data-paper="a5"] .inv-table th, html[data-paper="a5"] .inv-table td { font-size: 9.5pt; }
+}
+
+/* ---------- Printed invoice pages ---------- */
+
+/* Just before printing, invoice-print.js lays the invoice out on paper-sized pages (#invoicePages), each with its own margins,
+   a continuation header (pages 2 and up) and a "Page X of N" footer. The rules below hold on screen as well as in print, because
+   the pages are measured on screen first; their sizes are the ones the plain print rules above give the invoice. */
+.inv-pages { display: none; }
+.inv-pages.measuring { display: block; position: absolute; left: -10000px; top: 0; visibility: hidden; }   /* laid out off screen, never seen */
+
+#invoicePages .inv-page {
+  --page-w: 210mm; --page-h: 296.5mm;          /* a hair under the sheet, so a page can never spill onto an extra blank sheet */
+  --pad-x: 15mm; --pad-top: 15mm; --pad-bottom: 20mm; --foot: 9mm;
+  position: relative; width: var(--page-w); height: var(--page-h); padding: var(--pad-top) var(--pad-x) var(--pad-bottom);
+  overflow: hidden; color: #000; background: #fff; font: 11pt/1.4 Arial, Helvetica, sans-serif;
+  break-after: page; page-break-after: always;
+}
+#invoicePages .inv-page:last-child { break-after: auto; page-break-after: auto; }
+html[data-paper="a5"] #invoicePages .inv-page { --page-w: 148mm; --page-h: 209.5mm; --pad-x: 10mm; --pad-top: 10mm; --pad-bottom: 16mm; --foot: 6mm; font-size: 10pt; }
+
+#invoicePages .inv-page-body { height: 100%; display: flow-root; }
+#invoicePages .inv-page-body > :first-child { margin-top: 0; }
+#invoicePages .inv-biz-name { font-size: 15pt; }
+#invoicePages .inv-title { font-size: 20pt; }
+#invoicePages .inv-table th, #invoicePages .inv-table td { font-size: 10.5pt; }
+html[data-paper="a5"] #invoicePages .inv-biz-name { font-size: 13pt; }
+html[data-paper="a5"] #invoicePages .inv-title { font-size: 17pt; }
+html[data-paper="a5"] #invoicePages .inv-table th, html[data-paper="a5"] #invoicePages .inv-table td { font-size: 9.5pt; }
+
+/* The header of a continuation page: compact, same black rule as the first page's header. */
+#invoicePages .inv-cont-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; padding-bottom: 6px; border-bottom: 2px solid #000; }
+#invoicePages .inv-cont-head + * { margin-top: 10px; }
+#invoicePages .inv-cont-left, #invoicePages .inv-cont-right { min-width: 0; }
+#invoicePages .inv-cont-right { text-align: right; }
+#invoicePages .inv-cont-biz { font-size: 12pt; font-weight: 700; }
+#invoicePages .inv-cont-title { font-size: 10pt; font-weight: 700; letter-spacing: 1px; }
+#invoicePages .inv-cont-sub { font-size: 9pt; color: #333; overflow-wrap: anywhere; }
+#invoicePages .inv-cont-sub .label { color: #555; }
+/* A history section that starts a page sits right under that header: no extra gap, no second rule. */
+#invoicePages .inv-cont-head + .inv-payments { padding-top: 0; border-top: 0; }
+
+#invoicePages .inv-page-foot {
+  position: absolute; left: var(--pad-x); right: var(--pad-x); bottom: var(--foot);
+  display: flex; justify-content: space-between; gap: 12px; padding-top: 4px; border-top: 1px solid #ddd; font-size: 8.5pt; color: #666;
+}
+
+@media print {
+  /* With the pages built, they are all that is printed. */
+  html[data-invoice-pages] body:not([data-printing]) > *:not(#invoicePages) { display: none !important; }
+  html[data-invoice-pages] body:not([data-printing]) #invoicePages { display: block; }
 }
 
 /* ==========================================================================

@@ -594,6 +594,8 @@
 <article class="invoice purchase-print" id="purchasePrint"></article>
 <!-- What is printed for goods still to collect (hidden on screen, shown only when printing) -->
 <article class="invoice collection-print" id="collectionPrint"></article>
+<!-- The invoice laid out page by page, built just before printing (invoice-print.js); hidden on screen -->
+<div class="inv-pages" id="invoicePages" aria-hidden="true"></div>
 <!-- Confirmation before old debt is added to the sale being prepared. Nothing is saved from here. -->
 <dialog class="debt-dialog no-print" id="debtDialog" aria-labelledby="debtDialogTitle">
   <form id="debtForm" novalidate>
@@ -642,6 +644,7 @@
 <script src="java script/database.js"></script>
 <script src="java script/autobackup.js"></script>
 <script src="java script/purchases-ui.js"></script>
+<script src="java script/invoice-print.js"></script>
 <script src="java script/script.js"></script>
 </body>
 </html>

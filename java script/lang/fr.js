@@ -224,6 +224,9 @@
     "inv.paidLine": "Payé : {amount}",
     "inv.noPayments": "Aucun paiement pour le moment.",
     "inv.thanks": "Merci pour votre achat.",
+    "inv.continued": "FACTURE — SUITE",
+    "inv.continuedHeading": "{title} (suite)",
+    "inv.pageOf": "Page {page} sur {total}",
 
     // ----- Settings -----
     "settings.language": "Langue / Language",

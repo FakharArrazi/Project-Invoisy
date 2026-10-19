@@ -220,6 +220,9 @@ I18n.register("en", "English", {
   "inv.paidLine": "Paid: {amount}",
   "inv.noPayments": "No payments yet.",
   "inv.thanks": "Thank you for your purchase.",
+  "inv.continued": "INVOICE — CONTINUED",
+  "inv.continuedHeading": "{title} (continued)",
+  "inv.pageOf": "Page {page} of {total}",
 
   // ----- Settings -----
   "settings.language": "Language / Langue",

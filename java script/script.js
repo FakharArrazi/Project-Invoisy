@@ -2697,7 +2697,9 @@ function refreshLive() {
   renderInvoice();
 }
 
-function invoiceHtml(inv) {
+// The invoice as separate pieces of markup. The preview on screen puts them together (invoiceHtml); the printed pages
+// are laid out from the same pieces (buildPrintPages), so what is printed is what the preview shows.
+function invoiceParts(inv) {
   const cur = inv.currency || state.settings.currency;
   const biz = inv.business || Validation.businessSnapshot(state.settings);
   const cust = inv.customer || { name: WALK_IN, phone: "", address: "" };
@@ -2718,8 +2720,8 @@ function invoiceHtml(inv) {
           ? `<div class="inv-sub inv-open">${esc(t("inv.deliveredOf", { delivered: qtyText(left.delivered, i.sellingUnit), remaining: qtyText(left.remaining, i.sellingUnit) }))}</div>`
           : "";
         return `<tr><td>${esc(invoiceItemLabel(i))}${invoiceItemTypeHtml(i)}</td><td class="num">${num(i.qty)}${i.sellingUnit ? ` ${esc(unitLabel(i.sellingUnit, i.qty))}` : ""}${inPriceUnit}${toCollect}</td><td class="num">${num(shown.price)}${shown.unit ? ` <span class="inv-unit">/ ${esc(unitLabel(shown.unit))}</span>` : ""}</td><td class="num">${num(i.total != null ? i.total : Calc.calculateLineTotal(i.qty, i.unitPrice))}</td></tr>`;
-      }).join("")
-    : `<tr><td colspan="4" class="none">${esc(t("inv.noItems"))}</td></tr>`;
+      })
+    : [`<tr><td colspan="4" class="none">${esc(t("inv.noItems"))}</td></tr>`];   // one row per product: a row is never split between two printed pages
 
   const pay = paymentInfo(inv);
   const hasItems = inv.items.length > 0;
@@ -2746,54 +2748,153 @@ function invoiceHtml(inv) {
   const paidRows = hasItems
     ? `<tr><td>${esc(t("inv.totalPaid"))}</td><td>${esc(money(pay.paid, cur))}</td></tr>${movedRow}<tr class="due"><td>${esc(t("inv.remaining"))}</td><td>${esc(money(pay.remaining, cur))}</td></tr>${refundRow}`
     : "";
-  const history = hasItems
-    ? `<div class="inv-status"><span class="${pay.cls}">${esc(t("inv.status"))} ${esc(pay.status)}</span></div>
-    <section class="inv-payments"><h3>${esc(t("inv.history"))}</h3>${
-      pay.payments.length
-        ? pay.payments.map((p) => `<div class="inv-pay"><span class="when">${esc(formatDateTime(p.timestamp))}</span><span>${esc(t("inv.paidLine", { amount: money(p.amount, cur) }))}</span></div>`).join("")
-        : `<div class="inv-pay"><span class="when">${esc(t("inv.noPayments"))}</span></div>`
-    }</section>`
+  // The payment status belongs to the totals: together they are the financial summary, one block that is never split
+  // between two printed pages (the status must never be left alone at the top of the next one).
+  const statusHtml = hasItems
+    ? `<div class="inv-status"><span class="${pay.cls}">${esc(t("inv.status"))} ${esc(pay.status)}</span></div>`
     : "";
+  const summary = `<div class="inv-summary">
+      <table class="inv-totals">
+        <tr><td>${esc(t("inv.subtotal"))}</td><td>${esc(money(toNumber(inv.subtotal), cur))}</td></tr>
+        <tr><td>${esc(t("inv.discount"))}${pct(inv.discountPercent)}</td><td>${esc(money(toNumber(inv.discount), cur))}</td></tr>
+        <tr><td>${esc(t("inv.tax"))}${pct(inv.taxPercent)}</td><td>${esc(money(toNumber(inv.tax), cur))}</td></tr>
+        ${totalRows}
+        ${paidRows}
+      </table>
+      ${statusHtml}
+    </div>`;
+  // Payment history and delivery history are sections that may run over several pages, one entry per line.
+  const payments = hasItems
+    ? {
+        cls: "inv-payments", lead: "", title: t("inv.history"),
+        entries: pay.payments.length
+          ? pay.payments.map((p) => `<div class="inv-pay"><span class="when">${esc(formatDateTime(p.timestamp))}</span><span>${esc(t("inv.paidLine", { amount: money(p.amount, cur) }))}</span></div>`)
+          : [`<div class="inv-pay"><span class="when">${esc(t("inv.noPayments"))}</span></div>`],
+      }
+    : null;
   // Delivery is shown apart from payment: a paid invoice can still have goods waiting.
-  const deliveryBlock = hasItems && delivery.tracked
-    ? `<div class="inv-status inv-delivery-status"><span class="dlv-${delivery.status}">${esc(t("inv.deliveryStatus"))} ${esc(t("inv.delivery." + delivery.status))}</span></div>
-    <section class="inv-payments inv-deliveries"><h3>${esc(t("inv.deliveryHistory"))}</h3>${
-      inv.deliveries.length
-        ? inv.deliveries.map((d, n) => {
-            const what = d.type === "sale" ? t("inv.deliverySale") : t("inv.deliveryCollection", { number: Validation.receiptNumber(inv, inv.deliveries.slice(0, n + 1).filter((x) => x.type === "collection").length) });
-            const things = d.lines.map((l) => {
-              const item = inv.items.find((i) => i.lineId === l.lineId);
-              return t("inv.deliveryLine", { quantity: qtyText(l.qty, item && item.sellingUnit), name: item ? invoiceItemLabel(item) : "" });
-            }).join(", ");
-            return `<div class="inv-pay"><span class="when">${esc(formatDateTime(d.date))}</span><span>${esc(what)}: ${esc(things)}${d.note ? ` (${esc(d.note)})` : ""}</span></div>`;
-          }).join("")
-        : `<div class="inv-pay"><span class="when">${esc(t("inv.noDeliveries"))}</span></div>`
-    }</section>`
-    : "";
+  const deliveries = hasItems && delivery.tracked
+    ? {
+        cls: "inv-payments inv-deliveries", title: t("inv.deliveryHistory"),
+        lead: `<div class="inv-status inv-delivery-status"><span class="dlv-${delivery.status}">${esc(t("inv.deliveryStatus"))} ${esc(t("inv.delivery." + delivery.status))}</span></div>`,
+        entries: inv.deliveries.length
+          ? inv.deliveries.map((d, n) => {
+              const what = d.type === "sale" ? t("inv.deliverySale") : t("inv.deliveryCollection", { number: Validation.receiptNumber(inv, inv.deliveries.slice(0, n + 1).filter((x) => x.type === "collection").length) });
+              const things = d.lines.map((l) => {
+                const item = inv.items.find((i) => i.lineId === l.lineId);
+                return t("inv.deliveryLine", { quantity: qtyText(l.qty, item && item.sellingUnit), name: item ? invoiceItemLabel(item) : "" });
+              }).join(", ");
+              return `<div class="inv-pay"><span class="when">${esc(formatDateTime(d.date))}</span><span>${esc(what)}: ${esc(things)}${d.note ? ` (${esc(d.note)})` : ""}</span></div>`;
+            })
+          : [`<div class="inv-pay"><span class="when">${esc(t("inv.noDeliveries"))}</span></div>`],
+      }
+    : null;
 
-  return `<header class="inv-head">
+  return {
+    head: `<header class="inv-head">
       <div>${logo}<div class="inv-biz-name">${esc(biz.name)}</div>${line(biz.address)}${businessPhonesHtml(biz)}${line(biz.email)}</div>
       <div class="inv-title">${esc(t("inv.title"))}</div>
-    </header>
-    <div class="inv-meta">
+    </header>`,
+    meta: `<div class="inv-meta">
       ${customerBlockHtml(inv, cust)}
       <div class="right"><div><span class="label">${esc(t("inv.number"))}</span> ${esc(inv.invoiceNumber)}</div><div><span class="label">${esc(t("inv.date"))}</span> ${esc(formatDateTime(inv.date))}</div></div>
-    </div>
-    <table class="inv-table">
-      <thead><tr><th>${esc(t("inv.product"))}</th><th class="num">${esc(t("inv.qty"))}</th><th class="num">${esc(t("inv.price", { currency: cur }))}</th><th class="num">${esc(t("inv.lineTotal", { currency: cur }))}</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-    ${carriedBlock}
-    <table class="inv-totals">
-      <tr><td>${esc(t("inv.subtotal"))}</td><td>${esc(money(toNumber(inv.subtotal), cur))}</td></tr>
-      <tr><td>${esc(t("inv.discount"))}${pct(inv.discountPercent)}</td><td>${esc(money(toNumber(inv.discount), cur))}</td></tr>
-      <tr><td>${esc(t("inv.tax"))}${pct(inv.taxPercent)}</td><td>${esc(money(toNumber(inv.tax), cur))}</td></tr>
-      ${totalRows}
-      ${paidRows}
-    </table>
-    ${history}
-    ${deliveryBlock}
-    <p class="inv-thanks">${esc(t("inv.thanks"))}</p>`;
+    </div>`,
+    thead: `<thead><tr><th>${esc(t("inv.product"))}</th><th class="num">${esc(t("inv.qty"))}</th><th class="num">${esc(t("inv.price", { currency: cur }))}</th><th class="num">${esc(t("inv.lineTotal", { currency: cur }))}</th></tr></thead>`,
+    rows,
+    carried: carriedBlock,
+    summary,
+    payments,
+    deliveries,
+    thanks: `<p class="inv-thanks">${esc(t("inv.thanks"))}</p>`,
+  };
+}
+
+// The product table holding the given rows; the heading row is part of every piece, so a table that continues on the next page repeats it.
+function invoiceTableHtml(parts, rows) {
+  return `<table class="inv-table">
+      ${parts.thead}
+      <tbody>${rows.join("")}</tbody>
+    </table>`;
+}
+
+// A flowing section (payment history, delivery history) holding the given entries. A piece that continues on a
+// later page says so in its title.
+function invoiceSectionHtml(section, entries, continued) {
+  const title = continued ? t("inv.continuedHeading", { title: section.title }) : section.title;
+  return `<section class="${section.cls}"><h3>${esc(title)}</h3>${entries.join("")}</section>`;
+}
+
+function invoiceHtml(inv) {
+  const p = invoiceParts(inv);
+  return `${p.head}
+    ${p.meta}
+    ${invoiceTableHtml(p, p.rows)}
+    ${p.carried}
+    ${p.summary}
+    ${p.payments ? invoiceSectionHtml(p.payments, p.payments.entries, false) : ""}
+    ${p.deliveries ? p.deliveries.lead + invoiceSectionHtml(p.deliveries, p.deliveries.entries, false) : ""}
+    ${p.thanks}`;
+}
+
+/* ---------- Printing the invoice over several pages (the layout rules are in invoice-print.js) ---------- */
+
+// The small header at the top of every printed page after the first: whose invoice this is.
+function continuationHeadHtml(inv) {
+  const biz = inv.business || Validation.businessSnapshot(state.settings);
+  const cust = inv.customer || { name: WALK_IN, phone: "", address: "" };
+  const second = secondCustomerName(inv);
+  const customer = customerLabel(cust.name) + (second ? " / " + second : "");
+  return `<div class="inv-cont-head">
+      <div class="inv-cont-left"><div class="inv-cont-biz">${esc(biz.name)}</div><div class="inv-cont-sub"><span class="label">${esc(t("inv.customer"))}</span> ${esc(customer)}</div></div>
+      <div class="inv-cont-right"><div class="inv-cont-title">${esc(t("inv.continued"))}</div><div class="inv-cont-sub"><span class="label">${esc(t("inv.number"))}</span> ${esc(inv.invoiceNumber)} &nbsp; <span class="label">${esc(t("inv.date"))}</span> ${esc(formatDate(inv.date))}</div></div>
+    </div>`;
+}
+
+// The invoice as the list of items invoice-print.js lays out: what stays whole, and what may continue on the next page.
+function printItems(inv) {
+  const p = invoiceParts(inv);
+  const items = [
+    { kind: "block", html: p.head + p.meta },
+    { kind: "flow", lead: "", entries: p.rows, build: (rows) => invoiceTableHtml(p, rows) },
+  ];
+  if (p.carried) items.push({ kind: "block", html: p.carried });
+  items.push({ kind: "block", html: p.summary });
+  for (const section of [p.payments, p.deliveries]) {
+    if (section) items.push({ kind: "flow", lead: section.lead, entries: section.entries, build: (entries, continued) => invoiceSectionHtml(section, entries, continued) });
+  }
+  items.push({ kind: "block", html: p.thanks });
+  return items;
+}
+
+// What is shown in the preview now: the corrected invoice while one is being edited, else the saved or the draft invoice.
+function previewedInvoice() {
+  const editing = state.view === "editinvoice" && state.invoiceEdit;
+  return editing ? editPreviewInvoice() : state.previewInvoice || draftInvoice();
+}
+
+function clearPrintPages() {
+  $("invoicePages").textContent = "";
+  delete document.documentElement.dataset.invoicePages;
+}
+
+// Runs just before the browser prints (the Print button, Ctrl+P, the browser menu). Anything that goes wrong leaves the
+// browser's own pagination of the preview, which is how invoices were printed before.
+function buildPrintPages() {
+  if (document.body.dataset.printing || typeof InvoicePrint === "undefined") return;   // a purchase or collection document is printed instead
+  try {
+    const inv = previewedInvoice();
+    if (!inv) { clearPrintPages(); return; }
+    const host = $("invoicePages");
+    InvoicePrint.paginate(host, printItems(inv), {
+      continuation: continuationHeadHtml(inv),
+      footer: (page, total) => `<div class="inv-page-foot"><span>${esc(inv.invoiceNumber)}</span><span>${esc(t("inv.pageOf", { page, total }))}</span></div>`,
+    });
+    document.documentElement.dataset.invoicePages = "1";
+    // A logo that is still loading has no height yet, so the pages were measured too short: lay them out again once it is there.
+    host.querySelectorAll("img").forEach((img) => { if (!img.complete) img.addEventListener("load", buildPrintPages, { once: true }); });
+  } catch (e) {
+    clearPrintPages();
+  }
 }
 
 // The collection document: what is still to collect on an invoice, and nothing else. It is NOT an invoice: it has no
@@ -2896,8 +2997,9 @@ function renderInvoice() {
   // While an invoice is being corrected the preview shows the corrected invoice (not saved yet) and nothing can be printed from it.
   const editing = state.view === "editinvoice" && state.invoiceEdit;
   const saved = state.previewInvoice;
-  const shown = editing ? editPreviewInvoice() : saved || draftInvoice();
+  const shown = previewedInvoice();
   $("invoice").innerHTML = invoiceHtml(shown);
+  clearPrintPages();   // the printed pages are laid out again just before printing (buildPrintPages), so none can be out of date
   $("previewStatus").textContent = t(editing ? "edit.previewStatus" : saved ? "preview.saved" : "preview.live");
   $("backToSale").hidden = Boolean(editing) || !saved;
   $("editInvoiceBtn").hidden = Boolean(editing) || !saved;
@@ -4248,6 +4350,8 @@ function bindEvents() {
 
   // Preview
   $("printBtn").addEventListener("click", () => printInvoice());
+  // The printed pages are laid out whenever the browser is about to print: the Print button, Ctrl+P or the browser menu.
+  window.addEventListener("beforeprint", buildPrintPages);
   $("backToSale").addEventListener("click", () => {
     state.previewInvoice = null;
     renderInvoice();
@@ -4410,6 +4514,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     saveInvoiceEdit, cancelInvoiceEdit, renderInvoiceEdit, refreshEditLive, getInvoiceEdit: () => state.invoiceEdit,
     addPhoneRow, removePhoneRow, setPhoneRow, saveBusinessSettings, fillSettingsForm, businessPhonesHtml,
     saleDoneAction, openSaleDoneDialog, getSaleDone: () => state.saleDone, printInvoice,
+    invoiceParts, invoiceHtml, printItems, continuationHeadHtml,
     businessPhonesHtml, fillSettingsForm, saveBusinessSettings, addPhoneRow, removePhoneRow, setPhoneRow, renderPhoneRows,
     getPhoneRows: () => state.phoneRows,
   });
