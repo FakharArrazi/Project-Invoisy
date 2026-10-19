@@ -12,7 +12,12 @@
         that no key or placeholder is missing.
    The language picker in Settings lists every registered language automatically.
 
-   Text with a count has two keys: "<key>.one" and "<key>.other" (use tn()).
+   A right-to-left language (Arabic) passes { locale: "...", dir: "rtl" } to register(); the page then switches
+   to right-to-left when that language is chosen (see dir() and applyLanguage in script.js).
+
+   Text with a count has two keys: "<key>.one" and "<key>.other" (use tn()). A language with more plural forms
+   than that (Arabic has "two" and "few") may add "<key>.two", "<key>.few", ... for the forms it needs; any form a
+   language does not have falls back to "<key>.other".
    ========================================================================== */
 
 (function () {
@@ -22,12 +27,19 @@
 
   // name is the language written in itself, so people can find it whatever language the app is in.
   function register(code, name, messages, options) {
-    packs[code] = { name, locale: (options && options.locale) || code, messages };
+    packs[code] = {
+      name,
+      locale: (options && options.locale) || code,
+      dir: options && options.dir === "rtl" ? "rtl" : "ltr",
+      messages,
+    };
   }
 
   const has = (code) => Object.prototype.hasOwnProperty.call(packs, code);
   const language = () => current;
   const locale = () => (packs[current] ? packs[current].locale : "en-US");
+  // "rtl" for a right-to-left language (Arabic), "ltr" for every other one.
+  const dir = () => (packs[current] ? packs[current].dir : "ltr");
   const languages = () => Object.keys(packs).map((code) => ({ code, name: packs[code].name }));
 
   // Unknown codes (for example from a newer data file) fall back to English.
@@ -43,8 +55,13 @@
     return base !== undefined ? base : key;
   }
 
+  // In a right-to-left language, a value that holds Latin letters or digits (a product name, an amount, an invoice number)
+  // (not a plain whole number) is set apart with Unicode isolation marks so it keeps its own order inside the Arabic sentence. Other languages
+  // get the value exactly as given.
+  const isolate = (value) => (packs[current] && packs[current].dir === "rtl" && /[A-Za-z0-9]/.test(value) && !/^\d+$/.test(value) && value.charAt(0) !== "\u2066" ? "\u2068" + value + "\u2069" : value);
+
   const fill = (text, params) =>
-    text.replace(/\{(\w+)\}/g, (whole, name) => (params && params[name] !== undefined ? String(params[name]) : whole));
+    text.replace(/\{(\w+)\}/g, (whole, name) => (params && params[name] !== undefined ? isolate(String(params[name])) : whole));
 
   function t(key, params) {
     return fill(lookup(key), params);
@@ -52,10 +69,15 @@
 
   // Text with a count: picks "<key>.one" or "<key>.other" by the current language's plural rule
   // (English: only 1 is singular. French: 0 and 1 are singular). {n} is the count.
+  // A language with more forms (Arabic: "two" for 2, "few" for 3 to 10) can add "<key>.two", "<key>.few", ...;
+  // without such a key the form falls back to "<key>.other", so English and French are not affected.
   function tn(key, count, params) {
-    const form = new Intl.PluralRules(locale()).select(count) === "one" ? "one" : "other";
+    const category = new Intl.PluralRules(locale()).select(count);
+    const own = packs[current] && packs[current].messages;
+    const extra = category !== "one" && category !== "other" && own && own[key + "." + category] !== undefined;
+    const form = extra ? category : category === "one" ? "one" : "other";
     return t(key + "." + form, { ...params, n: count });
   }
 
-  globalThis.I18n = { register, has, language, locale, languages, setLanguage, t, tn };
+  globalThis.I18n = { register, has, language, locale, dir, languages, setLanguage, t, tn };
 })();

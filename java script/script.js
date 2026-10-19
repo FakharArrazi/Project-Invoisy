@@ -44,13 +44,21 @@ const numberFormat = {
   },
 };
 
+// Text that must keep its own left-to-right order inside right-to-left text (Arabic): tile sizes like 60 × 120 and phone
+// numbers. The browser's text direction rules would otherwise swap the parts around ("120 × 60"). English and French are
+// returned exactly as given.
+function ltr(text) {
+  return text && I18n.dir() === "rtl" ? "\u2066" + text + "\u2069" : text;
+}
+
 function esc(value) {
   const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
   return String(value == null ? "" : value).replace(/[&<>"']/g, (c) => map[c]);
 }
 
 function money(amount, currency) {
-  return numberFormat.format(amount) + " " + (currency || state.settings.currency);
+  // An amount reads left to right in every language ("1,152.5 DA"), also inside Arabic text.
+  return ltr(numberFormat.format(amount) + " " + (currency || state.settings.currency));
 }
 
 function formatDate(iso) {
@@ -64,7 +72,7 @@ function formatDateTime(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return "";
   const pad = (n) => String(n).padStart(2, "0");
-  return formatDate(iso) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  return ltr(formatDate(iso) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()));
 }
 
 let toastTimer = null;
@@ -95,7 +103,7 @@ function secondCustomerName(record) {
 // name, a labelled line is added below the first customer's details.
 function customerBlockHtml(inv, cust) {
   const second = secondCustomerName(inv);
-  return `<div><div class="label">${esc(t("inv.customer"))}</div><div class="inv-customer">${esc(customerLabel(cust.name))}${cust.phone ? "\n" + esc(cust.phone) : ""}${cust.address ? "\n" + esc(cust.address) : ""}</div>` +
+  return `<div><div class="label">${esc(t("inv.customer"))}</div><div class="inv-customer">${esc(customerLabel(cust.name))}${cust.phone ? "\n" + esc(ltr(cust.phone)) : ""}${cust.address ? "\n" + esc(cust.address) : ""}</div>` +
     (second ? `<div class="label inv-second-label">${esc(t("inv.secondCustomer"))}</div><div class="inv-customer">${esc(second)}</div>` : "") + `</div>`;
 }
 
@@ -104,8 +112,8 @@ function customerBlockHtml(inv, cust) {
 function businessPhonesHtml(biz) {
   const phones = Validation.businessPhones(biz);
   if (!phones.length) return "";
-  if (phones.length === 1) return `<div>${esc(phones[0])}</div>`;
-  return `<div class="inv-phones">${phones.map((p) => `<span class="inv-phone">${esc(p)}</span>`).join('<span class="inv-sep"> · </span>')}</div>`;
+  if (phones.length === 1) return `<div>${esc(ltr(phones[0]))}</div>`;
+  return `<div class="inv-phones">${phones.map((p) => `<span class="inv-phone">${esc(ltr(p))}</span>`).join('<span class="inv-sep"> · </span>')}</div>`;
 }
 
 /* ---------- Data model ---------- */
@@ -123,7 +131,7 @@ const { normalizeProduct, normalizeTileSize, isTileSize, productProblem, buildDa
 // A display label is derived at render time; it is never the persisted product value.
 function productLabel(product) {
   if (!product) return "";
-  return [product.name, product.tileSize, product.manufacturer].filter(Boolean).join(" — ");
+  return [product.name, ltr(product.tileSize), product.manufacturer].filter(Boolean).join(" — ");
 }
 
 function productDetails(product) {
@@ -158,7 +166,7 @@ function stockLabel(product) {
 // "60*120" or "60 × 120 cm" -> "60 × 120"
 function formatTileSize(size) {
   const m = String(size || "").match(/^\s*(\d+(?:[.,]\d+)?)\s*[*×x]\s*(\d+(?:[.,]\d+)?)/i);
-  return m ? `${m[1]} × ${m[2]}` : String(size || "").trim();
+  return ltr(m ? `${m[1]} × ${m[2]}` : String(size || "").trim());
 }
 
 // Invoice wording: golden era (60 × 120) garnada
@@ -3275,6 +3283,7 @@ function applyLanguage() {
   if (language === appliedLanguage) return;
   appliedLanguage = language;
   document.documentElement.lang = language;
+  document.documentElement.dir = I18n.dir();   // "rtl" for Arabic, "ltr" for English and French (css/rtl.css only applies to rtl)
   document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
   document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => { el.placeholder = t(el.dataset.i18nPlaceholder); });
   document.querySelectorAll("[data-i18n-title]").forEach((el) => { el.title = t(el.dataset.i18nTitle); });
@@ -4416,7 +4425,7 @@ function bindEvents() {
 
 // The Suppliers and Purchases screens (purchases-ui.js) work on this page's data and save through the same commit().
 PurchasesUI.init({
-  state, db, commit, guard, $, t, tn, esc, money, numberFormat, notify, formatDateTime, productLabel, priceLabel, stockText, formatTileSize,
+  state, db, commit, guard, $, t, tn, esc, money, numberFormat, notify, formatDateTime, productLabel, priceLabel, stockText, formatTileSize, ltr,
   downloadText, showView,
 });
 

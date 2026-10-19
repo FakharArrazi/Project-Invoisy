@@ -191,7 +191,7 @@
       const raw = toRaw(given ? values : null);
       holder.priceRows = raw.prices.map((p) => newRow(p.unit, p.price));
       const attr = (key) => (raw[key] === "" ? "" : ` value="${esc(raw[key])}"`);
-      const stockUnits = STOCK_UNITS.map((u) => `<option value="${u}"${raw.stockUnit === u ? " selected" : ""}>${esc(t("stockunit." + u))}</option>`).join("");
+      const stockUnits = STOCK_UNITS.map((u) => `<option value="${u}"${raw.stockUnit === u ? " selected" : ""} data-i18n="stockunit.${u}">${esc(t("stockunit." + u))}</option>`).join("");
       const typeOptions = `<option value=""${raw.productType ? "" : " selected"} data-i18n="stock.productTypeNone">${esc(t("stock.productTypeNone"))}</option>` +
         Validation.PRODUCT_TYPES.map((type) => `<option value="${esc(type)}"${raw.productType === type ? " selected" : ""} data-i18n="productType.${esc(type)}">${esc(t("productType." + type))}</option>`).join("");
       const touched = given && raw.stockUnit ? ' data-touched="1"' : "";   // an edit never changes the unit on its own

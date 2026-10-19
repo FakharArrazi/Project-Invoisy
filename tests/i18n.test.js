@@ -11,7 +11,7 @@ try { fakeIndexedDB = require("fake-indexeddb"); } catch { /* only needed by tes
 
 const SCRIPT_DIR = path.join(__dirname, "..", "java script");
 // Add a new language's file here (and in index.html and tests/helpers.js).
-const LANGUAGE_FILES = ["i18n.js", "lang/en.js", "lang/fr.js"];
+const LANGUAGE_FILES = ["i18n.js", "lang/en.js", "lang/fr.js", "lang/ar.js"];
 const read = (file) => fs.readFileSync(path.join(SCRIPT_DIR, file), "utf8");
 
 // Loads only the language files: enough to check the dictionaries.
@@ -34,11 +34,12 @@ function loadApp() {
   };
   const values = new Map();
   const exports = {};
+  const root = { style: { setProperty() {} }, dataset: {} };       // <html>: applyLanguage writes lang and dir here
   const context = {
     __INVOISY_TEST_EXPORTS__: exports,
     console,
     Intl,
-    document: { getElementById: element, querySelectorAll: () => [], documentElement: { style: { setProperty() {} }, dataset: {} } },
+    document: { getElementById: element, querySelectorAll: () => [], documentElement: root },
     window: {},
     localStorage: { getItem: (k) => (values.has(k) ? values.get(k) : null), setItem: (k, v) => values.set(k, String(v)), removeItem: (k) => values.delete(k) },
     navigator: {},
@@ -51,7 +52,7 @@ function loadApp() {
   const useLanguage = (language) => api.applyData({
     products: [], invoices: [], settings: { ...api.DEFAULT_SETTINGS, language }, counter: 0, lastSaved: "",
   });
-  return { api, I18n: context.I18n, Calc: context.Calc, useLanguage, field: element };
+  return { api, I18n: context.I18n, Calc: context.Calc, useLanguage, field: element, root };
 }
 
 const placeholders = (text) => [...text.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort().join(",");
@@ -63,7 +64,9 @@ test("every language has exactly the keys English has", () => {
   const en = loadMessages("lang/en.js");
   for (const { code } of I18n.languages()) {
     const keys = Object.keys(loadMessages(`lang/${code}.js`));
-    assert.deepEqual(keys.filter((k) => !(k in en)), [], `${code} has keys English does not`);
+    // Arabic may add the plural forms English does not have (".two", ".few", ...) for text English counts with ".other".
+    const extraForm = (k) => /\.(zero|two|few|many)$/.test(k) && k.replace(/\.[a-z]+$/, ".other") in en;
+    assert.deepEqual(keys.filter((k) => !(k in en) && !extraForm(k)), [], `${code} has keys English does not`);
     assert.deepEqual(Object.keys(en).filter((k) => !keys.includes(k)), [], `${code} is missing keys`);
   }
 });
@@ -76,10 +79,22 @@ test("every translation keeps the {placeholders} of the English text", () => {
       assert.equal(placeholders(messages[key]), placeholders(en[key]), `${code}: placeholders differ for ${key}`);
     }
   }
+  // Arabic: the same, except that a counted text may leave {n} out when the word itself carries the number
+  // ("يوم واحد", "يومين"), and may never use a placeholder English does not have.
+  const ar = loadMessages("lang/ar.js");
+  for (const [key, text] of Object.entries(ar)) {
+    const base = key in en ? key : key.replace(/\.[a-z]+$/, ".other");
+    const counted = /\.(one|two|few|many|zero|other)$/.test(key);
+    if (!counted) assert.equal(placeholders(text), placeholders(en[base]), `ar: placeholders differ for ${key}`);
+    else {
+      const allowed = new Set(placeholders(en[base]).split(",").filter(Boolean));
+      for (const name of placeholders(text).split(",").filter(Boolean)) assert.ok(allowed.has(name), `ar: ${key} uses {${name}}, which English does not`);
+    }
+  }
 });
 
 test("counted text always comes as a .one and a .other pair", () => {
-  for (const file of ["lang/en.js", "lang/fr.js"]) {
+  for (const file of ["lang/en.js", "lang/fr.js", "lang/ar.js"]) {
     const keys = Object.keys(loadMessages(file));
     for (const key of keys.filter((k) => k.endsWith(".one"))) assert.ok(keys.includes(key.replace(/\.one$/, ".other")), `${file}: ${key} has no .other`);
     for (const key of keys.filter((k) => k.endsWith(".other"))) assert.ok(keys.includes(key.replace(/\.other$/, ".one")), `${file}: ${key} has no .one`);
@@ -151,7 +166,7 @@ test("the language switches, falls back to English, and ignores unknown codes", 
   assert.equal(I18n.setLanguage("de"), "en");              // unknown: back to English
   assert.equal(I18n.t("no.such.key"), "no.such.key");       // unknown key: shows the key, never crashes
   assert.equal(I18n.t("stock.n", { n: 3 }), "Stock: 3");
-  assert.deepEqual(Array.from(I18n.languages(), (l) => l.name), ["English", "Français"]);
+  assert.deepEqual(Array.from(I18n.languages(), (l) => l.name), ["English", "Français", "العربية"]);
 });
 
 test("plurals follow the language: French 0 and 1 are singular, English only 1", () => {
@@ -374,5 +389,126 @@ test("the supplier and purchase screens' run-time texts exist in every language"
   }
   for (const key of ["pur.overdueDays", "sup.terms.days", "storage.countSuppliers", "storage.countPurchases"]) {
     for (const messages of [en, fr]) assert.ok(`${key}.one` in messages && `${key}.other` in messages, `${key} has both forms`);
+  }
+});
+
+/* ---------- Arabic: right-to-left ---------- */
+
+test("Arabic is a selectable language with its own name, and only Arabic is right-to-left", () => {
+  const I18n = loadI18n();
+  const arabic = Array.from(I18n.languages()).find((l) => l.code === "ar");
+  assert.equal(arabic.name, "العربية");
+  assert.equal(I18n.dir(), "ltr");
+  I18n.setLanguage("fr");
+  assert.equal(I18n.dir(), "ltr");
+  I18n.setLanguage("ar");
+  assert.equal(I18n.dir(), "rtl");
+  assert.equal(I18n.t("nav.settings"), "الإعدادات");
+  I18n.setLanguage("en");
+  assert.equal(I18n.dir(), "ltr");
+});
+
+test("Arabic has no empty values and every counted text works for 0, 1, 2, 3-10, 11 and 100", () => {
+  const I18n = loadI18n();
+  const ar = loadMessages("lang/ar.js");
+  for (const [key, text] of Object.entries(ar)) assert.ok(text.trim().length > 0, `${key} is empty`);
+  I18n.setLanguage("ar");
+  assert.equal(I18n.tn("storage.countProducts", 1), "منتج واحد");
+  assert.equal(I18n.tn("storage.countProducts", 2), "منتجان");
+  assert.equal(I18n.tn("storage.countProducts", 5), "5 منتجات");
+  assert.equal(I18n.tn("storage.countProducts", 11), "11 منتجًا");
+  assert.equal(I18n.tn("storage.countProducts", 100), "100 منتجًا");
+  assert.equal(I18n.tn("storage.countProducts", 0), "0 منتجًا");
+  // A text with no ".two" / ".few" form falls back to ".other"; English and French are not changed by the new forms.
+  I18n.setLanguage("en");
+  assert.equal(I18n.tn("storage.countProducts", 2), "2 products");
+  I18n.setLanguage("fr");
+  assert.equal(I18n.tn("storage.countProducts", 1000000), "1000000 produits");
+});
+
+test("in Arabic, values with Latin letters or digits are isolated so they keep their order; English and French are untouched", () => {
+  const I18n = loadI18n();
+  I18n.setLanguage("ar");
+  const text = I18n.t("sell.completed", { number: "INV-000123" });
+  assert.equal(text, "تم إتمام البيع. تم حفظ \u2068INV-000123\u2069.");
+  assert.equal(I18n.t("product.deleted", { name: "بلاط" }), "تم حذف بلاط.");          // pure Arabic: nothing added
+  I18n.setLanguage("en");
+  assert.equal(I18n.t("sell.completed", { number: "INV-000123" }), "Sale completed. INV-000123 saved.");
+  I18n.setLanguage("fr");
+  assert.doesNotMatch(I18n.t("sell.completed", { number: "INV-000123" }), /[\u2066-\u2069]/);
+});
+
+test("Arabic sets the page direction; switching back restores left-to-right", () => {
+  const { api, I18n, useLanguage, root } = loadApp();
+  assert.equal(api.DEFAULT_SETTINGS.language, "en");                 // the default does not change
+  useLanguage("ar");
+  api.renderAll();
+  assert.equal(root.lang, "ar");
+  assert.equal(root.dir, "rtl");
+  useLanguage("fr");
+  api.renderAll();
+  assert.equal(root.lang, "fr");
+  assert.equal(root.dir, "ltr");
+  useLanguage("en");
+  api.renderAll();
+  assert.equal(root.dir, "ltr");
+  assert.equal(I18n.dir(), "ltr");
+});
+
+test("numbers and money in Arabic use Latin digits and the English grouping", () => {
+  const { api, useLanguage } = loadApp();
+  useLanguage("ar");
+  assert.equal(api.money(1152.5), "\u20661,152.5 DA\u2069");      // an amount keeps its left-to-right order inside Arabic text
+  assert.equal(api.money(1234567.891), "\u20661,234,567.89 DA\u2069");
+  assert.equal(api.money(7), "\u20667 DA\u2069");
+});
+
+test("the app speaks Arabic: sale errors, product labels, invoice text and data-check messages", () => {
+  const { api, Calc, useLanguage } = loadApp();
+  useLanguage("ar");
+  const tile = api.normalizeProduct({ id: "t1", name: "بلاط", sellingPrice: 800, priceUnit: "m2", stock: 3, tileSize: "60*120", coveragePerBox: 1.44, manufacturer: "TimgadCeram" });
+  api.applyData({ products: [tile], invoices: [], settings: { ...api.DEFAULT_SETTINGS, language: "ar" }, counter: 0, lastSaved: "" });
+  // The tile size keeps its own order inside the Arabic label (left-to-right isolate around it).
+  assert.equal(api.productLabel(tile), "بلاط — \u206660*120\u2069 — TimgadCeram");
+  assert.equal(api.formatTileSize("60*120"), "\u206660 × 120\u2069");
+  assert.equal(Calc.unitLabel("box"), "كرتونة");
+  const built = api.buildData({ products: [{ id: "a", name: "", sellingPrice: 1, stock: 1 }], invoices: [], settings: {}, invoiceCounter: 0, version: 1 }, false);
+  assert.match(built.problems[0], /^المنتج \u2068?1\u2069?: الاسم مفقود\.$/);
+  assert.equal(api.describeData({ products: [], invoices: [{}] }), "0 منتجًا, فاتورة واحدة");
+});
+
+test("English and French output is identical with and without the Arabic language loaded", () => {
+  const withArabic = loadApp();
+  for (const language of ["en", "fr"]) {
+    withArabic.useLanguage(language);
+    const tile = withArabic.api.normalizeProduct({ id: "t1", name: "Tile", sellingPrice: 800, priceUnit: "m2", stock: 3, tileSize: "60*120", coveragePerBox: 1.44, manufacturer: "TimgadCeram" });
+    assert.equal(withArabic.api.productLabel(tile), "Tile — 60*120 — TimgadCeram");
+    assert.equal(withArabic.api.formatTileSize("60*120"), "60 × 120");
+    assert.doesNotMatch(withArabic.I18n.t("sell.completed", { number: "INV-1" }), /[\u2066-\u2069]/);
+  }
+});
+
+test("Arabic keeps every key the code asks for, including the ones built at run time", () => {
+  const en = loadMessages("lang/en.js");
+  const ar = loadMessages("lang/ar.js");
+  for (const prefix of ["demo.cat.", "unit.", "price.", "stockunit.", "productType."]) {
+    const keys = Object.keys(en).filter((k) => k.startsWith(prefix));
+    assert.ok(keys.length > 0, `English has ${prefix} keys`);
+    for (const key of keys) assert.ok(key in ar, `Arabic is missing ${key}`);
+  }
+});
+
+test("the page loads Arabic and its right-to-left stylesheet, and the RTL rules only apply to dir=rtl", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  assert.match(html, /<script src="java script\/lang\/ar\.js"><\/script>/);
+  assert.ok(html.indexOf("lang/en.js") < html.indexOf("lang/ar.js"), "Arabic loads after English");
+  assert.match(html, /<link rel="stylesheet" href="css\/rtl\.css">/);
+  const css = fs.readFileSync(path.join(__dirname, "..", "css", "rtl.css"), "utf8");
+  const selectors = css.replace(/\/\*[\s\S]*?\*\//g, "").split("{").slice(0, -1).map((chunk) => chunk.split("}").pop().trim());
+  for (const group of selectors) {
+    if (group.startsWith("@media")) continue;
+    for (const selector of group.split(",").map((x) => x.trim())) {
+      assert.match(selector, /^html\[(dir="rtl"|lang="ar")\]/, `rtl.css rule is not scoped: ${selector}`);
+    }
   }
 });

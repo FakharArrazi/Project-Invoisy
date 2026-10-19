@@ -264,7 +264,7 @@
       const overdue = sum.overdueCount ? " " + badge("overdue", t("sup.overdueCount", { n: sum.overdueCount })) : "";
       return `<tr data-id="${esc(sp.id)}">
         <td><button type="button" class="link" data-act="sup-open" data-id="${esc(sp.id)}">${esc(sp.name)}</button>${P.supplierContactNames(sp).length ? `<div class="muted small">${esc(P.supplierContactNames(sp).join(", "))}</div>` : ""}</td>
-        <td>${P.supplierPhones(sp).map((phone) => `<div>${esc(phone)}</div>`).join("")}</td>
+        <td>${P.supplierPhones(sp).map((phone) => `<div>${esc(h.ltr(phone))}</div>`).join("")}</td>
         <td>${esc(sp.email)}</td>
         <td class="num">${esc(money(sum.total))}</td>
         <td class="num">${esc(money(sum.paid))}</td>
@@ -521,7 +521,7 @@
       <div class="panel">
         <h2>${esc(t("sup.details"))}</h2>
         <dl class="data-info">
-          ${P.supplierContacts(sp).map((c) => line(c.name ? t("sup.f.contact") : t("sup.f.phone"), [c.name, c.phone].filter(Boolean).join(" · "))).join("")}${line(t("sup.f.email"), sp.email)}
+          ${P.supplierContacts(sp).map((c) => line(c.name ? t("sup.f.contact") : t("sup.f.phone"), [c.name, h.ltr(c.phone)].filter(Boolean).join(" · "))).join("")}${line(t("sup.f.email"), sp.email)}
           ${line(t("sup.f.address"), sp.address)}${line(t("sup.f.cityCountry"), place)}${line(t("sup.f.taxId"), sp.taxId)}${site}
           <dt>${esc(t("sup.f.terms"))}</dt><dd>${esc(terms)}</dd>
           <dt>${esc(t("sup.f.credit"))}</dt><dd>${esc(sp.creditLimit == null ? t("sup.noLimit") : money(sp.creditLimit))}</dd>
@@ -597,7 +597,7 @@
     else if (ui.sup.tab === "products") body = profileProducts(sp);
     else body = profileDocuments(sp);
     return `<div class="panel profile-head">
-        <div><button type="button" class="link back" data-act="sup-back">← ${esc(t("sup.title"))}</button>
+        <div><button type="button" class="link back" data-act="sup-back"><span class="dir-arrow">←</span> ${esc(t("sup.title"))}</button>
           <h2>${esc(sp.name)} ${sp.archived ? badge("st-cancelled", t("sup.status.archived")) : ""}</h2></div>
         <div class="actions wrap">
           ${sp.archived ? "" : `<button type="button" class="btn primary" data-act="pur-new" data-id="${esc(sp.id)}">${esc(t("sup.newPurchase"))}</button>`}
@@ -647,15 +647,15 @@
     const logo = st.logo ? `<img class="inv-logo" src="${esc(st.logo)}" alt="">` : "";
     const phones = Validation.businessPhones(st);
     const phoneLine = phones.length > 1
-      ? `<div class="inv-phones">${phones.map((p) => `<span class="inv-phone">${esc(p)}</span>`).join('<span class="inv-sep"> · </span>')}</div>`
-      : line(phones[0]);
+      ? `<div class="inv-phones">${phones.map((p) => `<span class="inv-phone">${esc(h.ltr(p))}</span>`).join('<span class="inv-sep"> · </span>')}</div>`
+      : line(h.ltr(phones[0]));
     return `<div>${logo}<div class="inv-biz-name">${esc(st.businessName)}</div>${line(st.address)}${phoneLine}${line(st.email)}</div>`;
   }
 
   function supplierStatementHtml(sp) {
     const { sum, purchases, payments } = supplierStatement(sp);
     return `<header class="inv-head">${businessHeader()}<div class="inv-title">${esc(t("sup.statement"))}</div></header>
-      <div class="inv-meta"><div><div class="label">${esc(t("pur.col.supplier"))}</div><div class="inv-customer">${esc(sp.name)}${P.supplierPhones(sp).length ? "\n" + esc(P.supplierPhones(sp).join(" · ")) : ""}${sp.address ? "\n" + esc(sp.address) : ""}</div></div>
+      <div class="inv-meta"><div><div class="label">${esc(t("pur.col.supplier"))}</div><div class="inv-customer">${esc(sp.name)}${P.supplierPhones(sp).length ? "\n" + esc(P.supplierPhones(sp).map(h.ltr).join(" · ")) : ""}${sp.address ? "\n" + esc(sp.address) : ""}</div></div>
       <div class="right"><div><span class="label">${esc(t("sup.csv.date"))}</span> ${esc(fmtDay(today()))}</div></div></div>
       <table class="inv-table"><thead><tr><th>${esc(t("pur.col.reference"))}</th><th>${esc(t("pur.col.invoiceNo"))}</th><th>${esc(t("pur.col.date"))}</th><th class="num">${esc(t("col.total"))}</th><th class="num">${esc(t("col.paid"))}</th><th class="num">${esc(t("pur.col.outstanding"))}</th></tr></thead>
       <tbody>${purchases.map((p) => { const x = summaryOf(p); return `<tr><td>${esc(p.reference)}</td><td>${esc(p.supplierInvoiceNumber)}</td><td>${esc(fmtDay(p.invoiceDate))}</td><td class="num">${esc(num(p.total))}</td><td class="num">${esc(num(x.paid))}</td><td class="num">${esc(num(x.outstanding))}</td></tr>`; }).join("") || `<tr><td colspan="6" class="none">${esc(t("pur.noneFound"))}</td></tr>`}</tbody></table>
@@ -1244,7 +1244,7 @@
     const ip = v.initialPayment;
     return `<form id="purchaseForm" data-form="pur-save" novalidate>
       <div class="panel">
-        <button type="button" class="link back" data-act="pur-back">← ${esc(t("pur.title"))}</button>
+        <button type="button" class="link back" data-act="pur-back"><span class="dir-arrow">←</span> ${esc(t("pur.title"))}</button>
         <h2>${esc(t(editing ? "pur.editDraft" : "pur.newTitle"))}</h2>
         <p class="notice">${esc(t("pur.notASale"))}</p>
         <div class="grid-3">
@@ -1606,7 +1606,7 @@
     const receipts = [...(p.receipts || [])].sort((a, b) => a.at.localeCompare(b.at));
     const describe = (r) => r.lines.map((x) => {
       const line = p.lines.find((l) => l.id === x.lineId);
-      return `${esc(line ? line.productName : "")}: ${esc(qtyText(x.qty, line ? line.unit : ""))}${line && line.stockUnit ? ` → ${esc(stockQtyText(x.baseQty, line.stockUnit))}` : ""}`;
+      return `${esc(line ? line.productName : "")}: ${esc(qtyText(x.qty, line ? line.unit : ""))}${line && line.stockUnit ? ` <span class="dir-arrow">→</span> ${esc(stockQtyText(x.baseQty, line.stockUnit))}` : ""}`;
     }).join("<br>");
     const rows = receipts.map((r) => {
       if (open === "reverse:" + r.id) {
@@ -1705,7 +1705,7 @@
     actions.push(btn("pur-print", t("sup.print")));
     const info = (label, value) => (value ? `<dt>${esc(label)}</dt><dd>${value}</dd>` : "");
     return `<div class="panel profile-head">
-        <div><button type="button" class="link back" data-act="pur-back">← ${esc(t("pur.title"))}</button>
+        <div><button type="button" class="link back" data-act="pur-back"><span class="dir-arrow">←</span> ${esc(t("pur.title"))}</button>
           <h2>${esc(p.reference)} ${statusBadge(p)} ${payBadge(p, sum)} ${deliveryBadge(p, sum)}</h2></div>
         <div class="actions wrap">${actions.join("")}</div>
       </div>
@@ -1733,7 +1733,7 @@
     const cur = p.currency || S().settings.currency;
     const m = (n) => h.money(n, cur);
     return `<header class="inv-head">${businessHeader()}<div class="inv-title">${esc(t("pur.print.title"))}</div></header>
-      <div class="inv-meta"><div><div class="label">${esc(t("pur.col.supplier"))}</div><div class="inv-customer">${esc(sp ? sp.name : "")}${sp && P.supplierPhones(sp).length ? "\n" + esc(P.supplierPhones(sp).join(" · ")) : ""}${sp && sp.address ? "\n" + esc(sp.address) : ""}</div></div>
+      <div class="inv-meta"><div><div class="label">${esc(t("pur.col.supplier"))}</div><div class="inv-customer">${esc(sp ? sp.name : "")}${sp && P.supplierPhones(sp).length ? "\n" + esc(P.supplierPhones(sp).map(h.ltr).join(" · ")) : ""}${sp && sp.address ? "\n" + esc(sp.address) : ""}</div></div>
       <div class="right"><div><span class="label">${esc(t("pur.f.reference"))}</span> ${esc(p.reference)}</div>
         <div><span class="label">${esc(t("pur.f.invoiceNo"))}</span> ${esc(p.noSupplierInvoice ? t("pur.noInvoiceShort") : p.supplierInvoiceNumber)}</div>
         <div><span class="label">${esc(t("pur.f.invoiceDate"))}</span> ${esc(fmtDay(p.invoiceDate))}</div><div><span class="label">${esc(t("pur.f.dueDate"))}</span> ${esc(fmtDay(p.dueDate))}</div></div></div>

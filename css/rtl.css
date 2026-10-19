@@ -1,0 +1,130 @@
+/* ==========================================================================
+   Right-to-left (Arabic).
+   Every rule here is scoped to html[dir="rtl"], which script.js sets only when Arabic is the language
+   (see applyLanguage). English and French never match, so they look exactly as before.
+
+   Nothing is redesigned: the same elements, sizes, colors and fonts. The browser already mirrors flex rows, grids
+   and tables when the direction is rtl; this file only mirrors the few places that were written with a fixed
+   left or right (alignment of numbers, side borders, side margins and paddings, one background icon).
+   ========================================================================== */
+
+/* Arabic letters: the same font stack, with fonts that are known to include Arabic added before the generic fallbacks. */
+html[lang="ar"] body {
+  font-family: system-ui, -apple-system, "Segoe UI", Tahoma, "Noto Sans Arabic", Roboto, Arial, sans-serif;
+}
+html[lang="ar"] .invoice {
+  font-family: Arial, Tahoma, "Segoe UI", "Noto Sans Arabic", Helvetica, sans-serif;
+}
+
+/* ---------- Things that always read left to right: they keep their own order inside Arabic text ---------- */
+
+html[dir="rtl"] input[type="tel"],
+html[dir="rtl"] input[type="email"],
+html[dir="rtl"] input[type="url"],
+html[dir="rtl"] input[type="number"],
+html[dir="rtl"] input[type="date"],
+html[dir="rtl"] input[inputmode="tel"],
+html[dir="rtl"] input[inputmode="decimal"],
+html[dir="rtl"] input[inputmode="numeric"],
+html[dir="rtl"] #custPhone,
+html[dir="rtl"] #editPhone,
+html[dir="rtl"] .phone-row input,
+html[dir="rtl"] .contact-phone,
+html[dir="rtl"] input[id*="sku" i],
+html[dir="rtl"] input[id*="tileSize" i] { direction: ltr; text-align: right; }
+html[dir="rtl"] .inv-phone { unicode-bidi: isolate; direction: ltr; }
+
+/* The arrows of "← Back" and "a → b" point the other way. */
+html[dir="rtl"] .dir-arrow { display: inline-block; transform: scaleX(-1); }
+
+/* ---------- Layout: sides ---------- */
+
+html[dir="rtl"] .brand { margin-left: 0; margin-right: -8px; }
+html[dir="rtl"] .sidebar { border-right: 0; border-left: 1px solid var(--border); }
+html[dir="rtl"] .backup-reminder { margin-left: 0; margin-right: auto; }
+
+/* ---------- Product picker ---------- */
+
+html[dir="rtl"] .result { border-left: 0; border-right: 3px solid transparent; }
+html[dir="rtl"] .result[aria-selected="true"] { border-right-color: var(--accent); }
+html[dir="rtl"] .result .price,
+html[dir="rtl"] .result .stock { text-align: left; }
+
+/* ---------- Tables and numbers: text starts on the right, numbers end on the left ---------- */
+
+html[dir="rtl"] .table th,
+html[dir="rtl"] .table td { text-align: right; }
+html[dir="rtl"] .table .num { text-align: left; }
+html[dir="rtl"] .table input { text-align: left; }
+html[dir="rtl"] .table .empty-row td { text-align: center; }
+html[dir="rtl"] .table tr.edit-new td:first-child { border-left: 0; border-right: 3px solid var(--accent, #1b6e3c); }
+html[dir="rtl"] .sort-mark { margin-left: 0; margin-right: 4px; }
+html[dir="rtl"] .link { text-align: right; }
+html[dir="rtl"] .price-note { text-align: left; }
+html[dir="rtl"] .pl-total strong { text-align: left; }
+html[dir="rtl"] .collect-later { text-align: left; }
+html[dir="rtl"] .collect-input input { text-align: left; }
+
+/* ---------- Sale table (cells of the current sale) ---------- */
+
+html[dir="rtl"] .sale-table .price-unit { text-align: right; }
+html[dir="rtl"] .sale-table .qty-note,
+html[dir="rtl"] .sale-table .price-note { text-align: left; }
+
+/* ---------- Sale totals ---------- */
+
+html[dir="rtl"] .totals { margin: 16px auto 0 0; }
+html[dir="rtl"] .totals .pay-input input { text-align: left; }
+html[dir="rtl"] .totals .pay-hint { text-align: left; }
+
+/* ---------- Messages and lists ---------- */
+
+html[dir="rtl"] .notice { border-left: 0; border-right: 3px solid var(--accent); }
+html[dir="rtl"] .debt-notice { border-left: 1px solid #e0b252; border-right: 5px solid #c98a00; }
+html[dir="rtl"] .warn-box ul,
+html[dir="rtl"] .product-dialog .notice ul,
+html[dir="rtl"] .log,
+html[dir="rtl"] .edit-notes-list { padding-left: 0; padding-right: 18px; }
+html[dir="rtl"] .invoice-filters .muted { margin-left: 0; margin-right: auto; }
+
+/* ---------- Debt dialog ---------- */
+
+html[dir="rtl"] .debt-dialog-figs { margin: 6px 26px 8px 0; }
+html[dir="rtl"] .debt-dialog-amount { margin: 0 26px 0 0; }
+html[dir="rtl"] .debt-dialog-amount input { text-align: left; }
+
+/* ---------- Product selector in the purchase form ---------- */
+
+html[dir="rtl"] .combo-input {
+  padding-right: 9px; padding-left: 28px;
+  background-position: left 10px center;
+}
+html[dir="rtl"] .combo-list { left: auto; right: 0; }
+html[dir="rtl"] .combo-opt { border-left: 0; border-right: 3px solid transparent; }
+html[dir="rtl"] .combo-opt.active { border-right-color: var(--accent); }
+
+/* ---------- Printed invoice, collection document and purchase print ---------- */
+
+html[dir="rtl"] .inv-meta .right { text-align: left; }
+html[dir="rtl"] .inv-table th { text-align: right; }
+html[dir="rtl"] .inv-table .num { text-align: left; }
+html[dir="rtl"] .inv-table .none { text-align: center; }
+html[dir="rtl"] .inv-totals { margin: 14px auto 0 0; }
+html[dir="rtl"] .inv-totals td:last-child { text-align: left; }
+html[dir="rtl"] .inv-status { text-align: left; }
+html[dir="rtl"] .inv-open { margin-left: 0; margin-right: auto; }
+html[dir="rtl"] .collect-title { text-align: left; }
+html[dir="rtl"] #invoicePages .inv-cont-right { text-align: left; }
+
+/* ---------- Smaller screens: the rules above must not undo what the small-screen rules reset ---------- */
+
+@media (max-width: 720px) {
+  html[dir="rtl"] .sidebar { border-left: 0; }
+  html[dir="rtl"] .debt-dialog-amount { margin-right: 0; }
+  html[dir="rtl"] .debt-dialog-figs { margin-right: 0; }
+  html[dir="rtl"] .sale-table tr[data-id] td { text-align: right; }
+  html[dir="rtl"] .sale-table .qty-note,
+  html[dir="rtl"] .sale-table .price-note,
+  html[dir="rtl"] .sale-table .collect-later { text-align: right; }
+  html[dir="rtl"] .sale-table td.sale-remove { text-align: left; }
+}
