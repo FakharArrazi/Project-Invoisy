@@ -253,6 +253,43 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 .qty-cell { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
 .table select.unit-select { width: 92px; }
 .table input.price-input { width: 96px; }
+/* ---------- Current sale rows ----------
+   Every control of a row is 34px high and sits on the same line (product name, quantity + unit, price + unit label,
+   total, Remove); the notes sit under the control they explain. On a narrow screen a row becomes a stack. */
+.sale-table td { vertical-align: top; padding: 10px 8px; }
+.sale-table td.num { white-space: normal; }
+.sale-table td.sale-product { min-width: 190px; }
+.sale-table .sale-name { min-height: 34px; display: flex; align-items: center; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.sale-table input, .sale-table select { height: 34px; padding: 0 8px; }
+.sale-table input.qty-input { width: 76px; }
+.sale-table select.unit-select { width: 96px; }
+.sale-table input.price-input { width: 100px; }
+.sale-table .qty-cell, .sale-table .price-cell, .sale-table .deliver-cell { display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; justify-content: flex-end; }
+.sale-table .price-unit { min-width: 48px; text-align: left; }
+.sale-table .qty-note, .sale-table .price-note { margin-top: 4px; line-height: 1.35; text-align: right; }
+.sale-table .qty-note:empty, .sale-table .price-note:empty { display: none; }
+.sale-table td.sale-total { padding-top: 10px; line-height: 34px; font-weight: 600; white-space: nowrap; }
+.sale-table td.sale-remove .btn { height: 34px; }
+.sale-table .partial-toggle { display: inline-flex; align-items: center; gap: 8px; margin: 8px 0 0; font-size: 13px; cursor: pointer; }
+.sale-table .partial-toggle input { width: 16px; height: 16px; margin: 0; padding: 0; flex: none; }
+.sale-table .deliver-cell { margin-top: 8px; }
+.sale-table .deliver-cell label { margin: 0; white-space: nowrap; }
+.sale-table .collect-later { margin-top: 4px; }
+
+@media (max-width: 720px) {
+  .sale-table, .sale-table tbody { display: block; }
+  .sale-table thead { display: none; }
+  .sale-table tr[data-id] { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .sale-table tr[data-id] td { display: block; min-width: 0; padding: 0; border: 0; text-align: left; }
+  .sale-table td.sale-product, .sale-table td.sale-qty, .sale-table td.sale-price { grid-column: 1 / -1; }
+  .sale-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--muted); line-height: 1.45; }
+  .sale-table td.sale-product::before { display: none; }
+  .sale-table .qty-cell, .sale-table .price-cell, .sale-table .deliver-cell { flex-wrap: wrap; justify-content: flex-start; }
+  .sale-table .qty-note, .sale-table .price-note, .sale-table .collect-later { text-align: left; }
+  .sale-table td.sale-total { grid-column: 1; line-height: 1.45; }
+  .sale-table td.sale-remove { grid-column: 2; align-self: end; text-align: right; }
+}
+
 .table .row-actions { display: flex; justify-content: flex-end; gap: 4px; }
 .table .empty-row td { text-align: center; color: var(--muted); padding: 24px 8px; }
 

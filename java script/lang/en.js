@@ -91,6 +91,7 @@ I18n.register("en", "English", {
   "sell.customPrice": "Custom price for this sale only (saved price: {price})",
   "sell.priceNote": "Product price: {price} / {priceUnit}",
   "sell.priceNoteConv": "Product price: {price} / {priceUnit} (1 {unit} = {factor} {factorUnit})",
+  "sell.billedNote": "Billed: {qty} {unit} · 1 {sellUnit} = {factor} {factorUnit}",
 
   // ----- Product picker and stock labels -----
   "results.none": "No products yet.",

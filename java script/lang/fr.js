@@ -95,6 +95,7 @@
     "sell.customPrice": "Prix personnalisé pour cette vente uniquement (prix enregistré : {price})",
     "sell.priceNote": "Prix du produit : {price} / {priceUnit}",
     "sell.priceNoteConv": "Prix du produit : {price} / {priceUnit} (1 {unit} = {factor} {factorUnit})",
+    "sell.billedNote": "Facturé : {qty} {unit} · 1 {sellUnit} = {factor} {factorUnit}",
 
     // ----- Product picker and stock labels -----
     "results.none": "Aucun produit pour le moment.",

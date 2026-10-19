@@ -151,8 +151,8 @@ test("6. a unit with no price of its own falls back to the conversion; nothing i
   assert.equal(app.api.addToSale(product.id, "1", "box").ok, true);
   assert.equal(app.api.addToSale(product.id, "1", "piece").ok, true);
   const [box, piece] = app.api.getSale().items;
-  assert.equal(box.unitPrice, 1440, "1,000 DA/m² x 1.44 m²");
-  assert.equal(piece.unitPrice, 360, "1,000 DA/m² x 0.36 m²");
+  assert.deepEqual(plain([box.unitPrice, box.priceUnit, box.priceQty]), [1000, "m2", 1.44], "1,000 DA/m² x 1.44 m² = 1,440 DA for the box");
+  assert.deepEqual(plain([piece.unitPrice, piece.priceUnit, piece.priceQty]), [1000, "m2", 0.36], "1,000 DA/m² x 0.36 m² = 360 DA for the piece");
   assert.equal(box.catalog.source, "calculated");
 
   const invoice = await sell(app, [], null);
@@ -476,8 +476,8 @@ test("an area typed in m² is supplied in whole boxes, priced with the saved box
   const product = await addThroughForm(app);                    // 1,000 DA/m², 300 DA/piece and 1,440 DA/box saved, stock counted in boxes
   assert.equal(app.api.addToSale(product.id, "10", "m2").ok, true);   // 10 / 1.44 = 6.94 boxes -> 7
   let line = app.api.getSale().items[0];
-  assert.deepEqual(plain([line.qty, line.sellingUnit, line.unitPrice, line.catalog.source]), [7, "box", 1440, "explicit"]);
-  assert.equal(Calc.calculateLineTotal(line.qty, line.unitPrice), 10080);   // 7 boxes = 10.08 m² x 1,000 DA/m²
+  assert.deepEqual(plain([line.qty, line.sellingUnit, line.unitPrice, line.priceUnit, line.priceQty, line.catalog.source]), [7, "box", 1440, "box", 7, "explicit"]);   // the saved box price is the price: 7 x 1,440 DA/box
+  assert.equal(Calc.calculateLineAmount(line), 10080);
 
   const invoice = await sell(app, [], null);
   assert.equal(invoice.items[0].unitPriceUnit, "box");
@@ -490,7 +490,8 @@ test("an area typed in m² is supplied in whole boxes, priced with the saved box
   const m2Only = await addThroughForm(app, { pSku: "EV-2", priceRows: [{ unit: "m2", price: "1000" }] });
   app.api.addToSale(m2Only.id, "10", "m2");
   line = app.api.getSale().items[0];
-  assert.deepEqual(plain([line.qty, line.sellingUnit, line.unitPrice, line.catalog.source, line.catalog.unit, line.catalog.price]), [7, "box", 1440, "calculated", "m2", 1000]);
+  assert.deepEqual(plain([line.qty, line.sellingUnit, line.unitPrice, line.priceUnit, line.priceQty, line.catalog.source, line.catalog.unit, line.catalog.price]), [7, "box", 1000, "m2", 10, "calculated", "m2", 1000]);
+  assert.equal(Calc.calculateLineAmount(line), 10000);   // the 10 m² typed x 1,000 DA/m²; 7 whole boxes leave the stock
   app.api.getSale().items = [];
 
   // only a box price saved
@@ -506,17 +507,17 @@ test("a price changed in Stock reaches sale lines at the normal price (also a ne
   app.api.addToSale(product.id, "2", "piece");          // 360, worked out from the m² price
   app.api.addToSale(product.id, "2", "box");
   app.api.updateSalePrice(app.api.getSale().items[1].lineId, "1300");
-  assert.equal(app.api.getSale().items[0].unitPrice, 360);
+  assert.deepEqual(plain([app.api.getSale().items[0].unitPrice, app.api.getSale().items[0].priceUnit]), [1000, "m2"]);   // 360 per piece, worked out from the m² price
 
   // a piece price of its own is saved while the sale is open
   await editThroughForm(app, product.id, () => { app.api.addPriceRow(); rowFor(app, "piece").price = "300"; });
   app.api.syncSaleWithProducts();
   const [piece, box] = app.api.getSale().items;
-  assert.equal(piece.unitPrice, 300);
+  assert.deepEqual(plain([piece.unitPrice, piece.priceUnit, piece.priceQty]), [300, "piece", 2], "the line is now priced per piece, as saved");
   assert.equal(piece.catalog.source, "explicit", "the line's record of its catalogue price follows too");
   assert.equal(box.unitPrice, 1300, "a typed price is kept exactly");
   assert.equal(box.priceOverridden, true);
-  assert.equal(box.listPrice, 1440);
+  assert.equal(box.listPrice, 1000);
 
   const invoice = await sell(app, [], null);
   assert.equal(invoice.items[0].priceSource, "explicit");

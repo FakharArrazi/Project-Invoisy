@@ -337,8 +337,29 @@
   // (the sale is validated separately, so this never hides a bad value from checkout).
   const calculateLineTotal = (quantity, unitPrice) => roundMoney(toNumber(quantity) * toNumber(unitPrice));
 
+  // The quantity a sale line is billed for. A sale line prices its goods in the unit its price is set in (1,150 DA/m²),
+  // which is not always the unit it is sold or taken out of stock in (8 boxes): `priceQty` is the quantity in the price
+  // unit (9 m²). A line without `priceQty` (a saved invoice line, an older line) is billed for the quantity it sells,
+  // exactly as before.
+  const lineQuantity = (line) => (line && line.priceQty !== undefined && line.priceQty !== null ? line.priceQty : line && line.qty);
+
+  // Amount of one line, rounded to 2 decimals.
+  //   - billed for an area that was typed (priceQtyTyped): that area x the price per m², exactly.
+  //   - billed for the quantity sold, counted in the price unit (5 boxes = 7.2 m²): the price of ONE unit sold is worked out
+  //     and rounded to the cent first (1,333.33 DA/m² x 1.44 m² = 1,920 DA per box), then multiplied by the quantity sold,
+  //     as the price of a box always was. The two are the same for ordinary prices.
+  //   - no `priceQty`: quantity x unit price.
+  const calculateLineAmount = (line) => {
+    const billed = lineQuantity(line);
+    const qty = Number(line && line.qty);
+    if (line && !line.priceQtyTyped && qty > 0 && Number(billed) > 0 && Number(billed) !== qty) {
+      return calculateLineTotal(qty, roundMoney(toNumber(line.unitPrice) * cleanNumber(Number(billed) / qty)));
+    }
+    return calculateLineTotal(billed, line && line.unitPrice);
+  };
+
   // Sum of the (rounded) line totals, so the subtotal always equals the lines shown.
-  const calculateSubtotal = (lines) => roundMoney(lines.reduce((sum, l) => sum + calculateLineTotal(l.qty, l.unitPrice), 0));
+  const calculateSubtotal = (lines) => roundMoney(lines.reduce((sum, l) => sum + calculateLineAmount(l), 0));
 
   /* ---------- Stock ---------- */
 
@@ -392,7 +413,7 @@
     getPieceArea, getBoxCoverage, getPiecesPerBox, getAreaOf,
     getUnitFactor, convertQuantity, roundBoxes, boxesForArea, suppliesInBoxes, toSuppliedQuantity,
     getSellingPrices, getExplicitPrice, priceFields, checkSellingPrices,
-    getUnitPrice, calculateLineTotal, calculateSubtotal,
+    getUnitPrice, calculateLineTotal, lineQuantity, calculateLineAmount, calculateSubtotal,
     defaultStockUnit, inferStockUnit, defaultSellingUnit,
     stockDeduction, stockIn, hasEnoughStock, checkSellable,
   };

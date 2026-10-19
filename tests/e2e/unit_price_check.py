@@ -48,35 +48,33 @@ with sync_playwright() as p:
     page.wait_for_selector("#stockBody tr")
 
     page.click('.nav-btn[data-view="sell"]')
-    # Tile A is counted in boxes, so an area typed in m² is supplied in whole boxes: 10 / 1.44 = 6.94 -> 7 boxes
+    # Tile A is counted in boxes, so an area typed in m² takes whole boxes from stock (10 / 1.44 = 6.94 -> 7) and is billed as typed
     add_line(page, "10", "m2")
     row = "#saleBody tr[data-id]"
     check(page.input_value(f"{row} .qty-input") == "7" and page.input_value(f"{row} .unit-select") == "box", "10 m² became 7 boxes on the sale")
     check("7 boxes" in text(page, "#toast"), "the person is told: " + text(page, "#toast"))
-    check(page.input_value(f"{row} .price-input") == "1440", "box price is worked out from the saved 1,000 DA/m²: 1440")
-    check(text(page, f"{row} [data-price-unit]") == "DA/box", "price-unit label reads DA/box")
-    check(text(page, "#tTotal").startswith("10,080"), "total 10,080 DA for 7 boxes = 10.08 m² at 1,000 DA/m²")
+    check(page.input_value(f"{row} .price-input") == "1000", "the price stays the saved 1,000 DA/m²")
+    check(text(page, f"{row} [data-price-unit]") == "DA/m²", "price-unit label reads DA/m²")
+    check("Billed: 10 m²" in text(page, f"{row} [data-qty-note]"), "the quantity note says what is billed: " + text(page, f"{row} [data-qty-note]"))
+    check(text(page, "#tTotal").startswith("10,000"), "total 10,000 DA: the 10 m² typed at 1,000 DA/m² (7 boxes leave the stock)")
     inv = text(page, "#invoice")
-    check("7 Boxes" in inv and "10.08 m²" in inv and "1,000" in inv and "/ m²" in inv and "10 m²" not in inv, "live invoice shows 7 Boxes, 10.08 m² and the price 1,000 / m²")
+    check("7 Boxes" in inv and "10,000" in inv, "live invoice shows 7 Boxes and the total 10,000")
     check(page.locator(f"{row} .unit-select option[value='m2']").is_disabled(), "a box line can't be switched to m²")
 
     page.fill("#discountValue", "10"); page.select_option("#discountType", "percent")
     page.fill(f"{row} .price-input", "900")
-    check(text(page, f"{row} [data-line-total]").startswith("6,300"), "line total follows the typed price: 7 x 900 = 6,300")
-    check(text(page, "#tSubtotal").startswith("6,300") and text(page, "#tTotal").startswith("5,670"), "subtotal 6,300 and total 5,670 after 10% discount")
-    inv = text(page, "#invoice")
-    check("900" in inv and "/ Box" in inv and "1,000" not in inv, "live invoice shows 900 / Box and not the catalogue price")
+    check(text(page, f"{row} [data-line-total]").startswith("9,000"), "line total follows the typed price: 10 m² x 900 = 9,000")
+    check(text(page, "#tSubtotal").startswith("9,000") and text(page, "#tTotal").startswith("8,100"), "subtotal 9,000 and total 8,100 after 10% discount")
 
     page.fill(f"{row} .price-input", "-5")
     check(text(page, f"{row} [data-row-error]") != "", "negative price is rejected with a message")
-    check(text(page, "#tSubtotal").startswith("6,300"), "totals keep the last valid price")
+    check(text(page, "#tSubtotal").startswith("9,000"), "totals keep the last valid price")
     page.fill(f"{row} .price-input", "900")
 
     page.select_option(f"{row} .unit-select", "piece")
-    check(page.input_value(f"{row} .price-input") == "360" and text(page, f"{row} [data-price-unit]") == "DA/piece", "unit change selects the piece price: 360 DA/piece")
+    check(page.input_value(f"{row} .price-input") == "900" and text(page, f"{row} [data-price-unit]") == "DA/m²", "unit change keeps the price per m²: 900 DA/m²")
     page.select_option(f"{row} .unit-select", "box")
-    check(page.input_value(f"{row} .price-input") == "1440", "unit change selects the box price: 1440")
-    check(text(page, f"{row} [data-price-unit]") == "DA/box", "label follows the unit: DA/box")
+    check(page.input_value(f"{row} .price-input") == "900", "back to box: still 900 DA/m²")
 
     page.fill(f"{row} .price-input", "1300")
     page.fill("#amountPaid", "0")
@@ -88,12 +86,12 @@ with sync_playwright() as p:
     check("1,000" in text(page, "#stockBody"), "Stock still shows the saved price 1,000 / m²")
     page.click('.nav-btn[data-view="sell"]')
     add_line(page, "10", "box")
-    check(page.input_value(f"{row} .price-input") == "1440", "a new sale starts at the saved price again")
+    check(page.input_value(f"{row} .price-input") == "1000", "a new sale starts at the saved price again")
 
     page.click('.nav-btn[data-view="invoices"]')
     page.click("#invoiceBody tr >> text=View")
     saved = text(page, "#invoice")
-    check("1,300" in saved and "/ Box" in saved and "1,440" not in saved, "saved invoice shows the charged 1,300 / Box")
+    check("13,104" in saved and "1,872" in saved and "/ Box" in saved, "saved invoice shows the total charged: 7 boxes = 10.08 m² x 1,300 = 13,104 (the unit was changed on the line, so the 10 m² typed no longer applies)")
     check(not errors, "no console or page errors: " + "; ".join(errors))
     browser.close()
 

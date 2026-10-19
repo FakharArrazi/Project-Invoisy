@@ -167,13 +167,14 @@ function loadTile(overrides = {}) {
   return { api, field };
 }
 
-test("800 DA per m² with 1.44 m² per box: 1 box = 1,152 DA, 2 boxes = 2,304 DA", () => {
+test("800 DA per m² with 1.44 m² per box: the line keeps 800 DA/m², 2 boxes = 2.88 m² = 2,304 DA", () => {
   const { api } = loadTile();
   assert.equal(api.addToSale("t1", "2", "box").ok, true);
   const line = api.getSale().items[0];
-  assert.equal(line.unitPrice, 1152);
+  assert.deepEqual([line.unitPrice, line.priceUnit, line.priceQty], [800, "m2", 2.88]);   // the price stays per m², billed for 2.88 m²
   const inv = api.buildInvoiceData(api.getSale(), "INV-000001", new Date().toISOString());
   assert.equal(inv.items[0].total, 2304);
+  assert.equal(inv.items[0].unitPrice, 1152);        // a saved invoice line still holds the price per unit sold (1 box)
   assert.equal(inv.items[0].priceUnit, "m2");
   assert.equal(inv.total, 2304);
 });
@@ -181,30 +182,36 @@ test("800 DA per m² with 1.44 m² per box: 1 box = 1,152 DA, 2 boxes = 2,304 DA
 test("the same m² price gives a per-piece price from the piece size", () => {
   const { api } = loadTile();
   api.addToSale("t1", "5", "piece");
-  assert.equal(api.getSale().items[0].unitPrice, 288);   // 0.6 x 0.6 m x 800
+  const line = api.getSale().items[0];
+  assert.deepEqual([line.unitPrice, line.priceUnit, line.priceQty], [800, "m2", 1.8]);   // 5 pieces = 1.8 m², still priced per m²
+  assert.equal(api.calculateTotals(api.getSale()).total, 1440);                             // 5 x 288 (0.6 x 0.6 m x 800)
+  const inv = api.buildInvoiceData(api.getSale(), "INV-000001", new Date().toISOString());
+  assert.equal(inv.items[0].unitPrice, 288);                                                // saved per piece sold
 });
 
-test("typing an area on a product supplied in boxes sells whole boxes at the price per m²", () => {
+test("typing an area on a product supplied in boxes takes whole boxes from stock and bills the area typed at the price per m²", () => {
   const { api } = loadTile();
   const added = api.addToSale("t1", "3", "m2");                    // 3 / 1.44 = 2.08 boxes: the 0.08 is under 0.10
   assert.equal(added.ok, true);
   assert.deepEqual(JSON.parse(JSON.stringify(added.converted)), { requested: 3, exact: 2.08333333333, boxes: 2, area: 2.88 });
   const line = api.getSale().items[0];
-  assert.deepEqual([line.qty, line.sellingUnit, line.unitPrice], [2, "box", 1152]);   // 2 boxes x (1.44 m² x 800 DA/m²)
+  assert.deepEqual([line.qty, line.sellingUnit, line.unitPrice, line.priceUnit, line.priceQty], [2, "box", 800, "m2", 3]);   // 2 boxes leave the stock; 3 m² x 800 DA/m² is billed
   assert.equal(line.catalog.unit, "m2");
   assert.equal(line.catalog.price, 800, "the product's price is still the price per m²");
-  assert.equal(api.calculateTotals(api.getSale()).total, 2304);   // 2.88 m² x 800
+  assert.equal(api.calculateTotals(api.getSale()).total, 2400);   // 3 m² x 800
 });
 
 test("a price per box converts to pieces and the unit can be switched on a line", () => {
   const { api } = loadTile({ sellingPrice: 1152, priceUnit: "box" });
   api.addToSale("t1", "1", "box");
   const line = api.getSale().items[0];
-  assert.equal(line.unitPrice, 1152);
+  assert.deepEqual([line.unitPrice, line.priceUnit, line.priceQty], [1152, "box", 1]);
   assert.equal(api.updateSaleUnit(line.lineId, "piece").error, undefined);
-  assert.equal(line.unitPrice, 288);
+  assert.deepEqual([line.unitPrice, line.priceUnit, line.priceQty], [1152, "box", 0.25]);   // 1 piece = 0.25 box: the price stays per box
+  assert.equal(api.calculateTotals(api.getSale()).total, 288);
   assert.equal(api.updateSaleUnit(line.lineId, "box").error, undefined);
-  assert.equal(line.unitPrice, 1152);
+  assert.deepEqual([line.unitPrice, line.priceQty], [1152, 1]);
+  assert.equal(api.calculateTotals(api.getSale()).total, 1152);
 });
 
 test("kg and meter prices apply only to their own unit", () => {
