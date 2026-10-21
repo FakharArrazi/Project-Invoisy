@@ -122,6 +122,7 @@
     "productType.Evier": "Évier",
     "productType.CimentColle": "Ciment-colle",
     "productType.PateAJoint": "Pâte à joint",
+    "productType.Parquet": "Parquet",
     "stock.manufacturer": "Fabricant",
     "stock.tileSize": "Dimensions du carreau",
     "stock.description": "Description",

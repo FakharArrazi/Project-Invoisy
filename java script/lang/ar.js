@@ -121,6 +121,7 @@ I18n.register("ar", "العربية", {
   "productType.Evier": "حوض المطبخ",
   "productType.CimentColle": "إسمنت اللصق",
   "productType.PateAJoint": "معجون الفواصل",
+  "productType.Parquet": "الباركيه",
   "stock.manufacturer": "الشركة المصنّعة",
   "stock.tileSize": "مقاس البلاط",
   "stock.description": "الوصف",

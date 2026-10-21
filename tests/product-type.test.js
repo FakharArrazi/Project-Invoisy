@@ -1,6 +1,6 @@
 "use strict";
 
-// The optional Product type (None / Dalle de sol / Faience / Porcelain / Rock / Évier / Ciment-colle / Pâte à joint): the Stock form field, saving and editing it,
+// The optional Product type (None / Dalle de sol / Faience / Porcelain / Rock / Évier / Ciment-colle / Pâte à joint / Parquet): the Stock form field, saving and editing it,
 // backups, products and invoices saved before the field existed, and the text printed on the invoice.
 
 const test = require("node:test");
@@ -8,7 +8,7 @@ const assert = require("node:assert/strict");
 const { loadApp } = require("./helpers/app");
 const { fillProductForm } = require("./helpers");
 
-const TYPES = ["DalleDeSol", "Faience", "Porcelain", "Rock", "Evier", "CimentColle", "PateAJoint"];
+const TYPES = ["DalleDeSol", "Faience", "Porcelain", "Rock", "Evier", "CimentColle", "PateAJoint", "Parquet"];
 const plain = (value) => JSON.parse(JSON.stringify(value));   // the app runs in its own context: compare plain data
 
 async function startedApp(options) {
@@ -45,13 +45,13 @@ const legacyProduct = (overrides) => ({
 
 /* ---------- The form field ---------- */
 
-test("the Stock form has a Product type dropdown: None (default), Dalle de sol, Faience, Porcelain, Rock, Évier, Ciment-colle, Pâte à joint, and it is optional", () => {
+test("the Stock form has a Product type dropdown: None (default), Dalle de sol, Faience, Porcelain, Rock, Évier, Ciment-colle, Pâte à joint, Parquet, and it is optional", () => {
   const html = loadApp().api.stockForm.html();
   const select = html.match(/<select id="pType">([^]*?)<\/select>/);
   assert.ok(select, "a select with the id pType");
   const options = [...select[1].matchAll(/<option value="([^"]*)"([^>]*)>([^<]*)<\/option>/g)].map((m) => ({ value: m[1], selected: /selected/.test(m[2]), text: m[3] }));
   assert.deepEqual(options.map((o) => o.value), ["", ...TYPES]);
-  assert.deepEqual(options.map((o) => o.text), ["None", "Dalle de sol", "Faience", "Porcelain", "Rock", "Évier", "Ciment-colle", "Pâte à joint"]);
+  assert.deepEqual(options.map((o) => o.text), ["None", "Dalle de sol", "Faience", "Porcelain", "Rock", "Évier", "Ciment-colle", "Pâte à joint", "Parquet"]);
   assert.deepEqual(options.filter((o) => o.selected).map((o) => o.value), [""], "None is the default");
   assert.match(html, /<label for="pType" data-i18n="stock\.productType">Product type<\/label>/);
   assert.doesNotMatch(html, /id="pType"[^>]*(aria-required|required)/, "not mandatory");
@@ -316,8 +316,8 @@ test("the dropdown labels: Dalle de sol, Faience, Porcelain, Rock in English and
     const select = html.match(/<select id="pType">([^]*?)<\/select>/)[1];
     return [...select.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)<\/option>/g)].map((m) => [m[1], m[2]]);
   };
-  assert.deepEqual(options("en"), [["", "None"], ["DalleDeSol", "Dalle de sol"], ["Faience", "Faience"], ["Porcelain", "Porcelain"], ["Rock", "Rock"], ["Evier", "Évier"], ["CimentColle", "Ciment-colle"], ["PateAJoint", "Pâte à joint"]]);
-  assert.deepEqual(options("fr"), [["", "Aucun"], ["DalleDeSol", "Dalle de sol"], ["Faience", "Faïence"], ["Porcelain", "Porcelaine"], ["Rock", "Pierre"], ["Evier", "Évier"], ["CimentColle", "Ciment-colle"], ["PateAJoint", "Pâte à joint"]]);
+  assert.deepEqual(options("en"), [["", "None"], ["DalleDeSol", "Dalle de sol"], ["Faience", "Faience"], ["Porcelain", "Porcelain"], ["Rock", "Rock"], ["Evier", "Évier"], ["CimentColle", "Ciment-colle"], ["PateAJoint", "Pâte à joint"], ["Parquet", "Parquet"]]);
+  assert.deepEqual(options("fr"), [["", "Aucun"], ["DalleDeSol", "Dalle de sol"], ["Faience", "Faïence"], ["Porcelain", "Porcelaine"], ["Rock", "Pierre"], ["Evier", "Évier"], ["CimentColle", "Ciment-colle"], ["PateAJoint", "Pâte à joint"], ["Parquet", "Parquet"]]);
 });
 
 test("the invoice shows the type in the language of the app, under the name", async () => {
@@ -436,4 +436,94 @@ test("a product of an existing type is unaffected by the added types: same store
   assert.deepEqual(plain(api.Validation.PRODUCT_TYPES.slice(0, 4)), ["DalleDeSol", "Faience", "Porcelain", "Rock"], "the stored values of the existing types did not change");
   for (const type of TYPES) assert.equal(api.Validation.normalizeProductType(type), type, type);
   assert.equal(api.Validation.normalizeProductType("Evier "), "", "an unknown spelling is still refused, never printed");
+});
+
+/* ---------- Parquet ---------- */
+
+test("Parquet is the last type in the list, with the same label in English, French and Arabic, and the existing stored values are untouched", () => {
+  const { api } = loadApp();
+  assert.deepEqual(plain(api.Validation.PRODUCT_TYPES), TYPES);
+  assert.equal(api.Validation.PRODUCT_TYPES[api.Validation.PRODUCT_TYPES.length - 1], "Parquet");
+  assert.equal(api.Validation.normalizeProductType("Parquet"), "Parquet");
+  assert.equal(api.Validation.normalizeProductType("parquet"), "", "only the stored value is accepted, like the other types");
+  assert.equal(api.productTypeLabel("Parquet"), "Parquet");
+  const messages = (file) => {   // the language file registers its messages with I18n.register(code, name, messages)
+    let loaded = {};
+    const context = require("node:vm").createContext({ I18n: { register: (code, name, m) => { loaded = m; } } });
+    require("node:vm").runInContext(require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "java script", file), "utf8"), context, { filename: file });
+    return loaded;
+  };
+  assert.equal(messages("lang/en.js")["productType.Parquet"], "Parquet");
+  assert.equal(messages("lang/fr.js")["productType.Parquet"], "Parquet");
+  assert.ok(messages("lang/ar.js")["productType.Parquet"], "Arabic has a label too");
+});
+
+test("a Parquet product is created through the Stock form, shown when editing, kept after a reload, edited without losing its other fields and cleared again", async () => {
+  const app = await startedApp();
+  const saved = await addViaForm(app, { pName: "Chêne Naturel", pTileSize: "", pCoveragePerBox: "2.2", pStock: "14", pType: "Parquet", pManufacturer: "Vega", pSku: "PQ-1" });
+  assert.equal(saved.productType, "Parquet");
+
+  app.api.startEditProduct(saved.id);
+  assert.equal(app.field("pType").value, "Parquet", "the dropdown shows Parquet when editing");
+
+  const again = await startedApp({ indexedDB: app.indexedDB });
+  const reloaded = again.api.getProducts().find((p) => p.name === "Chêne Naturel");
+  assert.equal(reloaded.productType, "Parquet", "still Parquet after a reload");
+
+  again.api.startEditProduct(reloaded.id);
+  again.field("pName").value = "Chêne Naturel Brossé";
+  await again.api.updateProduct(reloaded.id, again.api.readProductForm().values);
+  const edited = again.api.getProducts().find((p) => p.id === reloaded.id);
+  assert.equal(edited.productType, "Parquet", "editing another field keeps the type");
+  for (const key of ["manufacturer", "sku", "coveragePerBox", "stock", "stockUnit", "sellingPrice", "priceUnit"]) assert.deepEqual(plain(edited[key]), plain(reloaded[key]), key + " unchanged");
+
+  again.api.startEditProduct(edited.id);
+  again.field("pType").value = "";
+  await again.api.updateProduct(edited.id, again.api.readProductForm().values);
+  assert.equal(again.api.getProducts().find((p) => p.id === edited.id).productType, "", "None again");
+});
+
+test("an existing product can be switched to Parquet without changing anything else about it", async () => {
+  const app = await startedApp();
+  const tile = await addViaForm(app, { pName: "ACRA Beige", pTileSize: "45*45", pType: "DalleDeSol" });
+  app.api.startEditProduct(tile.id);
+  app.field("pType").value = "Parquet";
+  await app.api.updateProduct(tile.id, app.api.readProductForm().values);
+  const after = app.api.getProducts().find((p) => p.id === tile.id);
+  assert.equal(after.productType, "Parquet");
+  assert.deepEqual(plain({ ...after, productType: "" }), plain({ ...tile, productType: "" }), "every other field is exactly as it was");
+});
+
+test("a Parquet product is found by its name and by its type, and shows the type in the suggestions", async () => {
+  const app = await startedApp();
+  await addViaForm(app, { pName: "Chêne Naturel", pTileSize: "", pType: "Parquet" });
+  await addViaForm(app, { pName: "ACRA Beige", pTileSize: "45*45", pType: "DalleDeSol" });
+  const found = (query) => plain(app.api.Validation.suggestProducts(query, app.api.getProducts()).map((p) => p.name));
+  assert.deepEqual(found("chene"), ["Chêne Naturel"]);
+  assert.deepEqual(found("parquet"), ["Chêne Naturel"], "the type is searchable");
+  assert.deepEqual(found("dalle"), ["ACRA Beige"], "the other types still are");
+});
+
+test("a Parquet product is sold with the existing calculation: type on the invoice line, price, total and stock as for any other product", async () => {
+  const app = await startedApp();
+  const parquet = await addViaForm(app, { pName: "Chêne Naturel", pTileSize: "", pCoveragePerBox: "2", pStock: "10", pType: "Parquet", priceRows: [{ unit: "m2", price: "1500" }] });
+  const control = await addViaForm(app, { pName: "Chêne Naturel Témoin", pTileSize: "", pCoveragePerBox: "2", pStock: "10", pType: "", priceRows: [{ unit: "m2", price: "1500" }] });
+  const invoice = await sell(app, [parquet, control]);
+  const [line, plainLine] = invoice.items;
+  assert.equal(line.productType, "Parquet", "kept on the saved line");
+  for (const key of ["qty", "sellingUnit", "unitPrice", "unitPriceUnit", "priceUnit", "total", "stockDeducted"]) assert.deepEqual(plain(line[key]), plain(plainLine[key]), key + " is the same as for a product without a type");
+  assert.equal(line.total, 6000, "2 boxes of 2 m² at 1,500 DA/m²");
+  assert.equal(app.api.getProducts().find((p) => p.id === parquet.id).stock, 8, "2 boxes taken out of 10");
+  assert.equal(app.api.getProducts().find((p) => p.id === control.id).stock, 8, "same deduction as without a type");
+  for (const lang of ["en", "fr"]) {
+    setLang(app, lang);
+    assert.match(app.api.invoiceHtml(invoice), /<td>Chêne Naturel<div class="inv-sub">Parquet<\/div><\/td>/, lang);
+  }
+  assert.match(app.api.invoiceHtml(invoice), /<td>Chêne Naturel Témoin<\/td>/, "no type: only the name");
+  await app.api.exportBackup();
+  const restored = await startedApp();
+  await restored.api.importBackup(restored.file(await app.downloadedText()));
+  assert.equal(restored.api.getInvoices()[0].items[0].productType, "Parquet", "kept in a backup");
+  assert.equal(restored.api.getProducts().find((p) => p.name === "Chêne Naturel").productType, "Parquet");
+  assert.equal(restored.api.Validation.invoiceProblem(restored.api.getInvoices()[0]), "");
 });

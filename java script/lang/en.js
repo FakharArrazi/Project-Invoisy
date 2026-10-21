@@ -118,6 +118,7 @@ I18n.register("en", "English", {
   "productType.Evier": "Évier",
   "productType.CimentColle": "Ciment-colle",
   "productType.PateAJoint": "Pâte à joint",
+  "productType.Parquet": "Parquet",
   "stock.manufacturer": "Manufacturer",
   "stock.tileSize": "Tile size",
   "stock.description": "Description",
