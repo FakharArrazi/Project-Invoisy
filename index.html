@@ -8,6 +8,16 @@
   <link rel="stylesheet" href="css/pricing.css">
   <link rel="stylesheet" href="css/rtl.css">
   <style id="paperStyle"></style>
+  <script id="noNativeSubmit">
+    // Safety net: every form here is handled by JavaScript, so a form must never navigate. If a script error or a
+    // script that failed to load leaves a form without its handler, the browser would submit it and reload the page,
+    // throwing away what was typed. This only cancels that native navigation; the app's own submit handlers still run.
+    document.addEventListener("submit", function (e) {
+      var form = e.target;
+      if (form && form.getAttribute && form.getAttribute("method") === "dialog") return;
+      e.preventDefault();
+    }, true);
+  </script>
 </head>
 <body>
 <header class="topbar">
