@@ -494,11 +494,13 @@ async function initStorage() {
   await refreshBackupInfo();
   setStorageMode("ready");
   refreshAfterLoad();
+  restoreSaleDone();
   refreshQuota();
   // Reconnects to the backup file chosen earlier and, if the database is ahead of it, brings it up to date. This
   // never waits for the file, never prompts, and a problem with the file never affects the database.
   autoBackup.start().catch(() => {});
   if (notice) notify(notice);
+  if (reloadedRightAfterSave()) notify(t("app.reloadedAfterSave"), "error");
 }
 
 function startStorage() {
@@ -797,7 +799,7 @@ db.on("change", (message) => {
 });
 // The automatic backup file. "commit" comes from database.js after a transaction in THIS window really committed
 // a change; "change" is another window's commit (that window may not have the file connected, this one may).
-db.on("commit", (message) => autoBackup.notifyCommitted(message.revision));
+db.on("commit", (message) => { markCommit(); autoBackup.notifyCommitted(message.revision); });
 db.on("change", (message) => autoBackup.notifyCommitted(message.revision));
 autoBackup.on(() => { try { renderStorage(); } catch { /* status only */ } });
 
@@ -985,6 +987,7 @@ function startEditProduct(id) {
 
 function resetProductForm() {
   state.editingId = null;
+  productFormTouched = false;
   stockForm.blank();   // a new product starts with a price per m² (stock counted in boxes)
   renderProductFormMode();
   clearProductErrors();
@@ -1742,7 +1745,7 @@ function applySale(d, sale) {
 function completeSale() {
   return guard(async () => {
     // A dialog about the previous sale that is still open is treated as "Later" (the invoice stays saved).
-    if (state.saleDone) { state.saleDone = null; closeSaleDoneDialog(); }
+    if (state.saleDone) { state.saleDone = null; rememberSaleDone(null); closeSaleDoneDialog(); }
     // Validate the sale and check the stock one final time.
     const errors = validateSale();
     if (errors.length) {
@@ -1779,6 +1782,7 @@ function completeSale() {
 
 function openSaleDoneDialog(invoice) {
   state.saleDone = { id: invoice.id, number: invoice.invoiceNumber };
+  rememberSaleDone(state.saleDone);
   $("saleDoneNumber").textContent = t("saleDone.number", { number: invoice.invoiceNumber });
   const dialog = $("saleDoneDialog");
   if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
@@ -1795,6 +1799,7 @@ function saleDoneAction(action) {
   const done = state.saleDone;
   if (!done) return { ignored: true };
   state.saleDone = null;
+  rememberSaleDone(null);
   closeSaleDoneDialog();
   if (action === "new") {
     state.previewInvoice = null;
@@ -3901,6 +3906,78 @@ function rememberedView() {
   return "sell";
 }
 
+/* ---------- When something outside Invoisy reloads the page ----------
+   The page can be reloaded by a tool that is not part of Invoisy: typically a development server with live reload
+   (such as the VS Code "Live Server" extension) that reloads every open page when ANY file in its folder changes,
+   and the automatic backup writes invoisy-data.json after each save. If that file is inside the watched folder,
+   each save is followed, a moment later, by a reload (and the page used to come back as if nothing had happened).
+   Invoisy cannot stop such a tool, so it makes sure a reload never costs the person anything:
+     - the "Sale completed" dialog is remembered for this tab (the invoice itself is already committed) and is
+       opened again after the reload, so Print Invoice can still be pressed;
+     - closing or reloading the page with typed work that is not saved yet asks first (see hasUnsavedWork);
+     - a reload right after a save is explained once, with what to change.
+   Screen position only, in sessionStorage: no business data is kept there. */
+const SALE_DONE_KEY = "invoisy-sale-done";
+const LAST_COMMIT_KEY = "invoisy-last-commit";
+const RELOAD_AFTER_SAVE_MS = 8000;
+
+function sessionGet(key) {
+  try { return sessionStorage.getItem(key); } catch { return null; }
+}
+function sessionSet(key, value) {
+  try {
+    if (value === null) sessionStorage.removeItem(key); else sessionStorage.setItem(key, value);
+  } catch { /* storage blocked: nothing is remembered, everything else works as before */ }
+}
+
+// The sale whose dialog is open ({ id, number }), or null once it was answered.
+function rememberSaleDone(done) {
+  sessionSet(SALE_DONE_KEY, done ? JSON.stringify({ id: done.id, number: done.number }) : null);
+}
+function rememberedSaleDone() {
+  try {
+    const done = JSON.parse(sessionGet(SALE_DONE_KEY) || "null");
+    return done && done.id !== undefined && done.id !== null ? { id: done.id, number: done.number } : null;
+  } catch { return null; }
+}
+
+// After a (re)load: if the page went away while the "Sale completed" dialog was waiting for an answer, ask again.
+// Only a saved invoice is offered; one that no longer exists is forgotten quietly.
+function restoreSaleDone() {
+  const pending = rememberedSaleDone();
+  if (!pending || state.saleDone) return false;
+  const invoice = state.invoices.find((i) => i.id === pending.id);
+  if (!invoice) { rememberSaleDone(null); return false; }
+  state.previewInvoice = invoice;
+  renderInvoice();
+  openSaleDoneDialog(invoice);
+  return true;
+}
+
+function markCommit() {
+  sessionSet(LAST_COMMIT_KEY, String(Date.now()));
+}
+
+// True when this page load is a reload that came right after Invoisy saved something. Said once, then forgotten.
+function reloadedRightAfterSave() {
+  const last = Number(sessionGet(LAST_COMMIT_KEY));
+  sessionSet(LAST_COMMIT_KEY, null);
+  if (!last || !(Date.now() - last >= 0) || Date.now() - last > RELOAD_AFTER_SAVE_MS) return false;
+  try {
+    const entry = performance.getEntriesByType("navigation")[0];
+    return Boolean(entry) && entry.type === "reload";
+  } catch { return false; }
+}
+
+// Typed work that exists only on the screen: an invoice being corrected, a sale in preparation, a product being typed.
+let productFormTouched = false;
+function hasUnsavedWork() {
+  const sale = state.sale;
+  const customer = (sale && sale.customer) || {};
+  const saleStarted = Boolean(sale) && (sale.items.length > 0 || Boolean(customer.name || customer.phone || customer.address));
+  return editDirty() || saleStarted || productFormTouched;
+}
+
 function showView(name, options) {
   // Leaving the edit screen with typed changes asks first; leaving with none just closes it.
   if (state.view === "editinvoice" && name !== "editinvoice" && state.invoiceEdit) {
@@ -4234,6 +4311,9 @@ function bindEvents() {
     });
   });
   $("productCancel").addEventListener("click", resetProductForm);
+  // Anything typed or chosen in the Stock form counts as unsaved until the product is saved or the form is cleared.
+  productForm.addEventListener("input", () => { productFormTouched = true; });
+  productForm.addEventListener("change", () => { productFormTouched = true; });
 
   // Stock: add stock
   $("restockForm").addEventListener("submit", (e) => {
@@ -4401,9 +4481,9 @@ function bindEvents() {
   $("editForm").addEventListener("submit", (e) => { e.preventDefault(); saveInvoiceEdit(); });
   $("editSavePrint").addEventListener("click", () => saveInvoiceEdit({ print: true }));
   $("editCancel").addEventListener("click", cancelInvoiceEdit);
-  // Closing or reloading the page with typed changes asks first.
+  // Closing or reloading the page with typed work that is not saved yet asks first (see hasUnsavedWork).
   window.addEventListener("beforeunload", (e) => {
-    if (!editDirty()) return;
+    if (!hasUnsavedWork()) return;
     e.preventDefault();
     e.returnValue = "";
   });
@@ -4574,6 +4654,8 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     saveInvoiceEdit, cancelInvoiceEdit, renderInvoiceEdit, refreshEditLive, getInvoiceEdit: () => state.invoiceEdit,
     addPhoneRow, removePhoneRow, setPhoneRow, saveBusinessSettings, fillSettingsForm, businessPhonesHtml,
     saleDoneAction, openSaleDoneDialog, getSaleDone: () => state.saleDone, printInvoice,
+    restoreSaleDone, rememberedSaleDone, reloadedRightAfterSave, markCommit, hasUnsavedWork,
+    touchProductForm: () => { productFormTouched = true; },
     invoiceParts, invoiceHtml, printItems, continuationHeadHtml,
     businessPhonesHtml, fillSettingsForm, saveBusinessSettings, addPhoneRow, removePhoneRow, setPhoneRow, renderPhoneRows,
     getPhoneRows: () => state.phoneRows,

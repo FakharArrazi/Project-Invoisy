@@ -506,6 +506,7 @@ I18n.register("en", "English", {
   "storage.legacyRemoved": "The old browser copy was removed.",
   "storage.confirmSkip": "Start with empty data?\n\nThe older data in this browser could not be read. It will not be deleted, but Invoisy will not show it. Download a copy first if you want to keep it safe.",
   "app.somethingWrong": "Something went wrong. {error}",
+  "app.reloadedAfterSave": "The page was reloaded right after your data was saved. Your data is safe. If you did not refresh it yourself, a tool outside Invoisy is probably doing it: a live-reload server (such as the Live Server extension of VS Code) reloads the page whenever a file in its folder changes, and the backup file invoisy-data.json changes after every save. Choose the backup file outside that folder, or tell the tool to ignore .json files.",
   "app.somethingWrongNotSaved": "Something went wrong, so nothing was saved. {error}",
 
   // ----- Storage banner and status -----

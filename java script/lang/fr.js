@@ -510,6 +510,7 @@
     "storage.legacyRemoved": "L’ancienne copie du navigateur a été supprimée.",
     "storage.confirmSkip": "Démarrer avec des données vides ?\n\nLes anciennes données de ce navigateur n’ont pas pu être lues. Elles ne seront pas supprimées, mais Invoisy ne les affichera pas. Téléchargez-en d’abord une copie si vous voulez les mettre à l’abri.",
     "app.somethingWrong": "Une erreur s’est produite. {error}",
+    "app.reloadedAfterSave": "La page a été rechargée juste après l’enregistrement de vos données. Vos données sont en sécurité. Si vous ne l’avez pas actualisée vous-même, un outil extérieur à Invoisy le fait probablement : un serveur à rechargement automatique (comme l’extension Live Server de VS Code) recharge la page dès qu’un fichier de son dossier change, et le fichier de sauvegarde invoisy-data.json change après chaque enregistrement. Choisissez le fichier de sauvegarde en dehors de ce dossier, ou demandez à l’outil d’ignorer les fichiers .json.",
     "app.somethingWrongNotSaved": "Une erreur s’est produite : rien n’a été enregistré. {error}",
 
     // ----- Storage banner and status -----
