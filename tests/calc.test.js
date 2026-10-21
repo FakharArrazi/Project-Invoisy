@@ -178,30 +178,43 @@ test("quantities: boxes and pieces must be whole, kg and m may be fractions", ()
   }
 });
 
-test("box rounding: a fraction under 0.10 keeps the lower box, 0.10 or more goes up, a whole number is unchanged", () => {
-  const cases = [[17, 17], [17.0, 17], [17.01, 17], [17.09, 17], [17.1, 18], [17.36, 18], [17.99, 18]];
+test("box rounding: a whole number is unchanged, any fraction goes up to the next whole box", () => {
+  const cases = [[7, 7], [7.0, 7], [7.01, 8], [7.1, 8], [7.9, 8], [6.9444, 7], [17, 17], [17.01, 18], [17.09, 18], [17.1, 18], [17.36, 18], [17.99, 18]];
   for (const [calculated, boxes] of cases) assert.equal(Calc.roundBoxes(calculated), boxes, `${calculated} -> ${boxes}`);
+  assert.equal(Calc.roundBoxes(10 / 1.44), 7, "10 m² / 1.44 = 6.9444 -> 7");
   assert.equal(Calc.roundBoxes(25 / 1.44), 18, "25 m² / 1.44 = 17.3611 -> 18");
   assert.equal(Calc.roundBoxes(0), 0);
 });
 
-test("box rounding: floating-point noise never moves a number across a boundary", () => {
+test("box rounding: floating-point noise never turns an exact whole number into an extra box", () => {
   // exact whole numbers that the division leaves a hair above or below
   assert.equal(Calc.roundBoxes(4.32 / 1.44), 3, "3.0000000000000004 is 3, not 4");
   assert.equal(Calc.roundBoxes(2.9999999999999996), 3);
   assert.equal(Calc.roundBoxes(17.000000000000004), 17);
   assert.equal(Calc.roundBoxes(0.1 + 0.2 + 16.7), 17);
-  // a fraction of exactly 0.10 that floating point stores just under it (5.1 - 5 = 0.0999999999999996)
+  // a real fraction always goes up, however small it is, and whatever the whole part
   for (const whole of [0, 1, 5, 17, 100, 1234]) {
-    assert.equal(Calc.roundBoxes(whole + 0.1), whole + 1, `${whole}.10 goes up`);
-    assert.equal(Calc.roundBoxes(whole + 0.09), whole, `${whole}.09 stays`);
+    assert.equal(Calc.roundBoxes(whole), whole, `${whole} stays`);
+    assert.equal(Calc.roundBoxes(whole + 0.01), whole + 1, `${whole}.01 goes up`);
+    assert.equal(Calc.roundBoxes(whole + 0.1), whole + 1, `${whole}.1 goes up`);
+    assert.equal(Calc.roundBoxes(whole + 0.9), whole + 1, `${whole}.9 goes up`);
   }
-  // it is not Math.ceil: 17.01 and 17.09 keep 17 where a plain ceiling would give 18
-  assert.notEqual(Calc.roundBoxes(17.05), Math.ceil(17.05));
+  // it is a ceiling: it agrees with Math.ceil wherever floating point is not involved
+  for (const n of [0.5, 1.2, 2.01, 17.05, 99.99]) assert.equal(Calc.roundBoxes(n), Math.ceil(n), `${n}`);
 });
 
-test("area typed in m² becomes whole boxes with the box-rounding rule", () => {
-  assert.equal(Calc.boxesForArea(tile(), 3).boxes, 2);      // 2.08 boxes: the 0.08 is under 0.10, so 2
+test("an exact whole-box area never adds a box, whatever the coverage; a hundredth of a m² more needs one", () => {
+  for (const coverage of [1.215, 1.5, 1.62, 1.44, 2.88]) {
+    for (let boxes = 1; boxes <= 500; boxes++) {
+      const area = Number((boxes * coverage).toFixed(6));          // the area as it is typed: 7.2, 8.505, ...
+      assert.equal(Calc.boxesForArea(tile({ coveragePerBox: coverage }), area).boxes, boxes, `${area} m² at ${coverage} m² per box`);
+      assert.equal(Calc.boxesForArea(tile({ coveragePerBox: coverage }), Calc.cleanNumber(area + 0.01)).boxes, boxes + 1, `${area} + 0.01 m²`);
+    }
+  }
+});
+
+test("area typed in m² becomes whole boxes, rounded up", () => {
+  assert.equal(Calc.boxesForArea(tile(), 3).boxes, 3);      // 2.08 boxes -> 3
   assert.equal(Calc.boxesForArea(tile(), 3.3).boxes, 3);    // 2.29 boxes -> 3
   assert.equal(Calc.boxesForArea(tile(), 2.88).boxes, 2);   // exact multiple, no extra box
   assert.equal(Calc.boxesForArea(tile(), 4.32).boxes, 3);   // exact multiple that floats as 3.0000000000000004
@@ -210,6 +223,10 @@ test("area typed in m² becomes whole boxes with the box-rounding rule", () => {
   assert.equal(Calc.boxesForArea(tile({ coveragePerBox: 2.88 }), 5.76).boxes, 2);
   const r = Calc.boxesForArea(tile(), 25);
   assert.deepEqual([r.boxes, r.exact, r.area, r.coverage, r.suppliedArea], [18, 17.3611111111, 25, 1.44, 25.92]);
+  const gpt = Calc.boxesForArea(tile(), 10);
+  assert.deepEqual([gpt.boxes, gpt.exact, gpt.suppliedArea], [7, 6.94444444444, 10.08], "10 m² -> 7 boxes -> 10.08 m²");
+  const exact = Calc.boxesForArea(tile(), 7.2);
+  assert.deepEqual([exact.boxes, exact.exact, exact.suppliedArea], [5, 5, 7.2], "7.2 m² is exactly 5 boxes");
 });
 
 test("Boston Gray: 25 m² at 1,700 DA/m², 1.44 m² per box -> 18 boxes, 25.92 m² supplied, 44,064 DA", () => {

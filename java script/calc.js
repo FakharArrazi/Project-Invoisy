@@ -10,7 +10,6 @@
 
   const PIECES_TOLERANCE = 1e-6;   // how close coverage / piece area must be to a whole number
   const STOCK_EPSILON = 1e-9;      // floating-point slack when comparing stock quantities
-  const BOX_ROUND_FROM = 0.1;      // a box fraction of at least this goes up to the next box, a smaller one is dropped
   const BOX_SCALE = 1e9;           // box fractions are compared in billionths of a box (see roundBoxes)
 
   const UNIT_ALIASES = {
@@ -172,21 +171,18 @@
     return factor.error ? factor : { value: cleanNumber(qty * factor.value) };
   }
 
-  // Whole boxes to supply for a calculated number of boxes. This is the box-rounding rule, written out on purpose
-  // (it is not a plain Math.ceil):
-  //   - a whole number stays as it is                  17.00 -> 17
-  //   - a fraction under 0.10 keeps the lower number   17.01 -> 17, 17.09 -> 17
-  //   - a fraction of 0.10 or more goes up             17.10 -> 18, 17.36 -> 18, 17.99 -> 18
-  // Floating-point noise must not decide anything, so the fraction is counted in whole billionths of a box (an integer):
+  // Whole boxes to supply for a calculated number of boxes: the next whole number up, unless it already is one.
+  //   7.00 -> 7    7.01 -> 8    7.1 -> 8    7.9 -> 8    6.9444... -> 7
+  // This is Math.ceil made safe against floating-point noise, so the fraction is counted in whole billionths of a box
+  // (an integer) instead of being compared as a float:
   //   - an exact whole number is never pushed up: 4.32 / 1.44 = 3.0000000000000004 stays 3, and 2.9999999999999996 is 3;
-  //   - a fraction that is really 0.10 is never read as 0.0999999999999996: 5.1 - 5, and 1234.1 - 1234 = 0.09999999999991.
-  // (Noise is about 1e-13 for hundreds of boxes, far below one billionth.)
+  //   - any real fraction goes up, however small (7.01 -> 8). Noise is about 1e-13 for hundreds of boxes, far below one
+  //     billionth, so it can never be mistaken for a fraction.
   function roundBoxes(boxes) {
     const n = Number(boxes);
     const lower = Math.floor(n + 1 / BOX_SCALE);                 // a hair under a whole number is that whole number
     const fraction = Math.round((n - lower) * BOX_SCALE);        // billionths of a box above `lower`
-    if (fraction <= 0) return lower;
-    return fraction < Math.round(BOX_ROUND_FROM * BOX_SCALE) ? lower : lower + 1;
+    return fraction <= 0 ? lower : lower + 1;
   }
 
   // Typed in m²: how many whole boxes to supply for it (roundBoxes, at least 1: nothing is supplied as 0 boxes).
@@ -337,26 +333,17 @@
   // (the sale is validated separately, so this never hides a bad value from checkout).
   const calculateLineTotal = (quantity, unitPrice) => roundMoney(toNumber(quantity) * toNumber(unitPrice));
 
-  // The quantity a sale line is billed for. A sale line prices its goods in the unit its price is set in (1,150 DA/m²),
-  // which is not always the unit it is sold or taken out of stock in (8 boxes): `priceQty` is the quantity in the price
-  // unit (9 m²). A line without `priceQty` (a saved invoice line, an older line) is billed for the quantity it sells,
-  // exactly as before.
+  // The quantity a sale line is billed for, counted in the unit its price is set in. A sale line prices its goods in the
+  // unit its price is set in (1,400 DA/m²), which is not always the unit it is sold or taken out of stock in (7 boxes):
+  // `priceQty` is the quantity in the price unit, and for boxes it is the area the whole boxes really contain
+  // (7 boxes x 1.44 m² = 10.08 m²), never the area that was asked for. A line without `priceQty` (a saved invoice line,
+  // an older line) is billed for the quantity it sells, exactly as before.
   const lineQuantity = (line) => (line && line.priceQty !== undefined && line.priceQty !== null ? line.priceQty : line && line.qty);
 
-  // Amount of one line, rounded to 2 decimals.
-  //   - billed for an area that was typed (priceQtyTyped): that area x the price per m², exactly.
-  //   - billed for the quantity sold, counted in the price unit (5 boxes = 7.2 m²): the price of ONE unit sold is worked out
-  //     and rounded to the cent first (1,333.33 DA/m² x 1.44 m² = 1,920 DA per box), then multiplied by the quantity sold,
-  //     as the price of a box always was. The two are the same for ordinary prices.
-  //   - no `priceQty`: quantity x unit price.
-  const calculateLineAmount = (line) => {
-    const billed = lineQuantity(line);
-    const qty = Number(line && line.qty);
-    if (line && !line.priceQtyTyped && qty > 0 && Number(billed) > 0 && Number(billed) !== qty) {
-      return calculateLineTotal(qty, roundMoney(toNumber(line.unitPrice) * cleanNumber(Number(billed) / qty)));
-    }
-    return calculateLineTotal(billed, line && line.unitPrice);
-  };
+  // Amount of one line, rounded to 2 decimals: the billed quantity x the price of ONE price unit, exactly
+  // (10.08 m² x 1,400 DA/m² = 14,112 DA). No price per box (or per piece) is worked out and rounded on the way, so a
+  // product priced per m² is always billed per m², whatever unit it is sold or stocked in.
+  const calculateLineAmount = (line) => calculateLineTotal(lineQuantity(line), line && line.unitPrice);
 
   // Sum of the (rounded) line totals, so the subtotal always equals the lines shown.
   const calculateSubtotal = (lines) => roundMoney(lines.reduce((sum, l) => sum + calculateLineAmount(l), 0));

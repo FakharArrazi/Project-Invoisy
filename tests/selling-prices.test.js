@@ -490,8 +490,8 @@ test("an area typed in m² is supplied in whole boxes, priced with the saved box
   const m2Only = await addThroughForm(app, { pSku: "EV-2", priceRows: [{ unit: "m2", price: "1000" }] });
   app.api.addToSale(m2Only.id, "10", "m2");
   line = app.api.getSale().items[0];
-  assert.deepEqual(plain([line.qty, line.sellingUnit, line.unitPrice, line.priceUnit, line.priceQty, line.catalog.source, line.catalog.unit, line.catalog.price]), [7, "box", 1000, "m2", 10, "calculated", "m2", 1000]);
-  assert.equal(Calc.calculateLineAmount(line), 10000);   // the 10 m² typed x 1,000 DA/m²; 7 whole boxes leave the stock
+  assert.deepEqual(plain([line.qty, line.sellingUnit, line.unitPrice, line.priceUnit, line.priceQty, line.catalog.source, line.catalog.unit, line.catalog.price]), [7, "box", 1000, "m2", 10.08, "calculated", "m2", 1000]);
+  assert.equal(Calc.calculateLineAmount(line), 10080);   // the 10.08 m² the 7 whole boxes contain x 1,000 DA/m²; the same 7 boxes leave the stock
   app.api.getSale().items = [];
 
   // only a box price saved

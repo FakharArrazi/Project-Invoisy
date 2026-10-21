@@ -201,7 +201,7 @@ function qtyText(qty, unit) {
 
 function newSale() {
   return {
-    items: [],                              // { lineId, productId, qty, sellingUnit, unitPrice, priceUnit, priceQty, ... }: qty is sold / taken from stock in sellingUnit; unitPrice is per priceUnit and is billed for priceQty (see addToSale); a line sold beyond the stock also has partial / deliverNow (see deliverNowQty)
+    items: [],                              // { lineId, productId, qty, sellingUnit, unitPrice, priceUnit, priceQty, requestedArea, ... }: qty is sold / taken from stock in sellingUnit; unitPrice is per priceUnit and is billed for priceQty, the quantity the goods really contain in that unit (see addToSale); requestedArea is the m² the customer asked for, kept only while the line is exactly what that request produced; a line sold beyond the stock also has partial / deliverNow (see deliverNowQty)
     customer: { name: "", phone: "", address: "" },
     secondCustomer: { name: "" },           // optional second name on the same invoice (e.g. the builder when an architect buys); never a debt identity
     discountType: "amount", discountValue: "",
@@ -1105,6 +1105,8 @@ function setSalePartial(lineId, on) {
   const taken = Calc.stockDeduction(product, item.qty, item.sellingUnit);
   if (!taken.error && !Calc.hasEnoughStock(product.stock, others + taken.value)) {
     item.qty = fitQuantity(product, item.sellingUnit, Calc.cleanNumber(product.stock - others));
+    delete item.requestedArea;
+    rebillLine(item, product);   // the line is billed for what it now supplies
     return { error: stockMessage(product, others), clamped: true };
   }
   return {};
@@ -1197,18 +1199,21 @@ function fitQuantity(product, unit, remaining) {
 // the main price ("calculated") or the price of an old product with no unit ("legacy").
 const catalogOf = (priced) => ({ unit: priced.priceUnit, price: priced.basePrice, source: priced.source });
 
-// More goods were added to a line: the quantity billed grows with them. `typed` = an area typed in m² (kept as typed).
-function addBilled(item, billed, typed) {
+// More goods were added to a line: the quantity billed grows with them. `requested` = the m² typed for this addition (only when
+// an area was typed). The line keeps the total area the customer asked for only while every addition was an area typed in m²;
+// once boxes were added by hand there is no single request left to remember.
+function addBilled(item, billed, requested) {
   item.priceQty = Calc.cleanNumber(toNumber(item.priceQty) + billed);
-  item.priceQtyTyped = Boolean(item.priceQtyTyped || typed);
+  if (requested != null && item.requestedArea != null) item.requestedArea = Calc.cleanNumber(item.requestedArea + requested);
+  else delete item.requestedArea;
 }
 
-// The quantity sold changed: the quantity billed follows it (in the price unit), and an area typed earlier no longer applies.
+// The quantity sold changed: the quantity billed follows it, counted in the price unit. For a product priced per m² that
+// is the area the whole boxes contain (qty x coverage per box), so the line is always billed for what is supplied.
 function rebillLine(item, product) {
   const priced = Calc.getUnitPrice(product, item.sellingUnit);
   if (priced.error) return;
   item.priceQty = Calc.cleanNumber(item.qty * priced.factor);
-  item.priceQtyTyped = false;
 }
 
 function addToSale(productId, rawQty, rawUnit) {
@@ -1219,7 +1224,7 @@ function addToSale(productId, rawQty, rawUnit) {
   if (checked.error) return { error: checked.error };
 
   // What is really supplied. A product counted in boxes is handed over in whole boxes, so an area typed in m² becomes
-  // boxes here, once (25 m² -> 18 boxes with 1.44 m² per box, see Calc.roundBoxes). From this point the line is a box
+  // boxes here, once (10 m² -> 7 boxes with 1.44 m² per box, see Calc.roundBoxes). From this point the line is a box
   // line: its price, the stock check, the stock taken out, the invoice preview and the print all read the same boxes,
   // and nothing converts or rounds them again. Every other unit is added as typed.
   const supplied = Calc.toSuppliedQuantity(product, checked.value, typedUnit);
@@ -1235,17 +1240,17 @@ function addToSale(productId, rawQty, rawUnit) {
   const taken = Calc.stockDeduction(product, qty, sellingUnit);
   if (taken.error) return { error: taken.error };
 
-  // What the customer is billed for. The price stays the product's own (1,150 DA/m²) and is billed for the quantity in
-  // that unit: the area that was typed when the product is priced per m² (9 m², although 8 boxes = 9.76 m² leave the
-  // stock), otherwise the quantity sold converted to the price unit. The stock above never reads this.
-  const typedArea = Boolean(supplied.converted) && priced.priceUnit === "m2";
-  const billed = typedArea ? supplied.requested : Calc.cleanNumber(qty * priced.factor);
+  // What the customer is billed for. The price stays the product's own (1,400 DA/m²) and is billed for the quantity in
+  // that unit that is really supplied: the area the whole boxes contain (7 boxes = 10.08 m², although 10 m² were asked
+  // for), or for any other line the quantity sold converted to the price unit. The stock above never reads this.
+  const billed = Calc.cleanNumber(qty * priced.factor);
+  const requested = supplied.converted ? supplied.requested : null;
 
   const item = state.sale.items.find((i) => i.productId === productId && i.sellingUnit === sellingUnit);
   // A line marked "deliver only part now" may grow beyond the stock: only what is delivered now has to be in stock.
   if (item && item.partial) {
     item.qty = Calc.cleanNumber(item.qty + qty);
-    addBilled(item, billed, typedArea);
+    addBilled(item, billed, requested);
     refitDeliverNow(item);
     return { ok: true };
   }
@@ -1254,12 +1259,13 @@ function addToSale(productId, rawQty, rawUnit) {
 
   if (item) {
     item.qty = Calc.cleanNumber(item.qty + qty);
-    addBilled(item, billed, typedArea);
+    addBilled(item, billed, requested);
   } else {
     state.sale.items.push({
       lineId: uid(), productId, qty, sellingUnit,
       unitPrice: priced.basePrice, listPrice: priced.basePrice, priceOverridden: false, catalog: catalogOf(priced),
-      priceUnit: priced.priceUnit || sellingUnit, priceQty: billed, priceQtyTyped: typedArea,
+      priceUnit: priced.priceUnit || sellingUnit, priceQty: billed,
+      ...(requested != null ? { requestedArea: requested } : {}),
     });
   }
   // `converted` tells the caller an area was turned into boxes, so the person is told what was added to the sale.
@@ -1298,7 +1304,9 @@ function updateSaleUnit(lineId, rawUnit) {
     if (!partial && !Calc.hasEnoughStock(product.stock, others + taken.value)) return { error: stockMessage(product, others), revert: true };
   }
   item.sellingUnit = rawUnit;
+  delete item.requestedArea;
   if (twin) {
+    delete twin.requestedArea;
     twin.qty = newQty;
     if (product) rebillLine(twin, product);
     state.sale.items = state.sale.items.filter((i) => i !== item);
@@ -1351,10 +1359,13 @@ function updateSaleQuantity(lineId, rawQty) {
   const taken = Calc.stockDeduction(product, qty, item.sellingUnit);
   if (taken.error) return { error: taken.error };
   const before = item.qty;
-  // The quantity billed follows the quantity sold (an area typed when the line was added no longer applies once it changes).
+  // The quantity billed follows the quantity sold, and the area typed when the line was added no longer applies once it changes.
   const set = (n) => {
     item.qty = n;
-    if (n !== before) rebillLine(item, product);
+    if (n !== before) {
+      delete item.requestedArea;   // the quantity is now what was typed here, not what an area produced
+      rebillLine(item, product);
+    }
   };
   if (item.partial) {
     set(qty);
@@ -1507,7 +1518,7 @@ function repriceLine(item, product) {
   item.listPrice = priced.basePrice;
   item.catalog = catalogOf(priced);   // what the line's catalogue price now is (it may be a newly saved price for this unit)
   item.priceUnit = priceUnit;
-  if (unitChanged || !item.priceQtyTyped) rebillLine(item, product);   // a typed area stays as typed
+  rebillLine(item, product);   // the area the boxes contain follows the product's current coverage
   if (!unitChanged && item.priceOverridden && round2(item.unitPrice) !== round2(priced.basePrice)) return;
   item.unitPrice = priced.basePrice;
   item.priceOverridden = false;
@@ -1541,6 +1552,7 @@ function syncSaleWithProducts() {
       const fitNeed = Calc.stockDeduction(p, fit, item.sellingUnit);
       if (fitNeed.error || !Calc.hasEnoughStock(left, fitNeed.value)) { notes.push(t("sale.removedOut", { name: p.name })); return false; }
       item.qty = fit;
+      delete item.requestedArea;
       rebillLine(item, p);
       need = fitNeed;
       notes.push(t("sale.reduced", { name: p.name, stock: stockText(p) }));
@@ -1580,6 +1592,11 @@ function clearSale() {
 // `stockDeducted` is what the sale took out of stock for this line (null when it could not be worked out).
 // Used when a sale is saved and when a line is added while editing a saved invoice.
 function invoiceLineData(item, p, stockDeducted) {
+  const sellingUnit = SELLING_UNITS.includes(item.sellingUnit) ? item.sellingUnit : "piece";
+  const priceUnit = item.catalog ? item.catalog.unit : p ? p.priceUnit : null;
+  // A line priced in another unit than it is sold in (1,400 DA/m² on boxes) keeps the price that was charged per price unit and,
+  // for an area, the m² the goods contain, so the printed invoice can show "7 Boxes, 10.08 m², 1,400 DA/m²" from the line alone.
+  const inPriceUnit = Number.isFinite(Number(item.chargedPrice)) && Calc.isUnit(priceUnit) && priceUnit !== sellingUnit;
   return {
     productId: item.productId,
     name: p ? p.name : DELETED_PRODUCT,
@@ -1607,6 +1624,10 @@ function invoiceLineData(item, p, stockDeducted) {
     stockUnit: p ? p.stockUnit : null,
     // What this line took out of stock with the sale (for a partial line: only what was delivered now).
     stockDeducted,
+    ...(inPriceUnit ? { chargedPrice: Number(item.chargedPrice) } : {}),
+    ...(inPriceUnit && priceUnit === "m2" && item.priceQty != null ? { suppliedArea: Number(item.priceQty) } : {}),
+    // What the customer asked for, when it was an area typed in m²: the boxes and suppliedArea are what was really sold.
+    ...(item.requestedArea != null ? { requestedArea: Number(item.requestedArea) } : {}),
   };
 }
 
@@ -1614,7 +1635,7 @@ function invoiceLineData(item, p, stockDeducted) {
 // the price per unit sold, as invoice lines always have (see invoiceLineData). Printing, returns and backups therefore
 // read exactly what they always read, and the line total saved is the one the sale showed.
 //   billed for the quantity sold: the price of ONE unit sold, worked out from the price unit (1,150 DA/m² -> 1,403 DA/box)
-//   billed for another quantity (an area typed in m²): the price really charged per unit sold (10,350 DA / 8 boxes = 1,293.75)
+//   billed for another quantity (the m² the boxes contain): the price really charged per unit sold (14,112 DA / 7 boxes = 2,016)
 function soldLine(item, product) {
   if (item.priceQty === undefined || item.priceQty === null) return item;   // already per unit sold
   const priced = product ? Calc.getUnitPrice(product, item.sellingUnit) : null;
@@ -1627,7 +1648,9 @@ function soldLine(item, product) {
   const exact = Calc.cleanNumber(total / item.qty);
   let perUnit = atFactor ? Calc.roundMoney(item.unitPrice * factor) : exact;
   if (Calc.calculateLineTotal(item.qty, perUnit) !== total) perUnit = exact;
-  return { ...item, unitPrice: perUnit, listPrice: known ? priced.value : perUnit, lineTotal: total };
+  // `chargedPrice` keeps the price per price unit that was charged (1,400 DA/m², a price typed for this sale included): the saved
+  // line is read per unit sold (above), and the printed invoice shows this price instead of a price per box.
+  return { ...item, chargedPrice: item.unitPrice, unitPrice: perUnit, listPrice: known ? priced.value : perUnit, lineTotal: total };
 }
 
 function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
@@ -1988,10 +2011,21 @@ function planInvoiceEdit(d, invoiceId, edit) {
         item.qty = Calc.cleanNumber(checked.value);
         // The conversion this line was sold with is kept: its stock use follows the quantity in proportion.
         item.stockDeducted = Calc.cleanNumber(lineStockTaken(orig) * item.qty / orig.qty);
+        // The area the boxes contain follows the corrected quantity (from the coverage saved on the line, not the product's current one).
+        if (item.suppliedArea != null) {
+          const perUnit = Calc.getUnitFactor(item, item.sellingUnit, item.priceUnit);
+          if (perUnit.error) delete item.suppliedArea; else item.suppliedArea = Calc.cleanNumber(item.qty * perUnit.value);
+        }
       }
       if (rawPrice === "" || !Number.isFinite(Number(rawPrice)) || Number(rawPrice) < 0) return { error: t("edit.linePrice", { name }) };
       if (priceChanged) {
         item.unitPrice = Calc.roundMoney(Number(rawPrice));
+        // The price saved per price unit follows the corrected price per unit sold (2,016 per box = 1,400 per m²).
+        if (item.chargedPrice != null) {
+          const perUnit = Calc.getUnitFactor(item, item.sellingUnit, item.priceUnit);
+          if (perUnit.error || !(perUnit.value > 0)) { delete item.chargedPrice; delete item.suppliedArea; }
+          else item.chargedPrice = Calc.roundMoney(item.unitPrice / perUnit.value);
+        }
         // Back at the price the line was calculated at: it is a normal price again; any other price is typed by hand.
         const reference = orig.calculatedUnitPrice;
         item.priceOverridden = reference == null || round2(item.unitPrice) !== round2(toNumber(reference));
@@ -2025,10 +2059,18 @@ function planInvoiceEdit(d, invoiceId, edit) {
       const typed = rawPrice === "" ? priced.value : Number(rawPrice);
       if (!Number.isFinite(typed) || typed < 0) return { error: t("edit.linePrice", { name }) };
       const unitPrice = Calc.roundMoney(typed);
-      const sold = {
+      let sold = {
         productId: product.id, qty: Calc.cleanNumber(checked.value), sellingUnit: unit, unitPrice, listPrice: priced.value,
         priceOverridden: unitPrice !== round2(priced.value), catalog: catalogOf(priced),
       };
+      // A product priced in another unit than the line is sold in (per m², sold in boxes) is billed like a sale line: the area the
+      // boxes contain x the price per m². A price typed per box in this editor is kept exactly as typed.
+      if (priced.priceUnit && !priced.legacy && priced.priceUnit !== unit) {
+        const priceQty = Calc.cleanNumber(sold.qty * priced.factor);
+        sold = sold.priceOverridden
+          ? { ...sold, priceUnit: priced.priceUnit, priceQty, chargedPrice: Calc.roundMoney(unitPrice / priced.factor) }
+          : soldLine({ ...sold, unitPrice: priced.basePrice, listPrice: priced.basePrice, priceUnit: priced.priceUnit, priceQty }, product);
+      }
       if (!Number.isFinite(Calc.calculateLineTotal(sold.qty, sold.unitPrice))) return { error: t("edit.linePrice", { name }) };
       items.push(invoiceLineData(sold, product, taken.value));
       bump(take, product.id, taken.value);
@@ -2614,6 +2656,15 @@ function qtyNote(item) {
 // really charged, per unit sold.
 function invoiceLinePrice(item) {
   const charged = { price: item.unitPrice, unit: item.unitPriceUnit || item.sellingUnit || null, qtyInPriceUnit: null };
+  // A line that saved the price it was charged per price unit shows exactly that: 1,400 per m², with the m² the boxes contain,
+  // never a price per box worked out from them.
+  if (item.chargedPrice != null && Number.isFinite(Number(item.chargedPrice)) && Calc.isUnit(item.priceUnit) && item.priceUnit !== item.sellingUnit) {
+    // The quantity in the price unit follows the quantity sold, from the coverage saved on the line itself (never the product's
+    // current one), so the two can't disagree. suppliedArea, saved with the sale, is only the fallback.
+    const converted = Calc.convertQuantity(item.qty, item.sellingUnit, item.priceUnit, item);
+    const saved = item.suppliedArea != null && Number.isFinite(Number(item.suppliedArea)) ? Number(item.suppliedArea) : null;
+    return { price: Number(item.chargedPrice), unit: item.priceUnit, qtyInPriceUnit: converted.error ? saved : converted.value };
+  }
   if (item.priceOverridden || !Calc.isUnit(item.priceUnit)) return charged;
   const base = Number(item.productPrice);
   if (item.productPrice == null || !Number.isFinite(base) || base < 0) return charged;
