@@ -500,7 +500,9 @@ async function initStorage() {
   // never waits for the file, never prompts, and a problem with the file never affects the database.
   autoBackup.start().catch(() => {});
   if (notice) notify(notice);
-  if (reloadedRightAfterSave()) notify(t("app.reloadedAfterSave"), "error");
+  // A reload right after a save is no longer announced: the data is safe, so no message is shown. The call only
+  // clears the remembered save time.
+  reloadedRightAfterSave();
 }
 
 function startStorage() {

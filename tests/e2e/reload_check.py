@@ -72,7 +72,7 @@ with sync_playwright() as p:
     ready(page)
     page.wait_for_selector("#saleDoneDialog[open]", timeout=8000)
     check("INV-000001" in page.inner_text("#saleDoneNumber"), "after the reload the dialog is open again for the saved invoice")
-    check("reloaded right after your data was saved" in page.inner_text("#toast"), "the reload is explained")
+    check("reloaded right after your data was saved" not in page.inner_text("#toast"), "no reload message is shown")
 
     page.click("#saleDonePrint")
     page.wait_for_timeout(300)

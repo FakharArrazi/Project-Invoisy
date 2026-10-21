@@ -131,14 +131,13 @@ test("reload: nothing is remembered, and nothing breaks, in a browser that block
   assert.equal(ctx.api.getInvoices().length, 1);
 });
 
-test("reload notice: a reload within seconds of a save is explained once; a normal start, an old save or a plain visit is not", async () => {
+test("reload notice: a reload right after a save shows no message, and the remembered save time is cleared", async () => {
   const first = await load();
   await addTile(first);                                    // a save: marks the time of the last commit
   assert.equal(first.tab.getItem("invoisy-last-commit") !== null, true);
 
   const reloaded = await load({ indexedDB: first.indexedDB, tab: first.tab, navigation: "reload" });
-  assert.match(reloaded.app.toast(), /reloaded right after your data was saved/);
-  assert.match(reloaded.app.toast(), /invoisy-data\.json/);
+  assert.equal(reloaded.app.toast().includes("reloaded right after"), false, "no reload message is shown");
   assert.equal(reloaded.tab.getItem("invoisy-last-commit"), null, "said once");
 
   const visit = tabStorage();
