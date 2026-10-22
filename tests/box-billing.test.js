@@ -422,8 +422,10 @@ test("G. correcting the boxes of a saved invoice keeps the area and the total co
   assert.deepEqual(plain([invoice.items[0].qty, invoice.items[0].total, invoice.items[0].suppliedArea]), [7, 14112, 10.08]);
   assert.equal(api.getState().products.find((p) => p.id === product.id).stock, 13);
 
-  assert.equal(api.startEditInvoice(invoice.id).error, undefined);
-  api.getInvoiceEdit().lines[0].qty = "5";                       // two boxes come back
+  assert.equal(api.startEditInvoice(invoice.id).error, undefined);   // the invoice opens on the Sell page
+  assert.deepEqual(plain([line(api).qty, line(api).priceUnit, line(api).unitPrice, line(api).priceQty]), [7, "m2", 1400, 10.08], "the Sell page shows the saved price per m² and area");
+  assert.equal(api.updateSaleQuantity(line(api).lineId, "5").error, undefined);   // two boxes come back
+  assert.equal(line(api).priceQty, 7.2, "billed for the area the 5 boxes contain");
   await api.saveInvoiceEdit();
   const saved = api.getState().invoices.find((i) => i.id === invoice.id);
   assert.deepEqual(plain([saved.items[0].qty, saved.items[0].total, saved.items[0].suppliedArea, saved.items[0].chargedPrice, saved.total]), [5, 10080, 7.2, 1400, 10080]);
@@ -437,7 +439,7 @@ test("G. correcting the price of a saved invoice line moves the price per m² wi
   const { api } = await boot();
   const { invoice } = await sellGpt(api, "10");
   assert.equal(api.startEditInvoice(invoice.id).error, undefined);
-  api.getInvoiceEdit().lines[0].unitPrice = "1800";              // the editor works per unit sold: 1,800 per box = 1,250 per m²
+  assert.equal(api.updateSalePrice(line(api).lineId, "1250").error, undefined);   // the Sell page works per price unit: 1,250 per m² = 1,800 per box
   await api.saveInvoiceEdit();
   const saved = api.getState().invoices.find((i) => i.id === invoice.id);
   assert.deepEqual(plain([saved.items[0].unitPrice, saved.items[0].chargedPrice, saved.items[0].total, saved.items[0].priceOverridden]), [1800, 1250, 12600, true]);
@@ -445,17 +447,14 @@ test("G. correcting the price of a saved invoice line moves the price per m² wi
 });
 
 test("G. a box line added while correcting an invoice is billed per m² like a sale line, an area typed there becomes whole boxes", async () => {
-  const { api, app } = await boot();
+  const { api } = await boot();
   const { invoice } = await sellGpt(api, "10");
   const { id, ...values } = { ...GPT, name: "GPT Two", sku: "GPT-2", stock: 20 };
   await api.addProduct(values);
   const second = api.getState().products.find((p) => p.sku === "GPT-2");
 
   assert.equal(api.startEditInvoice(invoice.id).error, undefined);
-  api.getInvoiceEdit().pickId = second.id;
-  app.field("editAddQty").value = "10";
-  app.field("editAddUnit").value = "m2";                         // an area typed in the editor is converted like on the Sell page
-  const added = api.addEditLine();
+  const added = api.addToSale(second.id, "10", "m2");            // an area typed in the edit is converted like on the Sell page
   assert.equal(added.error, undefined, added.error);
   assert.deepEqual(plain({ boxes: added.converted.boxes, area: added.converted.area }), { boxes: 7, area: 10.08 });
   await api.saveInvoiceEdit();

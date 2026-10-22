@@ -30,6 +30,8 @@ means Later. Nothing navigates away on its own.
 
 ## 4. Edit Invoice
 
+> Now done on the Sell page, with cancellation and refunds: see `sell-page-edit-and-refunds.md`.
+
 **Edit** is on the Invoices list and next to a saved invoice (beside View, Add Payment, Print and Delete).
 
 - **Editable:** customer name, phone, address and second name; products, quantities and units (add or remove lines);

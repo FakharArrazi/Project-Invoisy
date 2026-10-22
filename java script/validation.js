@@ -31,9 +31,11 @@
   const LEGACY_KEYS = ["products", "invoices", "settings", "invoiceCounter"];
   // Calculated from the payments, the carried-forward lines and the debt transfers, never trusted when read back.
   // amountDue and transferredOut are only written to a backup when they matter (see withDerived).
-  const DERIVED_INVOICE_FIELDS = ["amountPaid", "remaining", "status", "amountDue", "transferredOut", "deliveryStatus"];
+  const DERIVED_INVOICE_FIELDS = ["amountPaid", "amountRefunded", "remaining", "status", "amountDue", "transferredOut", "deliveryStatus"];
   // "transferred": nothing is left to collect on this invoice because its unpaid balance was carried forward to a newer invoice.
-  const INVOICE_STATUSES = ["paid", "partial", "unpaid", "transferred"];
+  // "cancelled": the whole sale was cancelled (see Cancelled sales and refunds below); it is no longer an active sale.
+  const INVOICE_STATUSES = ["paid", "partial", "unpaid", "transferred", "cancelled"];
+  const REFUND_REASONS = ["cancellation", "refund"];   // why money went back to the customer: a cancelled sale, or a refund recorded for an overpayment
   const WALK_IN = "Walk-in Customer";    // the name saved for a sale without a customer (script.js shows it in the current language)
   const MONEY_TOLERANCE = 0.01;
   const DEFAULT_BACKUP_DAYS = 7;
@@ -107,15 +109,32 @@
          on it is   amount due - payments - transferred out   (calculated from the ledger, never stored).
      Everything here is pure arithmetic and checking, shared by the screens, the database and backups. */
 
+  /* ---------- Cancelled sales and refunds ----------
+     The whole sale of an invoice can be CANCELLED (its products are all taken off in the edit screen). Nothing is erased:
+       - items, subtotal, discount, tax, total and payments stay exactly as they were sold and paid (the original transaction);
+       - `cancellation: { at, total, paid, refund }` records when, what the sale was worth, what had been collected and what was
+         refunded; `refunds: [{ id, amount, timestamp, reason }]` records the money that went back to the customer. A refund is
+         never a negative payment: payments are never changed. reason "cancellation" = the refund made by the cancellation,
+         "refund" = a refund recorded later for an overpayment (an invoice made cheaper after it was paid).
+       - a cancelled sale is worth nothing: the invoice asks only for the old debt carried onto it (if any), so it adds
+         nothing to what customers owe and is not an active sale. Money kept for the invoice is   payments - refunds.
+     A cancelled invoice is locked (see cancellationHistoryProblem): it can not be cancelled again, edited or refunded twice. */
+
+  const isCancelled = (inv) => isObj(inv) && isObj(inv.cancellation);
+  const refundsOf = (inv) => (inv && Array.isArray(inv.refunds) ? inv.refunds : []);
+  const refundedTotal = (inv) => round2(refundsOf(inv).reduce((sum, r) => sum + toNumber(r && r.amount), 0));
+
   const carriedLines = (inv) => (inv && Array.isArray(inv.carriedForward) ? inv.carriedForward : []);
   const paidTotal = (inv) => round2((inv && Array.isArray(inv.payments) ? inv.payments : []).reduce((sum, p) => sum + toNumber(p && p.amount), 0));
   const carriedTotal = (inv) => round2(carriedLines(inv).reduce((sum, l) => sum + toNumber(l && l.amount), 0));
-  // What the invoice asks the customer to pay: this purchase plus the debt carried onto it.
-  const amountDue = (inv) => round2(toNumber(inv && inv.total) + carriedTotal(inv));
-  // What the customer is owed back when the payments received are MORE than the invoice now asks for (an invoice whose total
-  // was lowered by an edit, for example a returned box, after it had been paid). Derived, never stored, and never a payment:
-  // no cash is recorded as refunded, and the payment history is never changed to hide it.
-  const refundDue = (inv) => Math.max(0, round2(paidTotal(inv) - amountDue(inv)));
+  // The money the invoice still holds for the customer: everything paid, less what was handed back.
+  const netPaid = (inv) => round2(paidTotal(inv) - refundedTotal(inv));
+  // What the invoice asks the customer to pay: this purchase plus the debt carried onto it. A cancelled sale asks only for the debt.
+  const amountDue = (inv) => (isCancelled(inv) ? carriedTotal(inv) : round2(toNumber(inv && inv.total) + carriedTotal(inv)));
+  // What the customer is owed back when the money held for the invoice is MORE than it now asks for (an invoice whose total
+  // was lowered by an edit, for example a returned box, or a cancelled sale, after it had been paid), less what was already
+  // refunded. Derived, never stored, and never a payment: the payment history is never changed to hide it.
+  const refundDue = (inv) => Math.max(0, round2(netPaid(inv) - amountDue(inv)));
   // How much of this invoice's balance was carried forward to other invoices.
   function transferredOut(inv, transfers) {
     if (!inv || !Array.isArray(transfers)) return 0;
@@ -125,14 +144,14 @@
   // How the payments received on THIS invoice are applied: oldest debt first, then this purchase.
   // Pure and derived: payments are never copied or split, so nothing can be counted twice.
   function carriedBreakdown(inv) {
-    let left = paidTotal(inv);
+    let left = netPaid(inv);
     const sorted = [...carriedLines(inv)].sort((a, b) => invoiceSequence(a.sourceInvoiceNumber) - invoiceSequence(b.sourceInvoiceNumber));
     const lines = sorted.map((l) => {
       const settled = Math.min(round2(toNumber(l.amount)), left);
       left = round2(left - settled);
       return { ...l, settled: round2(settled), remaining: round2(toNumber(l.amount) - settled) };
     });
-    const total = round2(toNumber(inv && inv.total));
+    const total = isCancelled(inv) ? 0 : round2(toNumber(inv && inv.total));
     const currentPaid = Math.min(left, total);
     return {
       lines,
@@ -302,8 +321,8 @@
       const inv = byId.get(id);
       if (!inv) continue;
       const due = amountDue(inv);
-      if (round2(paidTotal(inv) + sum) > due + MONEY_TOLERANCE) {
-        problems.push(t("ledger.overTransferred", { number: inv.invoiceNumber, due, paid: paidTotal(inv), moved: sum }));
+      if (round2(netPaid(inv) + sum) > due + MONEY_TOLERANCE) {
+        problems.push(t("ledger.overTransferred", { number: inv.invoiceNumber, due, paid: netPaid(inv), moved: sum }));
       }
     }
     return problems;
@@ -628,21 +647,26 @@
   // Total paid, remaining balance and status are always calculated from the payments list, the debt carried onto the
   // invoice and (when the ledger is given) the balance carried away from it to newer invoices.
   // (script.js adds the wording of the status in the current language.)
-  //   remaining = what can still be collected on THIS invoice = amount due - paid - transferred out
+  //   remaining = what can still be collected on THIS invoice = amount due - (paid - refunded) - transferred out
   //   cls "transferred" = nothing is left to collect here, but only because the unpaid balance moved to a newer invoice.
+  //   cls "cancelled" = the whole sale was cancelled (whatever is still owed is only old debt carried onto the invoice).
   //   An invoice is never "paid" just because its debt was carried forward.
   // paymentSummary keeps the four fields every screen and test already knows { payments, paid, remaining, cls };
-  // paymentDetail adds what the debt features need: due (amount due), transferredOut and carried.
+  // paymentDetail adds what the debt features need: due (amount due), transferredOut and carried, and what money went back:
+  // refunded (all refunds recorded) and refundDue (still owed back to the customer).
   function paymentDetail(inv, transfers) {
     const payments = Array.isArray(inv.payments) ? inv.payments : [];
     const paid = round2(payments.reduce((sum, p) => sum + toNumber(p.amount), 0));
+    const refunded = refundedTotal(inv);
+    const net = round2(paid - refunded);
     const due = amountDue(inv);
     const moved = transferredOut(inv, transfers);
-    const remaining = Math.max(0, round2(due - paid - moved));
+    const remaining = Math.max(0, round2(due - net - moved));
     let cls;
-    if (remaining > 0) cls = paid > 0 ? "partial" : "unpaid";
-    else cls = moved > 0 && round2(due - paid) > 0 ? "transferred" : "paid";
-    return { payments, paid, remaining, cls, due, transferredOut: moved, carried: carriedTotal(inv), refundDue: refundDue(inv) };
+    if (isCancelled(inv)) cls = "cancelled";
+    else if (remaining > 0) cls = net > 0 ? "partial" : "unpaid";
+    else cls = moved > 0 && round2(due - net) > 0 ? "transferred" : "paid";
+    return { payments, paid, refunded, remaining, cls, due, transferredOut: moved, carried: carriedTotal(inv), refundDue: refundDue(inv) };
   }
 
   function paymentSummary(inv, transfers) {
@@ -817,15 +841,48 @@
         seenTransfers.add(l.transferId);
       }
     }
+    // Refunds (money handed back) and the cancellation of the whole sale: see "Cancelled sales and refunds".
+    if (inv.refunds !== undefined) {
+      if (!Array.isArray(inv.refunds)) return t("problem.badRefund");
+      const seenRefunds = new Set();
+      for (const r of inv.refunds) {
+        if (!isObj(r) || !isStr(r.id) || !r.id || seenRefunds.has(r.id) || !isNum(r.amount) || r.amount <= 0 || !isDate(r.timestamp) || !REFUND_REASONS.includes(r.reason)) return t("problem.badRefund");
+        seenRefunds.add(r.id);
+      }
+      if (refundedTotal(inv) > paidTotal(inv) + MONEY_TOLERANCE) return t("problem.refundTooMuch");
+    }
+    if (inv.cancellation !== undefined) {
+      const c = inv.cancellation;
+      if (!isObj(c) || !isDate(c.at) || ["total", "paid", "refund"].some((key) => !isNum(c[key]) || c[key] < 0)) return t("problem.badCancellation");
+      const byCancellation = round2(refundsOf(inv).reduce((sum, r) => sum + (r.reason === "cancellation" ? r.amount : 0), 0));
+      if (Math.abs(byCancellation - c.refund) > MONEY_TOLERANCE) return t("problem.badCancellation");
+    }
     return deliveryProblem(inv);
   }
 
-  // Payments above the total are expected after an edit lowered the total of a paid invoice: that edit recorded the refund
-  // it left due. Overpayment that no recorded edit explains is still reported.
+  // A cancelled invoice is a locked record: it stays cancelled, keeps what it sold and what it was worth, and keeps every refund it
+  // made. Only more payments (for debt carried onto it) and more refunds may be added. `stored` is the saved copy, `next` the one
+  // about to be saved; "" = fine. Checked by the database inside the transaction, so a second window can never cancel again.
+  function cancellationHistoryProblem(stored, next) {
+    if (!isCancelled(stored)) return "";
+    const locked = !isCancelled(next) || !sameValue(stored.cancellation, next.cancellation) || !sameValue(stored.items, next.items) ||
+      ["subtotal", "discount", "tax", "total"].some((key) => stored[key] !== next[key]);
+    if (locked) return t("problem.cancelledLocked");
+    const before = refundsOf(stored);
+    const after = refundsOf(next);
+    if (after.length < before.length || before.some((r, i) => !sameValue(r, after[i]))) return t("problem.cancelledLocked");
+    return "";
+  }
+
+  // Money above what the invoice asks for is expected after an edit lowered the total of a paid invoice: that edit recorded the
+  // refund it left due (and a later refund records the money that went back). Overpayment that no recorded edit explains is
+  // still reported. `paid` is the money held for the invoice (payments less refunds).
   function overpaymentExplainedByEdit(inv, paid) {
     const edits = Array.isArray(inv.edits) ? inv.edits : [];
     const last = edits[edits.length - 1];
-    return Boolean(last) && isNum(last.refundDue) && Math.abs(round2(paid - amountDue(inv)) - last.refundDue) <= MONEY_TOLERANCE;
+    // What is still held above the amount due can be at most what the edit said was due back (less what was refunded since).
+    const excess = round2(paid - amountDue(inv));
+    return Boolean(last) && isNum(last.refundDue) && excess >= -MONEY_TOLERANCE && excess <= last.refundDue + MONEY_TOLERANCE;
   }
 
   // Not rejected (older data may not follow today's arithmetic exactly), but always shown to the person
@@ -836,7 +893,8 @@
     const number = inv.invoiceNumber;
     const payments = Array.isArray(inv.payments) ? inv.payments : [];
     const paid = round2(payments.reduce((sum, p) => sum + toNumber(p && p.amount), 0));
-    if (isNum(inv.total) && paid > amountDue(inv) + MONEY_TOLERANCE && !overpaymentExplainedByEdit(inv, paid)) {
+    const held = round2(paid - refundedTotal(inv));   // payments less the money handed back
+    if (isNum(inv.total) && held > amountDue(inv) + MONEY_TOLERANCE && !overpaymentExplainedByEdit(inv, held)) {
       warnings.push(t("warn.paidMoreThanTotal", { number }));
     }
     if (isNum(inv.subtotal) && isNum(inv.discount) && isNum(inv.tax) && isNum(inv.total)) {
@@ -1108,7 +1166,8 @@
   function withDerived(inv, transfers) {
     const pay = paymentDetail(inv, transfers);
     const derived = { amountPaid: pay.paid, remaining: pay.remaining, status: pay.cls };
-    if (carriedLines(inv).length) derived.amountDue = pay.due;
+    if (pay.refunded > 0) derived.amountRefunded = pay.refunded;
+    if (carriedLines(inv).length || isCancelled(inv)) derived.amountDue = pay.due;
     if (pay.transferredOut > 0) derived.transferredOut = pay.transferredOut;
     if (isTracked(inv)) derived.deliveryStatus = deliveryDetail(inv).status;
     return { ...inv, ...derived };
@@ -1363,6 +1422,7 @@
     isObj, isStr, isNum, isDate, round2, toNumber, uid, sameValue,
     formatInvoiceNumber, invoiceSequence, highestInvoiceNumber,
     carriedLines, paidTotal, carriedTotal, amountDue, refundDue, transferredOut, carriedBreakdown,
+    isCancelled, refundsOf, refundedTotal, netPaid, REFUND_REASONS, cancellationHistoryProblem,
     isTracked, deliveryDetail, collectionNumber, receiptNumber, collectionReceipts, deliveryProblem, deliveryHistoryProblem, DELIVERY_EPSILON, DELIVERY_NOTE_MAX,
     normalizeName, phoneDigits, isWalkInName, customerKeys, customerGroups, findGroup, sameCustomer,
     transferProblem, ledgerProblems,

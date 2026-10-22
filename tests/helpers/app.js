@@ -13,11 +13,27 @@ function loadApp(options) {
   const opts = options || {};
   const fields = new Map();
   const element = (id) => {
-    if (!fields.has(id)) fields.set(id, {
-      id, value: "", textContent: "", className: "", hidden: false, disabled: false, dataset: {}, style: {},
-      offsetHeight: 0, classList: { toggle() {}, add() {}, remove() {} },
-      reset() {}, focus() {}, querySelectorAll() { return []; }, setAttribute() {}, removeAttribute() {},
-    });
+    if (!fields.has(id)) {
+      const el = {
+        id, value: "", textContent: "", className: "", hidden: false, disabled: false, dataset: {}, style: {},
+        offsetHeight: 0,
+        reset() {}, focus() {}, querySelectorAll() { return []; }, setAttribute() {}, removeAttribute() {},
+      };
+      // A working classList (kept in className) so tests can see which state classes the page has put on an element.
+      const names = () => el.className.split(/\s+/).filter(Boolean);
+      const write = (list) => { el.className = list.join(" "); };
+      el.classList = {
+        contains: (c) => names().includes(c),
+        add(...c) { write([...new Set([...names(), ...c])]); },
+        remove(...c) { write(names().filter((n) => !c.includes(n))); },
+        toggle(c, force) {
+          const on = force === undefined ? !names().includes(c) : Boolean(force);
+          if (on) this.add(c); else this.remove(c);
+          return on;
+        },
+      };
+      fields.set(id, el);
+    }
     return fields.get(id);
   };
 

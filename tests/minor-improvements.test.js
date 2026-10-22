@@ -261,24 +261,29 @@ test("sale dialog: New Sale and Later close it without printing, and never lose 
 });
 
 /* ==========================================================================
-   4. Editing a saved invoice
+   4. Editing a saved invoice (on the Sell page)
    ========================================================================== */
 
-// Opens the edit screen for an invoice and returns its editable state.
+// Opens the invoice on the Sell page and returns the sale on screen (the saved invoice, loaded as a Sell page sale).
 function openEdit(ctx, inv) {
   const r = ctx.api.startEditInvoice(inv.id);
   assert.equal(r.error, undefined, r.error);
-  return ctx.api.getInvoiceEdit();
+  return ctx.api.getSale();
 }
+const typeQty = (api, index, qty) => api.updateSaleQuantity(api.getSale().items[index].lineId, String(qty));
+const typePrice = (api, index, price) => api.updateSalePrice(api.getSale().items[index].lineId, String(price));
 
 test("edit: opening shows what the invoice has; nothing typed means nothing to save", async () => {
   const ctx = await boot();
   const tile = await addTile(ctx);
   const inv = await sell(ctx, tile, { paid: "500", phone: "0550 1" });
-  const edit = openEdit(ctx, inv);
-  assert.equal(edit.customer.name, "Alex");
-  assert.equal(edit.customer.phone, "0550 1");
-  assert.equal(edit.lines.length, 1);
+  const sale = openEdit(ctx, inv);
+  assert.equal(ctx.api.getInvoiceEdit().id, inv.id);
+  assert.equal(sale.customer.name, "Alex");
+  assert.equal(sale.customer.phone, "0550 1");
+  assert.equal(sale.items.length, 1);
+  assert.equal(ctx.app.field("custName").value, "Alex", "the Sell page's own customer boxes show it");
+  assert.equal(ctx.app.field("editBanner").hidden, false);
   assert.equal(ctx.api.editDirty(), false);
   const revision = (await ctx.api.db.loadAll()).revision;
   await ctx.api.saveInvoiceEdit();
@@ -294,8 +299,8 @@ test("edit: changing a quantity keeps number, date, customer id, payments and hi
   await ctx.api.commit((d) => { const p = d.products.find((x) => x.id === tile.id); p.sellingPrice = 5000; p.sellingPrices = [{ unit: "m2", price: 5000 }]; });
   const counter = (await ctx.api.db.loadAll()).counter;
 
-  const edit = openEdit(ctx, inv);
-  edit.lines[0].qty = "3";
+  openEdit(ctx, inv);
+  assert.equal(typeQty(ctx.api, 0, 3).error, undefined);
   assert.equal(ctx.api.editDirty(), true);
   await ctx.api.saveInvoiceEdit();
 
@@ -316,7 +321,7 @@ test("edit: changing a quantity keeps number, date, customer id, payments and hi
   const info = ctx.api.paymentInfo(saved);
   assert.equal(info.paid, 500);
   assert.equal(info.remaining, saved.total - 500, "balance and status follow the new total");
-  assert.equal(ctx.api.getInvoiceEdit(), null, "the screen closes after saving");
+  assert.equal(ctx.api.getInvoiceEdit(), null, "the edit ends after saving");
   await flushAndCompare(ctx);
 });
 
@@ -333,9 +338,9 @@ test("edit: reducing a quantity and removing a line put the stock back", async (
   assert.equal(stockOf(api, a.id), 6);
   assert.equal(stockOf(api, b.id), 7);
 
-  const edit = openEdit(ctx, inv);
-  edit.lines.find((l) => l.productId === a.id).qty = "1";
-  api.removeEditLine(edit.lines.find((l) => l.productId === b.id).key);
+  const sale = openEdit(ctx, inv);
+  typeQty(api, sale.items.findIndex((l) => l.productId === a.id), 1);
+  api.removeFromSale(sale.items.find((l) => l.productId === b.id).lineId);
   await api.saveInvoiceEdit();
   assert.equal(stockOf(api, a.id), 9);
   assert.equal(stockOf(api, b.id), 10);
@@ -345,24 +350,24 @@ test("edit: reducing a quantity and removing a line put the stock back", async (
 
 test("edit: customer details, a selling price and the discount can be changed; totals are recalculated", async () => {
   const ctx = await boot();
-  const tile = await addTile(ctx);
+  const tile = await addTile(ctx);                       // 800 DA/m², 1.44 m² per box
   const inv = await sell(ctx, tile, { qty: "2", paid: "0" });
-  const edit = openEdit(ctx, inv);
-  edit.customer.name = "Alexandre";
-  edit.customer.phone = "0770 55";
-  edit.lines[0].unitPrice = "1000";
-  edit.discountValue = "100";
-  edit.discountType = "amount";
+  const sale = openEdit(ctx, inv);
+  sale.customer.name = "Alexandre";
+  sale.customer.phone = "0770 55";
+  assert.equal(typePrice(ctx.api, 0, "1000").error, undefined);   // 1,000 DA per m² (the product's own unit), 2 boxes = 2.88 m²
+  sale.discountValue = "100";
+  sale.discountType = "amount";
   await ctx.api.saveInvoiceEdit();
   const saved = invoiceById(ctx.api, inv.id);
   assert.equal(saved.customer.name, "Alexandre");
   assert.equal(saved.customer.phone, "0770 55");
-  assert.equal(saved.items[0].unitPrice, 1000);
+  assert.equal(saved.items[0].unitPrice, 1440, "1,000 DA/m² x 1.44 m² per box");
   assert.equal(saved.items[0].priceOverridden, true);
-  assert.equal(saved.items[0].total, 2000);
-  assert.equal(saved.subtotal, 2000);
+  assert.equal(saved.items[0].total, 2880);
+  assert.equal(saved.subtotal, 2880);
   assert.equal(saved.discount, 100);
-  assert.equal(saved.total, 1900);
+  assert.equal(saved.total, 2780);
   assert.equal(saved.invoiceNumber, inv.invoiceNumber);
 });
 
@@ -371,12 +376,9 @@ test("edit: a product can be added to the invoice (stock taken, same rules as a 
   const a = await addTile(ctx);
   const b = await addTile(ctx, { name: "Pietra Beige", sku: "PB-1", stock: 5 });
   const inv = await sell(ctx, a, { qty: "1" });
-  const { api, app } = ctx;
+  const { api } = ctx;
   openEdit(ctx, inv);
-  app.field("editAddUnit").value = "box";
-  app.field("editAddQty").value = "2";
-  api.getInvoiceEdit().pickId = b.id;
-  const added = api.addEditLine();
+  const added = api.addToSale(b.id, "2", "box");
   assert.equal(added.error, undefined, added.error);
   await api.saveInvoiceEdit();
   const saved = invoiceById(api, inv.id);
@@ -393,13 +395,14 @@ test("edit: more than the stock can give is refused and NOTHING changes (no part
   await flushAndCompare(ctx);
   const before = plain(await ctx.api.db.loadAll());
 
-  const edit = openEdit(ctx, inv);
-  edit.customer.name = "Someone Else";   // a valid change next to the impossible one must not slip through
-  edit.lines[0].qty = "50";
+  const sale = openEdit(ctx, inv);
+  sale.customer.name = "Someone Else";   // a valid change next to the impossible one must not slip through
+  assert.match(typeQty(ctx.api, 0, "50").error, /stock/i, "the Sell page refuses it as it is typed");
+  sale.items[0].qty = 50;                // and a stale screen that still holds it is refused when saving
   const plan = ctx.api.editPlan();
   assert.match(plan.error, /./);
   await ctx.api.saveInvoiceEdit();
-  assert.match(ctx.app.field("editError").textContent, /./);
+  assert.match(ctx.app.field("saleError").textContent, /./);
   assert.equal(ctx.api.getInvoiceEdit() !== null, true, "the screen stays open with what was typed");
 
   const after = plain(await ctx.api.db.loadAll());
@@ -408,45 +411,41 @@ test("edit: more than the stock can give is refused and NOTHING changes (no part
   assert.equal(invoiceById(ctx.api, inv.id).customer.name, "Alex");
 });
 
-test("edit: invalid inputs are refused (zero, negative or fractional box quantity, negative price, no lines)", async () => {
+test("edit: invalid inputs are refused (zero, negative or fractional box quantity, negative price, a price left empty)", async () => {
   const ctx = await boot();
   const a = await addTile(ctx);
   const inv = await sell(ctx, a, { qty: "2" });
-  const edit = openEdit(ctx, inv);
-  const line = edit.lines[0];
+  openEdit(ctx, inv);
+  const line = ctx.api.getSale().items[0];
   for (const qty of ["0", "-1", "1.5", "abc", ""]) {
-    line.qty = qty;
-    assert.match(ctx.api.editPlan().error || "", /./, `quantity "${qty}" must be refused`);
+    assert.match(typeQty(ctx.api, 0, qty).error || "", /./, `quantity "${qty}" must be refused`);
+    assert.equal(line.qty, 2, "the line keeps its quantity");
   }
-  line.qty = "2";
-  line.unitPrice = "-5";
-  assert.match(ctx.api.editPlan().error || "", /./);
-  line.unitPrice = "";
-  assert.match(ctx.api.editPlan().error || "", /./);
-  line.unitPrice = "1152";
-  ctx.api.removeEditLine(line.key);
-  assert.match(ctx.api.editPlan().error || "", /./, "an invoice needs at least one line");
+  assert.match(typePrice(ctx.api, 0, "-5").error || "", /./);
+  assert.match(typePrice(ctx.api, 0, "").error || "", /./);
+  assert.equal(ctx.api.editPlan().error, undefined, "what was refused was never typed in: the sale is still the saved invoice");
+  assert.equal(ctx.api.editPlan().skip, true);
   assert.equal(invoiceById(ctx.api, inv.id).items[0].qty, 2);
 });
 
 test("edit: a price cut below what is already paid is saved; payments are never deleted and the difference is a refund due, not a payment", async () => {
   const ctx = await boot();
   const a = await addTile(ctx);
-  const inv = await sell(ctx, a, { qty: "2", paid: "2000" });   // total 2304, 2000 paid
-  const edit = openEdit(ctx, inv);
-  edit.lines[0].unitPrice = "100";   // new total 200 < 2000 paid
+  const inv = await sell(ctx, a, { qty: "2", paid: "2000" });   // 800 DA/m² x 2.88 m² = 2304, 2000 paid
+  openEdit(ctx, inv);
+  typePrice(ctx.api, 0, "100");   // 100 DA/m²: new total 288 < 2000 paid
   const plan = ctx.api.editPlan();
   assert.equal(plan.error, undefined, "an overpayment is no longer a reason to refuse the edit");
-  assert.equal(plan.refundDue, 1800);
+  assert.equal(plan.refundDue, 1712);
   await ctx.api.saveInvoiceEdit();
   const saved = invoiceById(ctx.api, inv.id);
   assert.deepEqual(plain(saved.payments), plain(inv.payments), "payment history is exactly as it was");
-  assert.equal(saved.items[0].unitPrice, 100);
-  assert.equal(saved.total, 200);
+  assert.equal(saved.items[0].unitPrice, 144);
+  assert.equal(saved.total, 288);
   const info = ctx.api.paymentInfo(saved);
   assert.equal(info.paid, 2000, "nothing was recorded as paid back");
   assert.equal(info.remaining, 0);
-  assert.equal(info.refundDue, 1800);
+  assert.equal(info.refundDue, 1712);
   assert.match(info.status, /paid/i);
 });
 
@@ -454,31 +453,33 @@ test("edit: leaving with unsaved changes asks first; cancelling the question kee
   const ctx = await boot();
   const a = await addTile(ctx);
   const inv = await sell(ctx, a);
-  const edit = openEdit(ctx, inv);
+  openEdit(ctx, inv);
   assert.equal(ctx.api.cancelInvoiceEdit().cancelled, true, "nothing typed: it just closes");
   assert.equal(ctx.app.confirms.length, 0);
 
-  const again = openEdit(ctx, inv);
-  again.customer.name = "Changed";
+  const sale = openEdit(ctx, inv);
+  sale.customer.name = "Changed";
   ctx.app.answer(false);
   assert.equal(ctx.api.cancelInvoiceEdit().stayed, true);
   assert.equal(ctx.app.confirms.length, 1);
-  assert.equal(ctx.api.getInvoiceEdit().customer.name, "Changed");
+  assert.equal(ctx.api.getSale().customer.name, "Changed");
   ctx.app.answer(false);
-  assert.equal(ctx.api.showView("sell"), false, "the menu is blocked too");
+  assert.equal(ctx.api.showView("invoices"), false, "the menu is blocked too");
+  assert.equal(ctx.api.getInvoiceEdit() !== null, true);
   ctx.app.answer(true);
   assert.equal(ctx.api.cancelInvoiceEdit().cancelled, true);
   assert.equal(invoiceById(ctx.api, inv.id).customer.name, "Alex", "nothing was saved");
-  void edit;
+  assert.equal(ctx.api.getInvoiceEdit(), null);
+  assert.equal(ctx.api.getSale().items.length, 0, "the sale that was being prepared before the edit is back");
 });
 
 test("edit: printing an edited invoice prints the corrected details under the same number", async () => {
   const ctx = await boot();
   const a = await addTile(ctx);
   const inv = await sell(ctx, a, { qty: "2", name: "Alex" });
-  const edit = openEdit(ctx, inv);
-  edit.customer.name = "Alexandre";
-  edit.lines[0].qty = "3";
+  const sale = openEdit(ctx, inv);
+  sale.customer.name = "Alexandre";
+  typeQty(ctx.api, 0, 3);
   await ctx.api.saveInvoiceEdit();
   ctx.api.printInvoice(invoiceById(ctx.api, inv.id));
   const html = ctx.app.field("invoice").innerHTML;
@@ -501,30 +502,35 @@ test("edit: invoices that track deliveries keep their quantities and lines (deli
   await api.completeSale();
   const inv = api.getInvoices()[0];
   assert.equal(V.isTracked(inv), true);
-  const edit = openEdit(ctx, inv);
-  edit.lines[0].qty = "3";
+  const sale = openEdit(ctx, inv);
+  sale.items[0].qty = 3;
   assert.match(api.editPlan().error || "", /./, "a quantity that deliveries refer to is locked");
-  edit.lines[0].qty = "4";
-  edit.customer.phone = "0550 1";   // the customer and the price can still be corrected
-  edit.lines[0].unitPrice = "1000";
+  sale.items[0].qty = 4;
+  sale.customer.phone = "0550 1";   // the customer and the price can still be corrected
+  typePrice(api, 0, "1000");
   assert.equal(api.editPlan().error, undefined);
+  // Removing every line would cancel the sale: not for an invoice with a delivery record.
+  const keep = sale.items.slice();
+  sale.items = [];
+  assert.match(api.editPlan().error || "", /./, "a sale with deliveries is not cancelled here");
+  sale.items = keep;
   await api.saveInvoiceEdit();
   const saved = invoiceById(api, inv.id);
   assert.deepEqual(plain(saved.deliveries), plain(inv.deliveries));
   assert.equal(saved.items[0].lineId, inv.items[0].lineId);
-  assert.equal(saved.items[0].unitPrice, 1000);
+  assert.equal(saved.items[0].unitPrice, 1440, "1,000 DA/m² x 1.44 m² per box");
 });
 
 test("edit: a change made in another window (the invoice was edited meanwhile) is not overwritten", async () => {
   const ctx = await boot();
   const a = await addTile(ctx);
   const inv = await sell(ctx, a, { qty: "2" });
-  const edit = openEdit(ctx, inv);
-  edit.lines[0].qty = "3";
+  openEdit(ctx, inv);
+  typeQty(ctx.api, 0, 3);
   // Meanwhile the invoice changes underneath the open screen.
   await ctx.api.commit((d) => { const i = d.invoices.find((x) => x.id === inv.id); i.items[0].qty = 1; i.items[0].total = 1152; i.subtotal = 1152; i.total = 1152; i.items[0].stockDeducted = 1; d.products.find((p) => p.id === a.id).stock += 1; });
   await ctx.api.saveInvoiceEdit();
-  assert.match(ctx.app.field("editError").textContent, /./);
+  assert.match(ctx.app.field("saleError").textContent, /./);
   assert.equal(invoiceById(ctx.api, inv.id).items[0].qty, 1, "the newer data stays");
 });
 
@@ -780,9 +786,9 @@ test("backup: business phones, supplier contacts, a sale, an invoice edit and a 
   ({ parsed } = await flushAndCompare(ctx));
   assert.equal(parsed.data.invoices.length, 1);
 
-  const edit = openEdit(ctx, invoice);
-  edit.lines[0].qty = "3";
-  edit.customer.name = "Alexandre";
+  const sale = openEdit(ctx, invoice);
+  typeQty(api, 0, 3);
+  sale.customer.name = "Alexandre";
   await api.saveInvoiceEdit();
   ({ parsed } = await flushAndCompare(ctx));
   assert.equal(parsed.data.invoices[0].items[0].qty, 3);
@@ -820,8 +826,8 @@ test("legacy: an edited invoice records when and how the total changed, and stil
   const ctx = await boot();
   const tile = await addTile(ctx);
   const invoice = await sell(ctx, tile, { qty: "2" });
-  const edit = openEdit(ctx, invoice);
-  edit.lines[0].qty = "3";
+  openEdit(ctx, invoice);
+  typeQty(ctx.api, 0, 3);
   await ctx.api.saveInvoiceEdit();
   const saved = invoiceById(ctx.api, invoice.id);
   assert.equal(saved.edits.length, 1);

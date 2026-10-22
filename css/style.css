@@ -138,7 +138,7 @@ main {
   padding: 20px 20px 20px 0;
   overflow-y: auto;
 }
-.app:not([data-view="sell"]):not([data-view="editinvoice"]) .preview-panel { display: none; }
+.app:not([data-view="sell"]) .preview-panel { display: none; }
 
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
@@ -839,12 +839,6 @@ input:disabled, select:disabled, textarea:disabled { background: #f1f3f6; color:
 
 /* ---------- Editing a saved invoice ---------- */
 
-.edit-add { margin-top: 12px; }
-.edit-add-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 8px; }
-.edit-add-row .add-qty input { width: 110px; }
-.edit-notes-list { margin: 0; padding-left: 18px; }
-.table tr.edit-new td:first-child { border-left: 3px solid var(--accent, #1b6e3c); }
-.edit-line-note { margin-top: 2px; }
 .totals .edit-warn { color: var(--danger); font-weight: 600; }
 .pay-summary .refund-due { color: var(--danger); font-weight: 600; }
 .inv-totals .refund td { border-top: 1px dashed #000; }
@@ -863,3 +857,20 @@ input:disabled, select:disabled, textarea:disabled { background: #f1f3f6; color:
 .similar-text { display: flex; flex-direction: column; min-width: 0; }
 .similar-same { color: var(--warn, #b45309); }
 .similar-actions { display: flex; gap: 6px; }
+
+/* ---------- Editing a saved invoice on the Sell page, and cancelled sales ---------- */
+.edit-banner { border-left: 4px solid #8a5a00; }
+.totals > .edit-rows { display: block; padding: 0; }
+.totals .edit-rows > div { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+.totals .edit-rows .due { font-weight: 600; }
+/* A preview of unsaved changes never looks like the saved invoice */
+.preview-unsaved { color: #8a5a00; font-weight: 700; }
+.invoice-unsaved { outline: 2px dashed #8a5a00; outline-offset: -2px; }
+@media print { .invoice-unsaved { outline: 0; } }
+.badge.cancelled { color: var(--muted); border-style: dashed; text-decoration: line-through; }
+.inv-status .cancelled { color: #6b6b6b; }
+tr.invoice-cancelled td { color: var(--muted); }
+tr.invoice-cancelled td:nth-child(-n+4) { text-decoration: line-through; }
+tr.invoice-cancelled .badge, tr.invoice-cancelled .muted, tr.invoice-cancelled button { text-decoration: none; }
+.inv-cancelled { margin: 8px 0 12px; padding: 8px 10px; border: 2px solid #6b6b6b; color: #3a3a3a; text-align: center; letter-spacing: 0.5px; }
+.inv-totals .refunded td { color: #8a5a00; }

@@ -96,15 +96,18 @@ with sync_playwright() as p:
     go(page, "invoices")
     check(page.locator("#invoiceBody tr").count() == 1, "still one invoice")
 
-    # --- 4. edit the invoice
+    # --- 4. edit the invoice (on the Sell page)
     page.click('#invoiceBody button[data-action="edit"]')
-    page.wait_for_selector("#view-editinvoice:not([hidden])")
-    page.locator("#editBody input[data-field='qty']").fill("3")
-    page.fill("#editName", "Alexandre Ait")
+    page.wait_for_selector("#editBanner:not([hidden])")
+    check(page.is_visible("#view-sell"), "Edit opens the Sell page")
+    page.locator("#saleBody input[data-field='qty']").fill("3")
+    page.locator("#saleBody input[data-field='qty']").dispatch_event("input")
+    page.fill("#custName", "Alexandre Ait")
+    page.locator("#custName").dispatch_event("input")
     check("INV-000001" in text(page, "#invoice"), "the preview keeps the invoice number")
     check("Alexandre" in text(page, "#invoice"), "the preview shows the typed customer")
     page.click("#editSave")
-    page.wait_for_selector("#view-invoices:not([hidden]), #payBox:not([hidden])", timeout=10000)
+    page.wait_for_selector("#editBanner", state="hidden", timeout=10000)
     go(page, "invoices")
     row = text(page, "#invoiceBody tr")
     check("Alexandre" in row and "INV-000001" in row and "3,456" in row, "invoice edited in place: " + row.replace("\n", " ")[:100])
@@ -114,25 +117,28 @@ with sync_playwright() as p:
     # unsaved changes warning
     go(page, "invoices")
     page.click('#invoiceBody button[data-action="edit"]')
-    page.wait_for_selector("#view-editinvoice:not([hidden])")
-    page.fill("#editName", "Changed")
+    page.wait_for_selector("#editBanner:not([hidden])")
+    page.fill("#custName", "Changed")
+    page.locator("#custName").dispatch_event("input")
     answer["accept"] = False
     answer["seen"].clear()
     page.click("#editCancel")
-    check(len(answer["seen"]) == 1 and page.is_visible("#view-editinvoice") and page.input_value("#editName") == "Changed", "cancelling with changes asks, and Cancel keeps the screen and the typed text")
+    check(len(answer["seen"]) == 1 and page.is_visible("#editBanner") and page.input_value("#custName") == "Changed", "cancelling with changes asks, and Cancel keeps the screen and the typed text")
     answer["accept"] = True
     page.click("#editCancel")
-    page.wait_for_selector("#view-editinvoice", state="hidden")
-    check(text(page, "#invoiceBody tr").count("Changed") == 0, "leaving discarded the typed change")
+    page.wait_for_selector("#editBanner", state="hidden")
     go(page, "invoices")
+    check(text(page, "#invoiceBody tr").count("Changed") == 0, "leaving discarded the typed change")
 
-    # price cut below payments is refused
+    # a price cut below payments is allowed: the difference is shown as a refund due, never as a payment
     page.click('#invoiceBody button[data-action="edit"]')
-    page.wait_for_selector("#view-editinvoice:not([hidden])")
-    page.locator("#editBody input[data-field='price']").fill("10")
-    check(page.is_disabled("#editSave") and text(page, "#editError") != "", "a price that leaves payments above the total is explained and blocks saving")
+    page.wait_for_selector("#editBanner:not([hidden])")
+    page.locator("#saleBody input[data-field='price']").fill("10")
+    page.locator("#saleBody input[data-field='price']").dispatch_event("input")
+    check(page.is_enabled("#editSave") and "Refund" in text(page, "#tEditRows"), "a price that leaves payments above the total shows the refund due and can be saved")
     page.click("#editCancel")
-    page.wait_for_selector("#view-editinvoice", state="hidden")
+    page.wait_for_selector("#editBanner", state="hidden")
+    answer["accept"] = True
 
     # --- 6. history
     sell(page, 1, "Bob Dahmani")

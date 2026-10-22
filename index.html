@@ -72,6 +72,13 @@
     <section class="view" id="view-sell">
       <h1 class="sr-only" data-i18n="nav.sell">Sell</h1>
 
+      <!-- Shown only while a saved invoice is edited on this page (the rest of the page is the normal Sell page) -->
+      <div class="panel edit-banner no-print" id="editBanner" hidden>
+        <h2 id="editHeading"></h2>
+        <p class="muted small" data-i18n="edit.intro">Correct this invoice without creating a new one. The invoice number, the date and every recorded payment stay as they are.</p>
+        <p class="warn-box" id="editNotes" hidden></p>
+      </div>
+
       <div class="panel">
         <h2 data-i18n="sell.addProducts">Add products</h2>
         <label class="sr-only" for="search" data-i18n="sell.searchLabel">Search products</label>
@@ -182,15 +189,19 @@
           <div class="grand" id="tTotalRow"><span id="tTotalLabel">Total</span><span id="tTotal"></span></div>
           <div id="tCarriedRow" hidden><span data-i18n="sell.carried">Carried-forward debt</span><span id="tCarried"></span></div>
           <div class="grand" id="tDueRow" hidden><span data-i18n="sell.totalDue">Total due</span><span id="tDue"></span></div>
-          <div class="pay-input"><label for="amountPaid" data-i18n="sell.amountPaid">Amount Paid</label><input type="number" id="amountPaid" min="0" step="any"></div>
-          <div class="due"><span data-i18n="sell.remaining">Remaining</span><span id="tRemaining"></span></div>
-          <p class="muted small pay-hint" data-i18n="sell.payHint">Leave Amount Paid empty or 0 if the customer pays nothing now. Add payments later from Invoices.</p>
+          <div class="pay-input" id="payInputRow"><label for="amountPaid" data-i18n="sell.amountPaid">Amount Paid</label><input type="number" id="amountPaid" min="0" step="any"></div>
+          <div class="due"><span id="tRemainingLabel" data-i18n="sell.remaining">Remaining</span><span id="tRemaining"></span></div>
+          <div class="edit-rows" id="tEditRows"></div>
+          <p class="muted small pay-hint" id="salePayHint" data-i18n="sell.payHint">Leave Amount Paid empty or 0 if the customer pays nothing now. Add payments later from Invoices.</p>
         </div>
 
         <p class="error" id="saleError" role="alert"></p>
         <div class="actions">
           <button type="button" class="btn" id="clearSale" data-i18n="sell.clear">Clear</button>
           <button type="button" class="btn primary" id="completeSale" data-i18n="sell.complete">Complete Sale</button>
+          <button type="button" class="btn" id="editCancel" data-i18n="common.cancel" hidden>Cancel</button>
+          <button type="button" class="btn primary" id="editSave" data-i18n="edit.save" hidden>Save changes</button>
+          <button type="button" class="btn primary" id="editSavePrint" data-i18n="edit.saveAndPrint" hidden>Save and print</button>
         </div>
       </div>
     </section>
@@ -275,6 +286,7 @@
             <option value="unpaid" data-i18n="invoices.payUnpaid">Unpaid</option>
             <option value="partial" data-i18n="invoices.payPartial">Partially paid</option>
             <option value="paid" data-i18n="invoices.payPaid">Paid</option>
+            <option value="cancelled" data-i18n="invoices.payCancelled">Cancelled</option>
           </select>
           <label class="sr-only" for="invoiceDeliveryFilter" data-i18n="invoices.filterDelLabel">Delivery status</label>
           <select id="invoiceDeliveryFilter">
@@ -303,114 +315,6 @@
           </table>
         </div>
         <div class="empty" id="invoiceEmpty" hidden></div>
-      </div>
-    </section>
-
-    <!-- EDIT A SAVED INVOICE (opened from Invoices or from a saved invoice; has no menu button) -->
-    <section class="view" id="view-editinvoice" hidden>
-      <h1 class="sr-only" data-i18n="edit.title">Edit invoice</h1>
-      <div class="panel">
-        <h2 id="editHeading"></h2>
-        <p class="muted small" data-i18n="edit.intro">Correct this invoice without creating a new one. The invoice number, the date and every recorded payment stay as they are.</p>
-        <p class="warn-box" id="editNotes" hidden></p>
-        <form id="editForm" novalidate>
-          <fieldset>
-            <legend data-i18n="edit.customer">Customer</legend>
-            <div class="grid-2">
-              <div class="field">
-                <label for="editName" data-i18n="sell.name">Name</label>
-                <input type="text" id="editName" placeholder="Walk-in Customer" data-i18n-placeholder="sell.walkIn" autocomplete="off">
-              </div>
-              <div class="field">
-                <label for="editPhone" data-i18n="sell.phone">Phone</label>
-                <input type="text" id="editPhone" autocomplete="off">
-              </div>
-            </div>
-            <div class="field">
-              <label for="editAddress" data-i18n="sell.address">Address</label>
-              <input type="text" id="editAddress" autocomplete="off">
-            </div>
-            <div class="field">
-              <label for="editName2" data-i18n="sell.secondName">Builder / Group (optional)</label>
-              <input type="text" id="editName2" autocomplete="off">
-            </div>
-          </fieldset>
-
-          <h3 data-i18n="edit.products">Products</h3>
-          <div class="table-wrap">
-            <table class="table">
-              <thead>
-                <tr>
-                  <th data-i18n="col.product">Product</th>
-                  <th class="num" data-i18n="col.qty">Qty</th>
-                  <th class="num" data-i18n="col.unitPrice">Unit price</th>
-                  <th class="num" data-i18n="col.total">Total</th>
-                  <th><span class="sr-only" data-i18n="common.remove">Remove</span></th>
-                </tr>
-              </thead>
-              <tbody id="editBody"></tbody>
-            </table>
-          </div>
-
-          <fieldset class="edit-add">
-            <legend data-i18n="edit.addProduct">Add a product</legend>
-            <label class="sr-only" for="editSearch" data-i18n="sell.searchLabel">Search products</label>
-            <input type="search" id="editSearch" placeholder="Search products to add..." data-i18n-placeholder="edit.searchPlaceholder" autocomplete="off">
-            <div class="results" id="editResults" role="listbox" aria-label="Products" data-i18n-aria-label="sell.productsAria"></div>
-            <div class="edit-add-row">
-              <div class="add-qty">
-                <label for="editAddQty" data-i18n="sell.quantity">Quantity</label>
-                <input type="number" id="editAddQty" min="0" step="any" value="1">
-              </div>
-              <div class="add-unit">
-                <label for="editAddUnit" data-i18n="sell.unit">Unit</label>
-                <select id="editAddUnit">
-                  <option value="piece" data-i18n="unit.piece">Piece</option>
-                  <option value="box" data-i18n="unit.box">Box</option>
-                  <option value="m2" data-i18n="unit.m2">m²</option>
-                  <option value="kg" data-i18n="unit.kg">kg</option>
-                  <option value="m" data-i18n="unit.m">m</option>
-                </select>
-              </div>
-              <button type="button" class="btn" id="editAdd" data-i18n="edit.addBtn">Add to invoice</button>
-            </div>
-            <p class="error" id="editAddError" role="alert"></p>
-          </fieldset>
-
-          <fieldset>
-            <legend data-i18n="sell.discountTaxLegend">Discount and tax</legend>
-            <div class="grid-2">
-              <div class="field">
-                <label for="editDiscountValue" data-i18n="sell.discount">Discount</label>
-                <div class="with-unit">
-                  <input type="number" id="editDiscountValue" min="0" step="any" placeholder="0">
-                  <select id="editDiscountType" aria-label="Discount type" data-i18n-aria-label="sell.discountType">
-                    <option value="amount" data-currency></option>
-                    <option value="percent">%</option>
-                  </select>
-                </div>
-              </div>
-              <div class="field">
-                <label for="editTaxValue" data-i18n="sell.tax">Tax</label>
-                <div class="with-unit">
-                  <input type="number" id="editTaxValue" min="0" step="any" placeholder="0">
-                  <select id="editTaxType" aria-label="Tax type" data-i18n-aria-label="sell.taxType">
-                    <option value="amount" data-currency></option>
-                    <option value="percent">%</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-          </fieldset>
-
-          <div class="totals" id="editSummary"></div>
-          <p class="error" id="editError" role="alert"></p>
-          <div class="actions">
-            <button type="button" class="btn" id="editCancel" data-i18n="common.cancel">Cancel</button>
-            <button type="submit" class="btn primary" id="editSave" data-i18n="edit.save">Save changes</button>
-            <button type="button" class="btn primary" id="editSavePrint" data-i18n="edit.saveAndPrint">Save and print</button>
-          </div>
-        </form>
       </div>
     </section>
 
@@ -566,8 +470,19 @@
         <div id="payCarriedRow" hidden><span data-i18n="pay.carried">Includes carried-forward debt</span><span id="payCarried"></span></div>
         <div id="payTransferredRow" hidden><span data-i18n="pay.transferred">Carried to other invoices</span><span id="payTransferred"></span></div>
         <div class="grand"><span data-i18n="pay.remaining">Remaining</span><span id="payRemaining"></span></div>
+        <div id="payRefundedRow" hidden><span data-i18n="inv.refunded">Refunded</span><span id="payRefunded"></span></div>
         <div id="payRefundRow" class="refund-due" hidden><span data-i18n="pay.refund">Refund / credit due to customer</span><span id="payRefund"></span></div>
       </div>
+      <p class="warn-box" id="payCancelRow" hidden></p>
+      <!-- Money handed back for an invoice that was made cheaper after it was paid: its own record, the payments are untouched -->
+      <form id="refundForm" novalidate hidden>
+        <label for="refundAmount" data-i18n="refund.new">Record a refund handed to the customer</label>
+        <div class="pay-row">
+          <input type="number" id="refundAmount" min="0" step="any">
+          <button type="submit" class="btn" id="refundBtn" data-i18n="refund.record">Record refund</button>
+        </div>
+      </form>
+      <p class="error" id="refundError" role="alert"></p>
       <form id="payForm" novalidate>
         <label for="payAmount" data-i18n="pay.new">New payment</label>
         <div class="pay-row">
