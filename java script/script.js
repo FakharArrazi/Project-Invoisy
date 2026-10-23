@@ -275,11 +275,13 @@ const db = InvoisyDB.create();
 
 // The automatic backup file (autobackup.js). It listens to the database's "commit" event (see below), so every
 // change saved through database.js is covered without any screen having to ask for it.
-const autoBackup = AutoBackup.create({ db });
+const autoBackup = AutoBackup.create({ db, hold: backupShouldWait });
 
 const storage = {
   mode: "connecting",     // connecting | ready | unavailable | failed | outdated
   reason: "",             // why the database can not be used (shown to the person)
+  wasReady: false,        // this page has been connected before (so a lost connection can be reopened in place)
+  reloadNeeded: false,    // outdated, and reconnecting can not help: the data was made by a newer version than this page's code
   migrationFailed: false,
   migrationUnreadable: false,   // the older data exists but none of it could be read
   migration: null,        // record of the move from the storage older versions used
@@ -294,9 +296,11 @@ function errorText(e) {
   return (e && e.message) || "";
 }
 
-function setStorageMode(mode, reason) {
+function setStorageMode(mode, reason, options) {
   storage.mode = mode;
   storage.reason = reason || "";
+  storage.reloadNeeded = Boolean(options && options.reloadNeeded);
+  if (mode === "ready") storage.wasReady = true;
   renderStorage();
 }
 
@@ -465,7 +469,12 @@ async function initStorage() {
   try {
     await db.initDatabase();
   } catch (e) {
-    setStorageMode(e.code === "UNAVAILABLE" ? "unavailable" : "failed", errorText(e));
+    // Reconnecting after this page had been working, and the database now belongs to a newer version of Invoisy
+    // (another window updated it): this page still runs the old code, so only reloading it can help. This is the
+    // only situation in which the page asks for a reload; it is never done automatically, and the browser still
+    // asks first when there is work on screen that is not saved.
+    if (e.code === "VERSION" && storage.wasReady) setStorageMode("outdated", errorText(e), { reloadNeeded: true });
+    else setStorageMode(e.code === "UNAVAILABLE" ? "unavailable" : "failed", errorText(e));
     return;
   }
 
@@ -505,11 +514,16 @@ async function initStorage() {
   reloadedRightAfterSave();
 }
 
+let storageStarting = null;
 function startStorage() {
-  storage.ready = initStorage().catch((e) => {
-    setStorageMode("failed", t("storage.openFailed", { error: errorText(e) }));
-  });
-  return storage.ready;
+  if (storageStarting) return storageStarting;
+  storageStarting = initStorage()
+    .catch((e) => {
+      setStorageMode("failed", t("storage.openFailed", { error: errorText(e) }));
+    })
+    .finally(() => { storageStarting = null; });
+  storage.ready = storageStarting;
+  return storageStarting;
 }
 
 /* -- Backup: export and restore -- */
@@ -592,7 +606,7 @@ function importBackup(file) {
       backup: describeData(incoming), made, current: describeData(state), next: nextNumber,
       notes: noted ? "\n\n" + t("storage.noteHeading") + noted : "",
     }));
-    if (!ok) { notify(t("storage.restoreCancelled")); return; }
+    if (!ok) return;
 
     const outcome = await enqueue(async () => {
       let before;
@@ -622,6 +636,7 @@ function importBackup(file) {
     });
     if (outcome.error) { reportDataProblem(outcome.error); return; }
     PurchasesUI.reset();   // an open supplier, purchase or form may point at data the backup replaced
+    settingsTouched = false;   // a restore replaces everything, including business details that were being typed
     refreshAfterLoad();
     notify(t("storage.restored", { counts: describeData(outcome.done.counts) }) + (outcome.safetyName ? " " + t("storage.restoredSafety", { name: outcome.safetyName }) : ""));
   });
@@ -674,7 +689,7 @@ function connectBackupFile() {
         const inFile = describeData(seen.parsed.data);
         if (!Validation.hasMeaningfulData(current)) { reportDataProblem(t("auto.fileHasData", { file: inFile })); return; }
         const made = formatDateTime(seen.parsed.exportedAt) || t("storage.unknown");
-        if (!confirm(t("auto.confirmReplace", { file: inFile, made, current: describeData(current) }))) { notify(t("auto.cancelled")); return; }
+        if (!confirm(t("auto.confirmReplace", { file: inFile, made, current: describeData(current) }))) return;
         try {
           downloadText(seen.text, Validation.backupFileName(new Date(), "invoisy-before-autobackup"));
         } catch (e) {
@@ -706,7 +721,6 @@ function connectBackupFile() {
 
 function reportAutoBackupResult(status) {
   if (status.state === "needs-permission") notify(t("auto.permissionStillNeeded"), "error");
-  else if (status.state === "current") notify(t("auto.nowCurrent"));
   else if (status.error) notify(status.error, "error");
 }
 
@@ -732,7 +746,6 @@ function saveBackupInterval() {
     showError("dataError", "");
     await refreshBackupInfo();
     renderStorage();
-    notify(tn("storage.intervalSaved", days));
   });
 }
 
@@ -869,7 +882,6 @@ async function addProduct(values) {
   }
   resetProductForm();
   renderAll();
-  notify(t("product.added", { label: productLabel(values) }));
   $("pName").focus();
 }
 
@@ -886,7 +898,6 @@ async function updateProduct(id, values) {
   }
   resetProductForm();
   renderAll();
-  notify(t("product.updated", { label: productLabel(values) }));
 }
 
 async function deleteProduct(id) {
@@ -899,7 +910,6 @@ async function deleteProduct(id) {
   if (state.selectedId === id) state.selectedId = null;
   if (state.editingId === id) resetProductForm();
   renderAll();
-  notify(t("product.deleted", { name: product.name }));
 }
 
 async function adjustStock(id, delta) {
@@ -994,6 +1004,7 @@ function resetProductForm() {
   renderProductFormMode();
   clearProductErrors();
   renderProductSuggestions();
+  resumeBackup();   // nothing typed is left on this form: a waiting backup file may be written
 }
 
 // The Stock form's title and buttons depend on whether a product is being edited.
@@ -1039,7 +1050,6 @@ function loadDemoData() {
     if (r.error) { notify(r.error, "error"); return; }
     if (r.skip) { notify(t("demo.already")); return; }
     renderAll();
-    notify(tn("demo.added", r.added));
   });
 }
 
@@ -1650,6 +1660,7 @@ function clearSale() {
   renderSale();
   renderInvoice();
   renderDebtUi();
+  resumeBackup();   // the sale on screen is empty again
 }
 
 /* ==========================================================================
@@ -1838,7 +1849,6 @@ function completeSale() {
     state.selectedId = null;
     $("search").value = "";
     renderAll();
-    notify(t("sell.completed", { number: r.invoice.invoiceNumber }));
     // Only now, with the invoice and its stock committed, is the person asked what to do next.
     openSaleDoneDialog(r.invoice);
   });
@@ -1870,6 +1880,15 @@ function saleDoneAction(action) {
   state.saleDone = null;
   rememberSaleDone(null);
   closeSaleDoneDialog();
+  try {
+    return answerSaleDone(done, action);
+  } finally {
+    // The choice is made and printing, if asked for, is over: a backup file that waited can be written now.
+    resumeBackup();
+  }
+}
+
+function answerSaleDone(done, action) {
   if (action === "new") {
     state.previewInvoice = null;
     renderInvoice();
@@ -1890,7 +1909,6 @@ function saleDoneAction(action) {
       notify(t("saleDone.printFailed", { number: done.number }), "error");
       return { action: "print", error: true };
     }
-    notify(t("saleDone.afterPrint", { number: done.number }));
     return { action: "print", invoice };
   }
   return { action: "later" };
@@ -1926,7 +1944,6 @@ async function deleteInvoice(id) {
   if (r.error) { notify(r.error, "error"); return; }
   renderAll();
   onDebtDataChanged();
-  notify(t("invoice.deleted", { number: inv.invoiceNumber }));
 }
 
 // Adds a cash payment (current date/time) to a saved invoice. Items and stock are never touched.
@@ -2579,8 +2596,8 @@ function saveInvoiceEdit(options = {}) {
     }
     const number = (state.invoices.find((i) => i.id === edit.id) || {}).invoiceNumber || "";
     leaveEdit(edit.id, true);
-    notify(r.cancelled ? t("edit.cancelled", { number, refund: money(r.refund, (state.invoices.find((i) => i.id === edit.id) || {}).currency) })
-      : t(r.skip ? "edit.nothingChanged" : "edit.saved", { number }));
+    if (r.cancelled) notify(t("edit.cancelled", { number, refund: money(r.refund, (state.invoices.find((i) => i.id === edit.id) || {}).currency) }));
+    else if (r.skip) notify(t("edit.nothingChanged", { number }));
     onDebtDataChanged();
     // Save and print: the invoice is already saved above, and the print is of that saved invoice (never of the screen's typed values).
     if (options.print) {
@@ -2664,7 +2681,6 @@ async function saveLogo(dataUrl) {
   }
   renderLogoSetting();
   renderInvoice();
-  notify(t(dataUrl ? "logo.saved" : "logo.removed"));
 }
 
 // Reads a PNG, shrinks it to fit LOGO_MAX_W x LOGO_MAX_H (never enlarges, keeps transparency) and saves it.
@@ -2860,6 +2876,10 @@ function collectLaterText(item) {
 }
 
 function renderSale() {
+  return keepFocus(renderSaleNow);
+}
+
+function renderSaleNow() {
   const body = $("saleBody");
   if (state.sale.items.length === 0) {
     body.innerHTML = `<tr class="empty-row"><td colspan="5">${esc(t("sell.empty"))}</td></tr>`;
@@ -3233,6 +3253,7 @@ function renderPayBox() {
 
 // Box above a saved invoice that was sold in several deliveries: payment and delivery status side by side (never mixed),
 // what is left to collect per line, and where the warehouse records a collection.
+let deliveryBoxInvoiceId = null;
 function renderDeliveryBox() {
   const inv = state.invoiceEdit ? null : state.previewInvoice;
   const detail = inv ? Validation.deliveryDetail(inv) : null;
@@ -3243,6 +3264,15 @@ function renderDeliveryBox() {
   $("delNumber").textContent = inv.invoiceNumber;
   $("delPayment").textContent = pay.status + (pay.remaining > 0 ? ` (${t("deliv.stillToPay", { amount: money(pay.remaining, inv.currency) })})` : "");
   $("delStatus").textContent = t("inv.delivery." + detail.status);
+  // Quantities already typed into the boxes are kept through a redraw, as long as they still refer to the same invoice and the
+  // same quantity left to collect (after a recorded collection they do not, and the boxes start empty).
+  const typed = new Map();
+  if (deliveryBoxInvoiceId === inv.id) {
+    $("delBody").querySelectorAll("[data-collect-qty]").forEach((i) => {
+      if (i.value !== "") typed.set(i.dataset.line, { value: i.value, remaining: i.dataset.remaining });
+    });
+  }
+  deliveryBoxInvoiceId = inv.id;
   $("delBody").innerHTML = detail.lines.map((l) => {
     const unit = l.item.sellingUnit;
     const name = invoiceItemLabel(l.item);
@@ -3251,6 +3281,10 @@ function renderDeliveryBox() {
     if (l.remaining <= 0) return `<div class="collect-row done">${info}<div class="collect-input muted small">${esc(t("deliv.done"))}</div></div>`;
     return `<div class="collect-row" data-line="${esc(l.lineId)}">${info}<div class="collect-input"><input type="number" min="0" max="${l.remaining}" step="${whole ? 1 : "any"}" data-collect-qty data-line="${esc(l.lineId)}" data-remaining="${l.remaining}" aria-label="${esc(t("deliv.qtyAria", { name }))}"><span class="muted small">${esc(unitLabel(unit, l.remaining))}</span></div></div>`;
   }).join("");
+  $("delBody").querySelectorAll("[data-collect-qty]").forEach((i) => {
+    const before = typed.get(i.dataset.line);
+    if (before && before.remaining === i.dataset.remaining) i.value = before.value;
+  });
   const open = detail.toCollect.length > 0;
   $("collectNote").disabled = !open;
   $("collectAll").disabled = !open;
@@ -3276,6 +3310,10 @@ function renderInvoice() {
 }
 
 function renderStock() {
+  return keepFocus(renderStockNow);
+}
+
+function renderStockNow() {
   renderProductSuggestions();   // the stock list changed: the suggestions follow it
   const hasProducts = state.products.length > 0;
   const list = searchProducts($("stockFilter").value);
@@ -3397,6 +3435,10 @@ function clearInvoiceFilters() {
 }
 
 function renderInvoices() {
+  return keepFocus(renderInvoicesNow);
+}
+
+function renderInvoicesNow() {
   const hasInvoices = state.invoices.length > 0;
   const query = $("invoiceFilter").value;
   const list = searchInvoices(query);
@@ -3513,20 +3555,26 @@ function saveBusinessSettings() {
       };
     });
     if (r.error) { notify(r.error, "error"); return; }
-    notify(t("settings.saved"));
-    fillSettingsForm();
+    fillSettingsForm({ force: true });
     renderAll();
   });
 }
 
-function fillSettingsForm() {
-  const s = state.settings;
-  $("sName").value = s.businessName;
-  $("sAddress").value = s.address;
-  state.phoneRows = phoneRowsFrom(s);
-  renderPhoneRows();
-  $("sEmail").value = s.email;
-  $("sCurrency").value = s.currency;
+// Business details typed in the Settings form and not saved yet. While it is true no redraw, change made in another window
+// or language change may overwrite what was typed; Save Settings (force) is what puts the saved values back.
+let settingsTouched = false;
+function fillSettingsForm(options) {
+  const keepTyping = settingsTouched && !(options && options.force);
+  if (!keepTyping) {
+    settingsTouched = false;
+    const s = state.settings;
+    $("sName").value = s.businessName;
+    $("sAddress").value = s.address;
+    state.phoneRows = phoneRowsFrom(s);
+    $("sEmail").value = s.email;
+    $("sCurrency").value = s.currency;
+  }
+  renderPhoneRows();   // from what is typed (state.phoneRows), in the current language
   renderLogoSetting();
   renderLanguageSetting();
 }
@@ -3566,7 +3614,6 @@ function saveLanguage(code) {
     renderAll();
     renderStorage();
     fillSettingsForm();
-    notify(t("settings.languageChanged"));
   });
 }
 
@@ -3580,7 +3627,6 @@ function applyPaperSize() {
 async function savePaper(paper) {
   const r = await commit((d) => { d.settings.paper = paper; });
   if (r.error) notify(r.error, "error");
-  else notify(t("settings.paperSet", { paper }));
   applyPaperSize();
 }
 
@@ -3713,9 +3759,11 @@ function renderStorage() {
     action = "retry";
     label = t("storage.retry");
   } else if (m === "outdated") {
+    // A lost connection is reopened in this page (nothing on screen is lost). Reload is offered only when the database
+    // now belongs to a newer version than this page's code (see initStorage).
     text = storage.reason;
-    action = "reload";
-    label = t("storage.reload");
+    action = storage.reloadNeeded ? "reload" : "retry";
+    label = t(storage.reloadNeeded ? "storage.reload" : "storage.retry");
   } else if (m === "connecting") {
     text = storage.reason;   // empty unless another window is blocking an update
   }
@@ -3772,7 +3820,72 @@ function refreshAfterLoad() {
   onDebtDataChanged();
 }
 
+/* Drawing the screen again rebuilds whole tables and lists. An input or button that had the keyboard focus is replaced by
+   a new one, so the focus (and the caret in a text field) is put back on its successor. Nothing else is touched. */
+function describeFocus() {
+  const el = document.activeElement;
+  if (!el || el === document.body || !el.tagName || typeof el.getAttribute !== "function") return null;
+  let caret = {};
+  try {
+    if (typeof el.selectionStart === "number") caret = { start: el.selectionStart, end: el.selectionEnd };
+  } catch { /* inputs that have no caret (number, checkbox) */ }
+  if (el.id) return { id: el.id, ...caret };
+  const attrs = [];
+  for (const a of el.attributes) {
+    if (a.name.startsWith("data-") || a.name === "name" || a.name === "type") attrs.push([a.name, a.value]);
+  }
+  const rowKey = ["data-id", "data-line", "data-row"].find((n) => el.closest && el.closest(`[${n}]`));
+  const row = rowKey ? el.closest(`[${rowKey}]`) : null;
+  const scope = el.parentElement && el.parentElement.closest ? el.parentElement.closest("[id]") : null;
+  return { tag: el.tagName.toLowerCase(), attrs, rowKey, rowValue: row ? row.getAttribute(rowKey) : null, scopeId: scope ? scope.id : null, ...caret };
+}
+
+function findFocusTarget(d) {
+  if (d.id) return document.getElementById(d.id);
+  const scope = d.scopeId ? document.getElementById(d.scopeId) : document;
+  if (!scope || !scope.querySelectorAll) return null;
+  const quote = (v) => String(v).replace(/["\\]/g, "\\$&");
+  const selector = d.tag + d.attrs.map(([n, v]) => `[${n}="${quote(v)}"]`).join("");
+  const matches = [...scope.querySelectorAll(selector)].filter((n) => {
+    if (!d.rowKey) return true;
+    const r = n.closest(`[${d.rowKey}]`);
+    return Boolean(r) && r.getAttribute(d.rowKey) === d.rowValue;
+  });
+  return matches.length ? matches[0] : null;
+}
+
+function restoreFocus(d) {
+  if (!d) return;
+  const now = document.activeElement;
+  // Focus that was moved somewhere else on purpose is left alone: only focus that was lost is put back.
+  if (now && now !== document.body && now.isConnected !== false) return;
+  const el = findFocusTarget(d);
+  if (!el || typeof el.focus !== "function") return;
+  try { el.focus({ preventScroll: true }); } catch { return; }
+  if (typeof d.start === "number" && typeof el.setSelectionRange === "function") {
+    try { el.setSelectionRange(d.start, d.end); } catch { /* no caret on this kind of input */ }
+  }
+}
+
+// Runs a drawing function and puts the keyboard focus back on the successor of the element that had it.
+function keepFocus(render) {
+  const focus = describeFocus();
+  try {
+    return render();
+  } finally {
+    restoreFocus(focus);
+  }
+}
+
 function renderAll() {
+  try {
+    keepFocus(renderEverything);
+  } finally {
+    resumeBackup();   // the screen changed: a backup file that was waiting for you to finish may be due now
+  }
+}
+
+function renderEverything() {
   applyLanguage();
   renderProductFormMode();
   stockForm.renderRows();
@@ -3999,7 +4112,6 @@ function addDebtToSale(picks) {
   refreshLive();
   renderSaleDebts();
   renderDebtUi();
-  notify(t("debt.added", { numbers }));
   return { ok: true };
 }
 
@@ -4010,7 +4122,6 @@ function removeDebtFromSale(invoiceId) {
   refreshLive();
   renderSaleDebts();
   renderDebtUi();
-  if (source) notify(t("debt.removed", { number: source.invoiceNumber }));
 }
 
 // Called when saved data changed under the sale on screen (a payment, a deletion, a restored backup, another window):
@@ -4066,6 +4177,7 @@ function closeDebtDialog() {
   if (typeof dialog.close === "function") dialog.close(); else dialog.removeAttribute("open");
   if (debtDialogReturnFocus && typeof debtDialogReturnFocus.focus === "function") debtDialogReturnFocus.focus();
   debtDialogReturnFocus = null;
+  resumeBackup();
 }
 
 // What the person ticked in the dialog: [{ sourceInvoiceId, amount }] (the amount as typed, checked later).
@@ -4183,6 +4295,21 @@ function hasUnsavedWork() {
   const customer = (sale && sale.customer) || {};
   const saleStarted = Boolean(sale) && (sale.items.length > 0 || Boolean(customer.name || customer.phone || customer.address));
   return editDirty() || saleStarted || productFormTouched;
+}
+
+/* The automatic backup file waits while you are in the middle of something.
+   Writing it makes a tool that watches the folder (a live-reload server) reload the page, and a reload at the wrong
+   moment is what interrupts the print-choice dialog or a sale being typed. So the file is not written while a dialog is
+   waiting for an answer or while there is work on screen that is not saved yet. Nothing is at risk meanwhile: every
+   change is already in the database, the file is only a copy. It is written shortly after the moment is over (see
+   resumeBackup), and at the next start at the latest. */
+function backupShouldWait() {
+  const debtDialog = $("debtDialog");
+  return Boolean(state.saleDone) || Boolean(debtDialog && debtDialog.open) || hasUnsavedWork() || settingsTouched;
+}
+
+function resumeBackup() {
+  try { autoBackup.resume(); } catch { /* the backup never disturbs the screen */ }
 }
 
 function showView(name, options) {
@@ -4538,7 +4665,6 @@ function bindEvents() {
       renderStock();
       renderResults();
       renderSelected();
-      notify(result.message);
       $("rQty").focus();
     });
   });
@@ -4595,7 +4721,6 @@ function bindEvents() {
       $("payAmount").value = "";
       renderInvoices();
       renderInvoice();
-      notify(t("pay.added"));
     });
   });
   $("payAmount").addEventListener("input", () => showError("payError", ""));
@@ -4619,7 +4744,6 @@ function bindEvents() {
       renderSelected();
       renderInvoices();
       renderInvoice();
-      notify(t("collect.recorded", { number: receipts.length ? receipts[receipts.length - 1].number : result.invoice.invoiceNumber }));
     });
   });
   $("collectForm").addEventListener("input", () => showError("collectError", ""));
@@ -4674,6 +4798,7 @@ function bindEvents() {
     e.preventDefault();
     saveBusinessSettings();
   });
+  $("settingsForm").addEventListener("input", () => { settingsTouched = true; });
   $("sPhones").addEventListener("input", (e) => {
     const row = e.target.closest(".phone-row");
     if (row) setPhoneRow(row.dataset.row, e.target.value);
@@ -4714,7 +4839,7 @@ function bindEvents() {
   $("bannerAction").addEventListener("click", () => {
     const action = $("bannerAction").dataset.action;
     if (action === "retry") startStorage();
-    else if (action === "reload") window.location.reload();
+    else if (action === "reload") window.location.reload();   // see initStorage: only for a database made by a newer version
   });
   window.addEventListener("resize", updateBannerHeight);
   $("loadDemo").addEventListener("click", loadDemoData);
@@ -4827,6 +4952,8 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     addPhoneRow, removePhoneRow, setPhoneRow, saveBusinessSettings, fillSettingsForm, businessPhonesHtml,
     saleDoneAction, openSaleDoneDialog, getSaleDone: () => state.saleDone, printInvoice,
     restoreSaleDone, rememberedSaleDone, reloadedRightAfterSave, markCommit, hasUnsavedWork,
+    backupShouldWait, resumeBackup, notify, saveLanguage, savePaper,
+    markSettingsTouched: () => { settingsTouched = true; },
     touchProductForm: () => { productFormTouched = true; },
     invoiceParts, invoiceHtml, printItems, continuationHeadHtml,
     businessPhonesHtml, fillSettingsForm, saveBusinessSettings, addPhoneRow, removePhoneRow, setPhoneRow, renderPhoneRows,

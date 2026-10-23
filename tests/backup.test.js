@@ -556,7 +556,7 @@ test("cancelling the confirmation changes nothing and downloads nothing", async 
   assert.equal(app.confirms.length, 1, "the person was asked");
   assert.deepEqual(await dump(app.api.db), before);
   assert.equal(app.downloads.length, 0, "no safety copy is made when nothing will be replaced");
-  assert.match(app.toast(), /cancelled/i);
+  assert.equal(app.toast(), "", "dismissing the question needs no second message");
   assert.equal(app.api.getState().products.length, 2);
 });
 
@@ -740,9 +740,10 @@ test("the app speaks French when the language setting is French: a bad backup is
   assert.equal(app.errorText("dataError"), "Ce fichier n’est pas une sauvegarde Invoisy valide\u00a0: rien n’a été modifié. (Le fichier n’est pas un JSON valide.)");
   assert.deepEqual(await dump(app.api.db), before);
 
+  const rejection = app.toast();   // the genuine error above is still showing
   app.answer(false);
   await app.api.importBackup(app.file(backupText()));
   assert.match(app.confirms[0], /va REMPLACER toutes les données/);
   assert.match(app.confirms[0], /le prochain sera INV-000003/);
-  assert.match(app.toast(), /Restauration annulée/);
+  assert.equal(app.toast(), rejection, "cancelling adds no message of its own");
 });

@@ -8,7 +8,7 @@ Brand new browser profile and disposable IndexedDB: no real business data is tou
 import os, sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
-from e2e_common import SKIP_SALE_DIALOG
+from e2e_common import SKIP_SALE_DIALOG, wait_invoice_shown
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()
 problems = []
@@ -79,7 +79,7 @@ with sync_playwright() as p:
     page.fill(f"{row} .price-input", "1300")
     page.fill("#amountPaid", "0")
     page.click("#completeSale")
-    page.wait_for_function("document.getElementById('toast').textContent.includes('INV-000001')", timeout=10000)
+    wait_invoice_shown(page, "INV-000001")
     check(True, "sale with the special price saved as INV-000001")
 
     page.click('.nav-btn[data-view="stock"]')

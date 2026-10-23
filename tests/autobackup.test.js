@@ -924,7 +924,7 @@ test("app: cancelling the replacement changes nothing and does not connect", asy
   assert.equal(handle.history.length, 0);
   assert.equal(app.downloads.length, 0, "no copy needed when nothing is replaced");
   assert.equal(app.api.autoBackup.getStatus().connected, false);
-  assert.match(app.toast(), /Nothing was changed/);
+  assert.equal(app.toast(), "", "dismissing the question needs no second message");
 });
 
 test("app: a file that already holds exactly this data is connected without any question", async () => {
@@ -979,4 +979,217 @@ test("the automatic backup file keeps attached supplier invoices, so the file it
   assert.equal(parsed.data.attachments.length, 1);
   const withoutFiles = V.prepareBackupFile(await db.loadAll(), new Date());
   assert.match(withoutFiles.error, /missing from the data/, "a snapshot without attachment data is refused instead of written");
+});
+
+
+/* ---------- 8. Waiting while the person is busy (options.hold, resume) ---------- */
+
+// Lets the writes that were started finish (the fake file and the in-memory database answer within a few milliseconds).
+const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((resolve) => setTimeout(resolve, 3)); };
+
+test("hold: a write waits while the person is busy, stays pending, and resume() writes it afterwards", async () => {
+  let busy = true;
+  const ctx = await setup({ hold: () => busy });
+  const handle = await connected(ctx);
+  const writes = handle.history.length;
+
+  await ctx.db.add("products", product(1));
+  ctx.timers.fire();
+  await settle();
+  assert.equal(handle.history.length, writes, "nothing is written while the person is busy");
+  assert.equal(ctx.ab.getStatus().state, "pending", "and the status says so");
+  assert.equal(ctx.timers.jobs.size, 0, "no timer keeps polling in the meantime");
+
+  busy = false;
+  ctx.ab.resume();
+  assert.equal(ctx.timers.jobs.size, 1, "resume() plans the write after the usual short wait");
+  ctx.timers.fire();
+  await settle();
+  assert.equal(handle.history.length, writes + 1, "one write catches up on everything that waited");
+  await assertFileMatches(ctx.db, handle);
+  assert.equal(ctx.ab.getStatus().state, "current");
+});
+
+test("hold: many changes made while busy end in one write after resume()", async () => {
+  let busy = true;
+  const ctx = await setup({ hold: () => busy });
+  const handle = await connected(ctx);
+  const writes = handle.history.length;
+  for (let i = 1; i <= 5; i++) {
+    await ctx.db.add("products", product(i));
+    ctx.timers.fire();
+    await settle();
+  }
+  assert.equal(handle.history.length, writes);
+  busy = false;
+  ctx.ab.resume();
+  ctx.timers.fire();
+  await settle();
+  assert.equal(handle.history.length, writes + 1);
+  assert.equal(fileData(handle).revision, 5);
+});
+
+test("hold: resume() does nothing when nothing waits, when a write is already planned, or while still busy", async () => {
+  let busy = true;
+  const ctx = await setup({ hold: () => busy });
+  await connected(ctx);
+
+  ctx.ab.resume();
+  assert.equal(ctx.timers.jobs.size, 0, "nothing is waiting");
+
+  await ctx.db.add("products", product(1));
+  assert.equal(ctx.timers.jobs.size, 1, "the commit planned a write");
+  ctx.ab.resume();
+  assert.equal(ctx.timers.jobs.size, 1, "no second timer");
+
+  ctx.timers.fire();
+  await settle();
+  ctx.ab.resume();
+  assert.equal(ctx.timers.jobs.size, 0, "still busy: the write keeps waiting");
+
+  busy = false;
+  ctx.ab.resume();
+  ctx.timers.fire();
+  await settle();
+  assert.equal(ctx.ab.getStatus().state, "current");
+});
+
+test("hold: the window-focus nudge respects it, but Retry (flushNow) still writes at once", async () => {
+  let busy = true;
+  const ctx = await setup({ hold: () => busy });
+  const handle = await connected(ctx);
+  const writes = handle.history.length;
+  await ctx.db.add("products", product(1));
+  ctx.timers.fire();
+  await settle();
+
+  await ctx.ab.nudge();
+  assert.equal(handle.history.length, writes, "coming back to the window does not write while the dialog waits");
+
+  await ctx.ab.flushNow();
+  assert.equal(handle.history.length, writes + 1, "an explicit request is never held back");
+  await assertFileMatches(ctx.db, handle);
+});
+
+test("hold: starting up (a page that was reloaded) does not write the catch-up copy while a dialog waits", async () => {
+  let busy = true;
+  const ctx = await setup({ hold: () => busy });
+  const handle = await connected(ctx);
+  const writes = handle.history.length;
+  await ctx.db.add("products", product(1));
+
+  await ctx.ab.start();   // what a reload does
+  assert.equal(handle.history.length, writes, "the file is left alone");
+  assert.equal(ctx.ab.getStatus().state, "pending");
+
+  busy = false;
+  ctx.ab.resume();   // the page calls this when the dialog is answered
+  ctx.timers.fire();
+  await settle();
+  assert.equal(handle.history.length, writes + 1);
+  await assertFileMatches(ctx.db, handle);
+});
+
+test("hold: a hold that fails never blocks a backup", async () => {
+  const ctx = await setup({ hold: () => { throw new Error("broken"); } });
+  const handle = await connected(ctx);
+  const writes = handle.history.length;
+  await ctx.db.add("products", product(1));
+  ctx.timers.fire();
+  await settle();
+  assert.equal(handle.history.length, writes + 1);
+  await assertFileMatches(ctx.db, handle);
+});
+
+test("hold: without the option nothing changes (the earlier behaviour)", async () => {
+  const ctx = await setup();
+  const handle = await connected(ctx);
+  const writes = handle.history.length;
+  await ctx.db.add("products", product(1));
+  ctx.timers.fire();
+  await settle();
+  assert.equal(handle.history.length, writes + 1);
+});
+
+/* ---------- 9. The page: the file does not change under the person's hands ---------- */
+
+test("app: the backup file is left alone while the sale-completed dialog waits, and written once it is answered", async () => {
+  const handle = new FakeHandle();
+  const app = await startedApp(handle);
+  await app.api.connectBackupFile();
+  await app.api.addProduct(tileValues());
+  await app.api.autoBackup.flushNow();
+  const id = app.api.getState().products[0].id;
+
+  assert.equal(app.api.backupShouldWait(), false, "idle: nothing to wait for");
+  assert.equal(app.api.addToSale(id, "2", "box").ok, true);
+  assert.equal(app.api.backupShouldWait(), true, "a sale is being prepared");
+
+  await app.api.completeSale();
+  assert.ok(app.api.getSaleDone(), "the dialog is open");
+  assert.equal(app.api.backupShouldWait(), true, "and it is waiting for an answer");
+  const writes = handle.history.length;
+
+  app.flushTimers();
+  await settle();
+  assert.equal(handle.history.length, writes, "the file is not touched while the dialog is open");
+  assert.equal(app.api.autoBackup.getStatus().state, "pending");
+  assert.equal(app.field("autoStatus").textContent, "Backup pending");
+
+  await app.api.saleDoneAction("later");
+  assert.equal(app.api.backupShouldWait(), false);
+  app.flushTimers();
+  await settle();
+  assert.equal(handle.history.length, writes + 1, "written right after the answer");
+  await assertFileMatches(app.api.db, handle);
+  assert.equal(fileData(handle).data.invoices.length, 1, "the new invoice is in it");
+  assert.equal(app.field("autoStatus").textContent, "Backup current");
+});
+
+test("app: choosing Print still prints the saved invoice, and the file is written after printing", async () => {
+  const handle = new FakeHandle();
+  let printed = null;
+  let prints = 0;
+  const app = await startedApp(handle, { globals: { ...pickerReturning(handle), window: { print() { prints++; }, addEventListener() {} } } });
+  await app.api.connectBackupFile();
+  await app.api.addProduct(tileValues());
+  await app.api.autoBackup.flushNow();
+  const id = app.api.getState().products[0].id;
+  app.api.addToSale(id, "2", "box");
+  await app.api.completeSale();
+  const writes = handle.history.length;
+
+  const result = await app.api.saleDoneAction("print");
+  printed = result.invoice;
+  assert.ok(printed && printed.invoiceNumber, "the saved invoice was handed to print");
+  assert.equal(prints, 1, "printed once");
+  assert.equal(handle.history.length, writes, "printing itself writes nothing");
+  app.flushTimers();
+  await settle();
+  assert.equal(handle.history.length, writes + 1, "the backup follows once printing is over");
+});
+
+test("app: a sale in preparation, typed customer details or an open product form hold the file; clearing them releases it", async () => {
+  const handle = new FakeHandle();
+  const app = await startedApp(handle);
+  await app.api.connectBackupFile();
+  await app.api.addProduct(tileValues());
+  await app.api.autoBackup.flushNow();
+  const id = app.api.getState().products[0].id;
+
+  app.api.getSale().customer.name = "Karim";
+  assert.equal(app.api.backupShouldWait(), true, "typed customer details count as work in progress");
+  const writes = handle.history.length;
+  await app.api.addStock(id, "5");   // another change while the sale is being typed
+  app.flushTimers();
+  await settle();
+  assert.equal(handle.history.length, writes, "the change is saved in the database, the file waits");
+  assert.equal(app.api.getState().products[0].stock, 15);
+
+  app.api.getSale().customer.name = "";
+  app.api.resumeBackup();
+  app.flushTimers();
+  await settle();
+  assert.equal(handle.history.length, writes + 1);
+  assert.equal(fileData(handle).data.products[0].stock, 15);
 });

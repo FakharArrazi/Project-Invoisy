@@ -8,7 +8,7 @@ It uses a brand new browser profile and a disposable IndexedDB, so no real busin
 import json, os, sys, tempfile
 from pathlib import Path
 from playwright.sync_api import sync_playwright
-from e2e_common import SKIP_SALE_DIALOG
+from e2e_common import SKIP_SALE_DIALOG, wait_invoice_shown, wait_payment_recorded
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()   # INVOISY_URL=http://localhost:8000/ to try a web server
 OUT = tempfile.mkdtemp(prefix="invoisy-e2e-")
@@ -71,7 +71,7 @@ with sync_playwright() as p:
     page.click('#addForm button[type="submit"]')
     page.fill("#amountPaid", "1000")
     page.click("#completeSale")
-    page.wait_for_function("document.getElementById('toast').textContent.includes('INV-000001')", timeout=10000)
+    wait_invoice_shown(page, "INV-000001")
     check(True, "sale completed as INV-000001")
 
     go(page, "invoices")
@@ -82,7 +82,7 @@ with sync_playwright() as p:
     page.click('#invoiceBody button[data-action="pay"]')
     page.fill("#payAmount", "1304")
     page.click("#payBtn")
-    page.wait_for_function("document.getElementById('toast').textContent.includes('Payment added')")
+    wait_payment_recorded(page)
     go(page, "invoices")
     check("Paid" in text(page, "#invoiceBody tr"), "final payment makes the invoice Paid")
 
@@ -124,7 +124,7 @@ with sync_playwright() as p:
     page.select_option("#addUnit", "piece")
     page.click('#addForm button[type="submit"]')
     page.click("#completeSale")
-    page.wait_for_function("document.getElementById('toast').textContent.includes('INV-000002')", timeout=10000)
+    wait_invoice_shown(page, "INV-000002")
     go(page, "settings")
     check(text(page, "#dataSummary") == "1 product, 2 invoices", "second sale saved (2 invoices)")
 
@@ -142,9 +142,8 @@ with sync_playwright() as p:
     page.fill("#addQty", "1")
     page.click('#addForm button[type="submit"]')
     page.click("#completeSale")
-    page.wait_for_function("document.getElementById('toast').textContent.includes('Sale completed')", timeout=10000)
-    toast = text(page, "#toast")
-    check("INV-000003" in toast, "after restore the next invoice is INV-000003, not a reused number: " + toast)
+    wait_invoice_shown(page, "INV-000003")
+    check("INV-000003" in text(page, "#invoice"), "after restore the next invoice is INV-000003, not a reused number")
 
     # --- a corrupt file is rejected and nothing changes
     bad = os.path.join(OUT, "bad.json")

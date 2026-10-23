@@ -11,3 +11,17 @@ document.addEventListener("DOMContentLoaded", () => {
     .observe(dialog, { attributes: true, attributeFilter: ["open"] });
 });
 """
+
+
+# The page no longer announces routine results with a message, so the checks wait for the result itself.
+def wait_invoice_shown(page, number):
+    """A completed sale shows its invoice (under its number) in the preview."""
+    page.wait_for_function("(n) => document.getElementById('invoice').textContent.includes(n)", arg=number, timeout=10000)
+
+def wait_payment_recorded(page):
+    """A payment that was recorded clears the amount box (a refused one leaves it)."""
+    page.wait_for_function("document.getElementById('payAmount').value === ''", timeout=10000)
+
+def wait_idle(page):
+    """Nothing is being saved any more (the buttons that are disabled while a save runs are enabled again)."""
+    page.wait_for_function("!document.getElementById('autoGrant').disabled && !document.getElementById('autoRetry').disabled", timeout=10000)

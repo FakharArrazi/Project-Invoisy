@@ -17,7 +17,7 @@ It uses a brand new browser profile and a disposable IndexedDB, so no real busin
 import json, os, subprocess, sys, tempfile, time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
-from e2e_common import SKIP_SALE_DIALOG
+from e2e_common import SKIP_SALE_DIALOG, wait_invoice_shown, wait_payment_recorded
 
 ROOT = Path(__file__).resolve().parents[2]
 PORT = int(os.environ.get("INVOISY_PORT", "8765"))
@@ -101,7 +101,7 @@ def sell(page, qty, paid=""):
         page.fill("#amountPaid", paid)
     n = len(file_json(page)["data"]["invoices"]) + 1
     page.click("#completeSale")
-    page.wait_for_function(f"document.getElementById('toast').textContent.includes('INV-{n:06d}')", timeout=10000)
+    wait_invoice_shown(page, f"INV-{n:06d}")
 
 def revisions_match(page):
     return page.evaluate("document.getElementById('autoDbRevision').textContent === document.getElementById('autoBackedRevision').textContent")
@@ -160,7 +160,7 @@ try:
         page.click('#invoiceBody button[data-action="pay"]')
         page.fill("#payAmount", "500")
         page.click("#payBtn")
-        page.wait_for_function("document.getElementById('toast').textContent.includes('Payment added')")
+        wait_payment_recorded(page)
         go(page, "settings"); wait_status(page, "Backup current")
         check([x["amount"] for x in file_json(page)["data"]["invoices"][0]["payments"]] == [1000, 500], "the later payment is in the payment history in the file")
 

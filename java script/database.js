@@ -375,6 +375,8 @@
       conn.onversionchange = () => { try { conn.close(); } catch { /* ignore */ } conn = null; emit("versionchange"); };
       conn.onclose = () => { conn = null; emit("closed"); };
       if (opts.channel !== false && typeof BroadcastChannel === "function") {
+        // Opening again after the connection was lost: the earlier channel would keep delivering every message too.
+        if (channel) { try { channel.close(); } catch { /* ignore */ } channel = null; }
         try {
           channel = new BroadcastChannel(name + "-changes");
           channel.onmessage = (event) => {

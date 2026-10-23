@@ -7,6 +7,7 @@ Uses a brand new browser profile and a disposable IndexedDB.
 import os, sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+from e2e_common import wait_idle
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()
 problems = []
@@ -62,7 +63,7 @@ with sync_playwright() as p:
     page.locator("#sPhones input").nth(1).fill("0661 44 55 66")
     check(page.locator("#sPhones input").count() == 2, "Add phone number adds a second box")
     page.click('#settingsForm button[type="submit"]') if page.locator("#settingsForm").count() else page.keyboard.press("Enter")
-    page.wait_for_function("document.getElementById('toast').textContent.length > 0")
+    wait_idle(page)
     page.reload()
     go(page, "settings")
     page.wait_for_function("document.getElementById('dataState').textContent === 'Ready'", timeout=10000)

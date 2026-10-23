@@ -6,7 +6,7 @@ Walks the example of the feature: 15 boxes sold and paid, 10 in the warehouse, 5
 import os, sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
-from e2e_common import SKIP_SALE_DIALOG
+from e2e_common import SKIP_SALE_DIALOG, wait_invoice_shown
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()
 problems = []
@@ -65,7 +65,7 @@ with sync_playwright() as p:
 
     page.fill("#amountPaid", "15000")
     page.click("#completeSale")
-    page.wait_for_function("document.getElementById('toast').textContent.includes('INV-000001')", timeout=10000)
+    wait_invoice_shown(page, "INV-000001")
     go(page, "stock")
     check(page.locator("#stockBody tr td").nth(3).inner_text().strip().startswith("0"), "only the 10 delivered boxes left stock (0 left): " + stock_text(page))
 
@@ -101,7 +101,7 @@ with sync_playwright() as p:
     page.fill("[data-collect-qty]", "3")
     page.fill("#collectNote", "collected by Ali")
     page.click("#collectBtn")
-    page.wait_for_function("document.getElementById('toast').textContent.includes('COL-000001-1')", timeout=10000)
+    page.wait_for_function("document.querySelector('.preview-panel').innerText.includes('COL-000001-1')", timeout=10000)
     panel = page.inner_text(".preview-panel")
     check("To collect 2 Boxes" in panel and "collected by Ali" in panel and "COL-000001-1" in panel, "outstanding quantity is now 2 and the pick-up is in the history")
     check("15,000 DA" in panel and "PAID" in panel, "invoice total and PAID status are untouched")
@@ -131,7 +131,7 @@ with sync_playwright() as p:
     page.click("#collectAll")
     check(page.input_value("[data-collect-qty]") == "2", "'Fill all remaining' fills the remaining quantity")
     page.click("#collectBtn")
-    page.wait_for_function("document.getElementById('toast').textContent.includes('COL-000001-2')", timeout=10000)
+    page.wait_for_function("document.querySelector('.preview-panel').innerText.includes('COL-000001-2')", timeout=10000)
     check(page.is_disabled("#collectBtn") and page.is_disabled("#collectPrint"), "nothing left to collect: record and print are disabled")
     check("DELIVERED IN FULL" in page.inner_text("#invoice"), "invoice shows DELIVERED IN FULL")
     go(page, "invoices")

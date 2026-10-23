@@ -68,7 +68,8 @@ def add_stock_product(page, name, size, maker, coverage, price, stock_unit=None,
     if stock:
         page.fill("#pStock", stock)
     page.click("#productSubmit")
-    wait_toast(page, name)
+    # the Stock page no longer announces a saved product: the new row in the stock table is the result
+    page.wait_for_function("(n) => document.getElementById('stockBody').textContent.includes(n)", arg=name, timeout=8000)
 
 
 def stock_row(page, name):

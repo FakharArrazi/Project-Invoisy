@@ -5,7 +5,7 @@ Optional and manual, like browser_check.py:   python3 tests/e2e/debt_check.py
 import os, sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
-from e2e_common import SKIP_SALE_DIALOG
+from e2e_common import SKIP_SALE_DIALOG, wait_invoice_shown
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()
 problems = []
@@ -52,7 +52,7 @@ with sync_playwright() as p:
     page.fill("#custPhone", "0555 11 22 33")
     page.fill("#amountPaid", "1000")
     page.click("#completeSale")
-    page.wait_for_function("document.getElementById('toast').textContent.includes('INV-000001')", timeout=10000)
+    wait_invoice_shown(page, "INV-000001")
 
     # Typing shows nothing; leaving the field shows the card
     add_item(page, 2)
@@ -92,7 +92,7 @@ with sync_playwright() as p:
     check("INV-000001" in preview and "2,500" in preview, "live preview shows the carried line and total due")
 
     page.click("#completeSale")
-    page.wait_for_function("document.getElementById('toast').textContent.includes('INV-000002')", timeout=10000)
+    wait_invoice_shown(page, "INV-000002")
     go(page, "invoices")
     rows = page.inner_text("#invoiceBody")
     check("INV-000002" in rows and "2,500" in rows, "new invoice lists total due 2,500: " + rows.replace("\n", " ")[:160])

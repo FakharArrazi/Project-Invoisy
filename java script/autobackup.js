@@ -102,6 +102,10 @@
   //   options.timers        { set(fn, ms), clear(id) }
   //   options.locks         navigator.locks, or null for none
   //   options.waitMs, options.retryMs   pacing of writes and retries
+  //   options.hold          () => true while a write should wait because the person is in the middle of something a
+  //                         reload of the page would interrupt (a dialog waiting for an answer, work not saved yet).
+  //                         Only the automatic writes wait; a click on Retry or on Allow access still writes at once.
+  //                         The page calls resume() when that moment is over.
   function create(options) {
     const opts = options || {};
     const db = opts.db;
@@ -111,6 +115,11 @@
     const waitMs = opts.waitMs !== undefined ? opts.waitMs : DEFAULT_WAIT_MS;
     const retryMs = opts.retryMs || DEFAULT_RETRY_MS;
     const listeners = [];
+
+    // True while an automatic write should wait (see options.hold). A hold that throws never blocks a backup.
+    const held = () => {
+      try { return typeof opts.hold === "function" && Boolean(opts.hold()); } catch { return false; }
+    };
 
     const supported = () => (opts.supported !== undefined ? !!opts.supported : typeof globalThis.showSaveFilePicker === "function");
     const handleStore = opts.handleStore || {
@@ -254,7 +263,7 @@
     }
 
     // The one write loop. Everything that arrives while it runs sets `dirty` and is picked up by the next pass.
-    function run() {
+    function run(respectHold) {
       if (running) return running;
       // The first await matters: without it a loop with nothing to do would finish (and clear `running`) before
       // `running` below was assigned, leaving it stuck on a finished promise so that no later write ever ran.
@@ -262,6 +271,8 @@
         await Promise.resolve();
         try {
           while (dirty && handle) {
+            // An automatic write waits while the person is mid-task. It stays pending (dirty) and resume() starts it again.
+            if (respectHold && held()) break;
             dirty = false;
             const outcome = await writeOnce();
             if (outcome === "ok") continue;
@@ -281,7 +292,7 @@
     function scheduleRetry() {
       if (retryCount >= retryMs.length) return;   // enough: no endless loop, no endless disk writes
       clearRetry();
-      retryTimer = timers.set(() => { retryTimer = null; run(); }, retryMs[retryCount++]);
+      retryTimer = timers.set(() => { retryTimer = null; run(true); }, retryMs[retryCount++]);
     }
 
     function clearRetry() {
@@ -297,7 +308,7 @@
       dirty = true;
       if (!handle || permission !== "granted") return;
       clearWait();
-      waitTimer = timers.set(() => { waitTimer = null; run(); }, waitMs);
+      waitTimer = timers.set(() => { waitTimer = null; run(true); }, waitMs);
     }
 
     /* -- What the app calls -- */
@@ -343,7 +354,7 @@
       emit();
       if (handle && permission === "granted") {
         dirty = true;   // compares the file with the database even if the notes say it is current
-        return run();
+        return run(true);   // waits (still pending) while a dialog is open or work is unsaved; resume() writes it afterwards
       }
       return undefined;
     }
@@ -431,9 +442,17 @@
       return getStatus();
     }
 
+    // The moment the write was waiting for is over (a dialog was answered, the sale was saved or cleared): write the pending
+    // backup now, after the usual short wait. Does nothing when nothing is waiting, when a write is already under way or
+    // planned, or when the person is still busy (the next resume() call then tries again).
+    function resume() {
+      if (!dirty || !handle || permission !== "granted" || running || waitTimer !== null || held()) return;
+      schedule();
+    }
+
     // The window came back to the front: if something is waiting (for example a drive was plugged back in), try once.
     function nudge() {
-      if (!handle || running || waitTimer !== null) return Promise.resolve();
+      if (!handle || running || waitTimer !== null || held()) return Promise.resolve();
       const s = getStatus();
       if (s.state === "current" || s.state === "writing") return Promise.resolve();
       retryCount = 0;
@@ -447,7 +466,7 @@
     }
 
     return {
-      supported, getStatus, notifyCommitted, flushNow, start, pickFile, inspect, attach, grant, retry, nudge,
+      supported, getStatus, notifyCommitted, flushNow, start, pickFile, inspect, attach, grant, retry, nudge, resume,
       on(fn) { listeners.push(fn); },
     };
   }
