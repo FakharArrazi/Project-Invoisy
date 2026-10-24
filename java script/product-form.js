@@ -236,7 +236,7 @@
 
             <fieldset class="form-section">
               <legend><span data-i18n="stock.sectionPrices">${esc(t("stock.sectionPrices"))}</span> <span class="req" aria-hidden="true">*</span></legend>
-              <p class="muted small price-hint" data-i18n="stock.pricesHint">${esc(t("stock.pricesHint"))}</p>
+              ${prefix === "p" ? "" : `<p class="muted small price-hint" data-i18n="stock.pricesHint">${esc(t("stock.pricesHint"))}</p>`}
               <div id="${ids.priceRows}">${rowsHtml()}</div>
               <div class="field">
                 <button type="button" class="btn small" id="${ids.addPrice}" data-action="add-price" data-i18n="stock.addPrice"${nextUnit() === null ? " disabled" : ""}>${esc(t("stock.addPrice"))}</button>

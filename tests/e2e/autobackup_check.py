@@ -17,7 +17,7 @@ It uses a brand new browser profile and a disposable IndexedDB, so no real busin
 import json, os, subprocess, sys, tempfile, time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
-from e2e_common import SKIP_SALE_DIALOG, wait_invoice_shown, wait_payment_recorded
+from e2e_common import SKIP_SALE_DIALOG, wait_invoice_shown, wait_payment_recorded, open_product_form, restock
 
 ROOT = Path(__file__).resolve().parents[2]
 PORT = int(os.environ.get("INVOISY_PORT", "8765"))
@@ -80,6 +80,7 @@ def ready(page):
 
 def add_product(page, name, price="800", stock="10"):
     go(page, "stock")
+    open_product_form(page)
     page.fill("#pName", name)
     page.fill("#pTileSize", "60*60")
     page.fill("#pCoveragePerBox", "1.44")
@@ -144,9 +145,8 @@ try:
 
         # 3. every kind of change updates the file with no button pressed
         go(page, "stock")
-        page.fill("#rQty", "5")
-        page.click('#restockForm button[type="submit"]')
-        page.wait_for_function("document.querySelector('#stockBody tr td:nth-child(4)').textContent.trim().startsWith('15')")
+        restock(page, 5)
+        page.wait_for_function("document.querySelector('#stockBody tr td:nth-child(6)').textContent.trim().startsWith('15')")
         go(page, "settings")
         wait_status(page, "Backup current")
         check(file_json(page)["data"]["products"][0]["stock"] == 15, "restock 10 + 5 is in the file")
@@ -173,9 +173,8 @@ try:
         go(page, "stock")
         start_stock = file_json(page)["data"]["products"][0]["stock"]
         for i in range(1, 7):   # one after the other as fast as the screen accepts them, without waiting for the backup
-            page.fill("#rQty", "1")
-            page.click('#restockForm button[type="submit"]')
-            page.wait_for_function("(n) => document.querySelector('#stockBody tr td:nth-child(4)').textContent.trim().startsWith(String(n))", arg=start_stock + i, timeout=10000)
+            restock(page, 1)
+            page.wait_for_function("(n) => document.querySelector('#stockBody tr td:nth-child(6)').textContent.trim().startsWith(String(n))", arg=start_stock + i, timeout=10000)
         go(page, "settings")
         check(wait_until(lambda: file_json(page)["data"]["products"][0]["stock"] == start_stock + 6), "six quick restocks: the file ends up with the final stock (%s)" % (start_stock + 6))
         wait_status(page, "Backup current")
@@ -199,9 +198,8 @@ try:
         # 7. the file disappears (moved, deleted): the data is safe, the warning is clear, and choosing it again completes the backup
         page.evaluate("async () => { const root = await navigator.storage.getDirectory(); await root.removeEntry('invoisy-data.json'); }")
         go(page, "stock")
-        page.fill("#rQty", "1")
-        page.click('#restockForm button[type="submit"]')
-        page.wait_for_function("document.querySelector('#stockBody tr td:nth-child(4)').textContent.trim().startsWith(String(%d))" % (start_stock + 7))
+        restock(page, 1)
+        page.wait_for_function("document.querySelector('#stockBody tr td:nth-child(6)').textContent.trim().startsWith(String(%d))" % (start_stock + 7))
         go(page, "settings")
         wait_status(page, "Backup pending (the last attempt failed)")
         check("not found" in text(page, "#autoError").lower(), "missing file: the error says it was not found")

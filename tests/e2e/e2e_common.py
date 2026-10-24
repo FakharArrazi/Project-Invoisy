@@ -25,3 +25,21 @@ def wait_payment_recorded(page):
 def wait_idle(page):
     """Nothing is being saved any more (the buttons that are disabled while a save runs are enabled again)."""
     page.wait_for_function("!document.getElementById('autoGrant').disabled && !document.getElementById('autoRetry').disabled", timeout=10000)
+
+
+# The Stock page shows its product form (and nothing else changes stock quantities) after the redesign:
+# "Add New Product" opens the form above the table, and a quantity is changed with Edit.
+def open_product_form(page):
+    """Opens the Stock page's product form (a no-op when it is already open)."""
+    if page.is_hidden("#stockFormPanel"):
+        page.click("#stockAddToggle")
+    page.wait_for_selector("#stockFormPanel", state="visible")
+
+def restock(page, qty, row=0):
+    """Adds `qty` to the quantity of table row `row` (0 = the first row) the way a person does it now: Edit, change Stock quantity, Save."""
+    page.locator("#stockBody tr").nth(row).locator('[data-action="edit"]').click()
+    page.wait_for_selector("#stockFormPanel", state="visible")
+    total = float(page.input_value("#pStock") or 0) + qty
+    page.fill("#pStock", str(int(total)) if total == int(total) else str(total))
+    page.click("#productSubmit")
+    page.wait_for_selector("#stockFormPanel", state="hidden")

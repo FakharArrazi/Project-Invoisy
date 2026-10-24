@@ -18,6 +18,7 @@ What it covers:
 import socket, subprocess, sys, time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+from e2e_common import open_product_form, restock
 
 ROOT = Path(__file__).resolve().parents[2]
 RES = "#results .result"
@@ -147,9 +148,7 @@ def other_window_saves(ctx, url):
     other.goto(url)
     ready(other)
     go(other, "stock")
-    other.select_option("#rProduct", index=1)
-    other.fill("#rQty", "1")
-    other.click('#restockForm button[type="submit"]')
+    restock(other, 1, row=1)
     other.wait_for_timeout(400)
     other.close()
 
@@ -185,6 +184,7 @@ try:
         page.click("#loadDemo")
         page.wait_for_timeout(300)
         go(page, "stock")
+        open_product_form(page)
         page.fill("#pName", "Stability Tile")
         page.fill("#pTileSize", "60*60")
         page.fill("#pManufacturer", "Test Maker")
@@ -193,9 +193,7 @@ try:
         page.fill("#pStock", "20")
         page.click("#productSubmit")
         check(eventually(lambda: page.evaluate("document.getElementById('stockBody').textContent.includes('Stability Tile')")), "a product is added and appears in the stock table")
-        page.select_option("#rProduct", index=1)
-        page.fill("#rQty", "3")
-        page.click('#restockForm button[type="submit"]')
+        restock(page, 3, row=1)
         page.wait_for_timeout(200)
         go(page, "sell")
         page.fill("#custName", "Karim")
@@ -273,9 +271,7 @@ try:
         check(page.input_value("#custName") == "Next customer", "and what was typed is still there")
         add_item(page, "choc", 1)
         go(page, "stock")
-        page.select_option("#rProduct", index=1)
-        page.fill("#rQty", "2")
-        page.click('#restockForm button[type="submit"]')
+        restock(page, 2, row=1)
         reloads = watch(page, 2500)
         check(reloads == 0 and len(prompts) == prompts_before, f"a restock while a sale is open: no reload, no prompt ({reloads} reloads)")
         go(page, "sell")
@@ -321,17 +317,11 @@ try:
         typed_then_redrawn(page, "sell: a quantity in the sale table", "#saleBody input[data-field=qty]", "1")
         go(page, "stock")
         typed_then_redrawn(page, "stock: filter", "#stockFilter")
-        typed_then_redrawn(page, "stock: restock quantity", "#rQty", "5")
         page.fill("#stockFilter", "")
-        btn = page.locator('#stockBody [data-action="inc"]').first
-        btn.focus()
-        page.keyboard.press("Enter")
-        page.wait_for_timeout(300)
-        check(page.evaluate("document.activeElement.dataset.action") == "inc", "stock: after + with the keyboard the focus stays on the button")
-        before = page.locator("#stockBody tr").first.inner_text()
-        page.keyboard.press("Enter")
-        page.wait_for_timeout(300)
-        check(page.locator("#stockBody tr").first.inner_text() != before, "so a second Enter adds again")
+        open_product_form(page)
+        typed_then_redrawn(page, "stock: product form name", "#pName", "abc")
+        page.click("#stockAddToggle")   # Close Form: the typed name is unsaved, so the page asks (the dialog handler accepts)
+        page.wait_for_selector("#stockFormPanel", state="hidden")
         go(page, "invoices")
         typed_then_redrawn(page, "invoices: filter", "#invoiceFilter")
         page.fill("#invoiceFilter", "")

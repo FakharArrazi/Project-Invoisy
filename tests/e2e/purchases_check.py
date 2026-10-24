@@ -10,7 +10,7 @@ import json, os, sys, tempfile
 from datetime import date, timedelta
 from pathlib import Path
 from playwright.sync_api import sync_playwright
-from e2e_common import SKIP_SALE_DIALOG
+from e2e_common import SKIP_SALE_DIALOG, open_product_form
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()
 OUT = tempfile.mkdtemp(prefix="invoisy-purchases-e2e-")
@@ -53,7 +53,7 @@ def pick_product(page, lid, query):
 def stock_of(page, name):
     go(page, "stock")
     row = page.locator("#stockBody tr", has_text=name).first
-    return row.locator("td").nth(3).inner_text().strip()
+    return row.locator("td").nth(5).inner_text().strip()
 
 today = date.today()
 iso = lambda d: d.isoformat()
@@ -78,6 +78,7 @@ with sync_playwright() as p:
 
     # --- a product that sells by m² and is bought by the box
     go(page, "stock")
+    open_product_form(page)
     page.fill("#pName", "Tile A")
     page.fill("#pTileSize", "60*60")
     page.fill("#pCoveragePerBox", "1.44")

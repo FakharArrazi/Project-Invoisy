@@ -10,7 +10,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from e2e_common import SKIP_SALE_DIALOG
+from e2e_common import SKIP_SALE_DIALOG, open_product_form
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()
 SHOTS = os.environ.get("INVOISY_SHOTS")
@@ -43,6 +43,7 @@ def shot(page, name):
 
 def add_product(page, name, price, unit, stock, size="60*60", coverage="1.44"):
     go(page, "stock")
+    open_product_form(page)
     page.fill("#pName", name)
     page.fill("#pTileSize", size)
     page.fill("#pCoveragePerBox", coverage)

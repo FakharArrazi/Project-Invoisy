@@ -1,0 +1,94 @@
+/* Stock page: header, product form (opens inline above the table), search / sort toolbar and the product table.
+   It reuses the colours, borders, radii and controls of the rest of the app. No animation or transition is used anywhere here. */
+
+/* ---------- Header: STOCK on one side, the blue "Add New Product" button on the other ---------- */
+
+/* The page's top spacing is the header's margin here, not <main>'s padding, so the sticky table header (below) sits flush at the top edge. */
+.app[data-view="stock"] main { padding-top: 0; }
+.stock-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 20px 0 16px; }
+.stock-title { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.stock-add-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex: none; min-height: 42px; padding: 0 20px; font-size: 15px; font-weight: 600; white-space: nowrap; }
+.stock-add-icon { display: inline-flex; flex: none; }
+.stock-add-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------- The product form ---------- */
+
+.stock-form-panel { padding: 20px; }
+.stock-form-panel h2 { margin-bottom: 16px; font-size: 16px; }
+
+/* Three groups side by side: the product information across the full width, then the prices next to the stock information. */
+.stock-form-panel .product-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.stock-form-panel .form-section { min-width: 0; margin: 0; padding: 12px 16px 6px; }
+.stock-form-panel .form-section legend { font-weight: 600; }
+
+/* Product information: name (two columns), type and manufacturer on the first line; then size, SKU, category and description. */
+.stock-form-panel .product-fields > .form-section:first-child { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-flow: row dense; column-gap: 14px; }
+.stock-form-panel .product-fields > .form-section:first-child .grid-2 { display: contents; }
+.stock-form-panel .product-fields > .form-section:first-child > .field:first-of-type { grid-column: span 2; }
+.stock-form-panel .similar-box { grid-column: 1 / -1; margin: 0 0 10px; }
+
+.stock-form-panel .field { margin-bottom: 12px; }
+.stock-form-panel input, .stock-form-panel select { min-height: 38px; }
+
+/* Save stays reachable even when the form is taller than the screen. */
+.stock-form-actions { position: sticky; bottom: 0; z-index: 2; margin: 8px -20px -20px; padding: 14px 20px; background: var(--panel); border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; }
+.stock-form-actions .btn { min-height: 42px; padding: 0 24px; font-size: 15px; }
+.stock-form-actions .btn.primary { font-weight: 600; }
+
+/* ---------- Search and sort ---------- */
+
+.stock-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px; margin-bottom: 14px; }
+
+.stock-search { position: relative; flex: 1 1 320px; max-width: 520px; }
+.stock-search svg { position: absolute; top: 50%; inset-inline-start: 13px; width: 18px; height: 18px; margin-top: -9px; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.stock-search input { height: 42px; padding-inline-start: 40px; padding-inline-end: 12px; font-size: 14px; border-radius: 6px; }
+
+.stock-sort { display: flex; align-items: center; gap: 8px; }
+.stock-sort label { margin: 0; color: var(--muted); white-space: nowrap; }
+.stock-sort select { width: auto; min-width: 250px; height: 42px; border-radius: 6px; }
+
+/* ---------- The table ---------- */
+
+.stock-table { border-collapse: separate; border-spacing: 0; }
+.stock-table th, .stock-table td { padding: 12px 14px; vertical-align: middle; border-bottom: 1px solid var(--border); }
+.stock-table thead th { background: #f6f8fa; border-bottom-color: var(--border-strong); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+.stock-table tbody tr:last-child td { border-bottom: 0; }
+
+.stock-table .col-index { width: 56px; text-align: center; font-variant-numeric: tabular-nums; }
+.stock-table .stock-name { min-width: 170px; font-weight: 600; overflow-wrap: anywhere; }
+.stock-table .stock-size { white-space: nowrap; }
+.stock-table .stock-maker { overflow-wrap: anywhere; }
+.stock-table .stock-price div, .stock-table .stock-qty div { white-space: nowrap; }
+.stock-table .stock-price div + div { margin-top: 2px; }
+.stock-table .row-actions { display: flex; flex-wrap: nowrap; justify-content: flex-end; gap: 8px; }
+.stock-table .row-actions .btn { padding: 5px 12px; font-size: 13px; }
+
+/* Wide screens: the page scrolls inside <main>, so the header row can stay in view while a long list scrolls. */
+@media (min-width: 1181px) {
+  .stock-table-wrap { overflow: visible; }
+  .stock-table thead th { position: sticky; top: 0; z-index: 1; box-shadow: 0 1px 0 var(--border-strong); }
+}
+
+/* ---------- Smaller screens ---------- */
+
+@media (max-width: 1000px) {
+  .stock-form-panel .product-fields { grid-template-columns: minmax(0, 1fr); }
+  .stock-form-panel .product-fields > .form-section:first-child { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 720px) {
+  .stock-form-panel { padding: 14px; }
+  .stock-form-panel .product-fields > .form-section:first-child { grid-template-columns: minmax(0, 1fr); }
+  .stock-form-panel .product-fields > .form-section:first-child > .field:first-of-type { grid-column: auto; }
+  .stock-form-panel .grid-2.price-row { grid-template-columns: minmax(0, 1fr); }
+  .stock-form-actions { margin: 8px -14px -14px; padding: 12px 14px; }
+  .stock-form-actions .btn { flex: 1 1 0; padding: 0 12px; }
+  .stock-search { flex-basis: 100%; max-width: none; }
+  .stock-sort { width: 100%; }
+  .stock-sort select { flex: 1 1 auto; min-width: 0; }
+}
+
+@media (max-width: 480px) {
+  .stock-title { font-size: 19px; }
+  .stock-add-btn { padding: 0 14px; font-size: 14px; }
+}

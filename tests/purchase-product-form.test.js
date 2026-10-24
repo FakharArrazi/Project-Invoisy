@@ -239,8 +239,11 @@ test("the Stock page and a purchase draw the same product form", () => {
   const purchaseHtml = ProductForm.create({ prefix: "pl-1-np-", stockFromPurchase: true }).html();
   const keys = (markup) => [...markup.matchAll(/data-i18n(?:-placeholder)?="([^"]+)"/g)].map((m) => m[1]);
   const extra = keys(purchaseHtml).filter((k) => !keys(stockHtml).includes(k));
-  assert.deepEqual(extra, ["pur.newProductStockNote"], "the purchase form has every label of the Stock form, plus one note");
-  assert.deepEqual(keys(stockHtml), keys(purchaseHtml).filter((k) => k !== "pur.newProductStockNote"), "in the same order");
+  // The Stock page's own form has no instruction paragraph (the prices hint); the purchase dialog keeps it, and adds its stock note.
+  assert.deepEqual(extra, ["stock.pricesHint", "pur.newProductStockNote"], "the purchase form has every label of the Stock form, plus its two notes");
+  assert.deepEqual(keys(stockHtml), keys(purchaseHtml).filter((k) => k !== "pur.newProductStockNote" && k !== "stock.pricesHint"), "in the same order");
+  assert.doesNotMatch(stockHtml, /price-hint/, "no explanatory paragraph in the Stock form");
+  assert.match(purchaseHtml, /price-hint/);
   for (const field of ["Name", "Manufacturer", "TileSize", "Sku", "Category", "Desc", "Stock", "StockUnit", "CoveragePerBox", "Cost"]) {
     assert.match(stockHtml, new RegExp(`id="p${field}"`));
     assert.match(purchaseHtml, new RegExp(`id="pl-1-np-${field}"`));

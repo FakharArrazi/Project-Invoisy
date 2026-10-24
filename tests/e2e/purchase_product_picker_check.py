@@ -17,6 +17,7 @@ What it proves:
 import os, re, sys, tempfile
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+from e2e_common import open_product_form
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()
 SHOTS = os.environ.get("SHOTS")
@@ -58,6 +59,7 @@ def dialog_closed(page):
 
 def add_stock_product(page, name, size, maker, coverage, price, stock_unit=None, stock=None):
     go(page, "stock")
+    open_product_form(page)
     page.fill("#pName", name)
     page.fill("#pTileSize", size)
     page.fill("#pManufacturer", maker)
@@ -78,7 +80,7 @@ def stock_row(page, name):
 
 
 def stock_cell(page, name):
-    return stock_row(page, name).first.locator("td").nth(3).inner_text().strip()
+    return stock_row(page, name).first.locator("td").nth(5).inner_text().strip()
 
 
 def line_ids(page):
@@ -309,8 +311,13 @@ with sync_playwright() as p:
     check(stock_row(page, "Nova Perla").count() == 1, "the new product exists once in Stock (not twice from the double click)")
     check(stock_cell(page, "Nova Perla").startswith("10"), "Nova Perla received 10 boxes (" + stock_cell(page, "Nova Perla") + ")")
     check(stock_cell(page, "BARCELONA Crema").startswith("144"), "BARCELONA Crema received 207.36 m² = 144 boxes (" + stock_cell(page, "BARCELONA Crema") + ")")
-    check("NP-45" in text(page, "#stockBody tr:has-text('Nova Perla')") and "900" in text(page, "#stockBody tr:has-text('Nova Perla')"),
-          "the product kept its SKU and selling price")
+    check("900" in text(page, "#stockBody tr:has-text('Nova Perla')"), "the product kept its selling price")
+    # the table has no SKU column: the SKU is read from the product's Edit form
+    page.locator("#stockBody tr", has_text="Nova Perla").locator('[data-action="edit"]').click()
+    page.wait_for_selector("#stockFormPanel", state="visible")
+    check(page.input_value("#pSku") == "NP-45", "the product kept its SKU")
+    page.click("#stockAddToggle")   # Close Form (nothing was typed, so nothing is asked)
+    page.wait_for_selector("#stockFormPanel", state="hidden")
 
     # ---------- 6. it is really saved: reload ----------
     page.reload()

@@ -6,6 +6,7 @@
   <title>Invoisy</title>
   <link rel="stylesheet" href="css/style.css">
   <link rel="stylesheet" href="css/pricing.css">
+  <link rel="stylesheet" href="css/stock.css">
   <link rel="stylesheet" href="css/rtl.css">
   <style id="paperStyle"></style>
   <script id="noNativeSubmit">
@@ -208,65 +209,68 @@
 
     <!-- STOCK -->
     <section class="view" id="view-stock" hidden>
-      <h1 class="sr-only" data-i18n="nav.stock">Stock</h1>
-      <div class="stock-layout">
+      <header class="stock-header">
+        <h1 class="stock-title" data-i18n="nav.stock">Stock</h1>
+        <button type="button" class="btn primary stock-add-btn" id="stockAddToggle" aria-expanded="false" aria-controls="stockFormPanel">
+          <span class="stock-add-icon" id="stockAddPlus" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>
+          <span class="stock-add-icon" id="stockAddClose" aria-hidden="true" hidden><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
+          <span id="stockAddLabel">Add New Product</span>
+        </button>
+      </header>
 
-        <div class="panel">
-          <h2 id="productFormTitle">Add product</h2>
-          <form id="productForm" novalidate>
-            <!-- The fields are drawn by java script/product-form.js, the same form a purchase uses for a new product. -->
-            <div id="productFields"></div>
-            <datalist id="categoryList"></datalist>
-            <p class="error" id="productError" role="alert"></p>
-            <div class="actions left">
-              <button type="submit" class="btn primary" id="productSubmit">Add Product</button>
-              <button type="button" class="btn" id="productCancel" data-i18n="common.cancel" hidden>Cancel</button>
-            </div>
-          </form>
-        </div>
-
-        <div>
-          <div class="panel">
-            <h2 data-i18n="stock.addStockTitle">Add stock</h2>
-            <form class="restock" id="restockForm" novalidate>
-              <div class="field">
-                <label for="rProduct" data-i18n="col.product">Product</label>
-                <select id="rProduct"></select>
-              </div>
-              <div class="field">
-                <label for="rQty" data-i18n="stock.quantityToAdd">Quantity to add</label>
-                <input type="number" id="rQty" min="0" step="any" placeholder="0">
-              </div>
-              <button type="submit" class="btn primary" data-i18n="stock.addStockBtn">Add Stock</button>
-            </form>
-            <p class="muted" id="restockInfo"></p>
-            <p class="error" id="restockError" role="alert"></p>
+      <!-- The product form opens here, inside the page (no dialog), and pushes the table down while it is open. -->
+      <div class="panel stock-form-panel" id="stockFormPanel" hidden>
+        <h2 id="productFormTitle">Add product</h2>
+        <form id="productForm" novalidate>
+          <!-- The fields are drawn by java script/product-form.js, the same form a purchase uses for a new product. -->
+          <div id="productFields"></div>
+          <datalist id="categoryList"></datalist>
+          <p class="error" id="productError" role="alert"></p>
+          <div class="actions left stock-form-actions">
+            <button type="submit" class="btn primary" id="productSubmit">Save Product</button>
+            <button type="button" class="btn" id="productCancel" data-i18n="common.cancel">Cancel</button>
           </div>
+        </form>
+      </div>
 
-          <div class="panel">
-            <div class="panel-head">
-              <h2 data-i18n="stock.products">Products</h2>
-              <label class="sr-only" for="stockFilter" data-i18n="stock.filterLabel">Filter products</label>
-              <input type="search" id="stockFilter" placeholder="Filter products..." data-i18n-placeholder="stock.filterPlaceholder" autocomplete="off">
-            </div>
-            <div class="table-wrap">
-              <table class="table" id="stockTable">
-                <thead>
-                  <tr>
-                    <th data-i18n="col.product">Product</th>
-                    <th data-i18n="col.sku">SKU</th>
-                    <th class="num" data-i18n="col.price">Price</th>
-                    <th class="num" data-i18n="col.stock">Stock</th>
-                    <th class="num" data-i18n="col.actions">Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="stockBody"></tbody>
-              </table>
-            </div>
-            <div class="empty" id="stockEmpty" hidden></div>
+      <div class="panel stock-list">
+        <div class="stock-toolbar" id="stockToolbar">
+          <div class="stock-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+            <label class="sr-only" for="stockFilter" data-i18n="stock.filterLabel">Search products</label>
+            <input type="search" id="stockFilter" placeholder="Search products..." data-i18n-placeholder="stock.filterPlaceholder" autocomplete="off">
+          </div>
+          <div class="stock-sort">
+            <label for="stockSort" data-i18n="stock.sortBy">Sort by</label>
+            <select id="stockSort">
+              <option value="name-asc" data-i18n="stock.sort.nameAsc">Product name: A–Z</option>
+              <option value="name-desc" data-i18n="stock.sort.nameDesc">Product name: Z–A</option>
+              <option value="manufacturer-asc" data-i18n="stock.sort.manufacturerAsc">Manufacturer: A–Z</option>
+              <option value="manufacturer-desc" data-i18n="stock.sort.manufacturerDesc">Manufacturer: Z–A</option>
+              <option value="size-asc" data-i18n="stock.sort.sizeAsc">Tile size: smallest to largest</option>
+              <option value="size-desc" data-i18n="stock.sort.sizeDesc">Tile size: largest to smallest</option>
+              <option value="qty-asc" data-i18n="stock.sort.qtyAsc">Quantity: lowest to highest</option>
+              <option value="qty-desc" data-i18n="stock.sort.qtyDesc">Quantity: highest to lowest</option>
+            </select>
           </div>
         </div>
-
+        <div class="table-wrap stock-table-wrap">
+          <table class="table stock-table" id="stockTable">
+            <thead>
+              <tr>
+                <th class="col-index" scope="col">#</th>
+                <th scope="col" data-i18n="col.product">Product</th>
+                <th scope="col" data-i18n="col.tileSize">Tile Size</th>
+                <th scope="col" data-i18n="col.manufacturer">Manufacturer</th>
+                <th class="num" scope="col" data-i18n="col.price">Price</th>
+                <th class="num" scope="col" data-i18n="col.quantity">Quantity</th>
+                <th class="num" scope="col" data-i18n="col.actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="stockBody"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="stockEmpty" hidden></div>
       </div>
     </section>
 

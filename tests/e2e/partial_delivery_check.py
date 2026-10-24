@@ -6,7 +6,7 @@ Walks the example of the feature: 15 boxes sold and paid, 10 in the warehouse, 5
 import os, sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
-from e2e_common import SKIP_SALE_DIALOG, wait_invoice_shown
+from e2e_common import SKIP_SALE_DIALOG, wait_invoice_shown, open_product_form, restock
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()
 problems = []
@@ -36,6 +36,7 @@ with sync_playwright() as p:
 
     # Product: 1,000 DA per box, 10 boxes in stock
     go(page, "stock")
+    open_product_form(page)
     page.fill("#pName", "Golden Era")
     page.locator("#priceRows input[data-field='price']").first.fill("1000")
     page.locator("#priceRows select[data-field='unit']").first.select_option("box")
@@ -67,7 +68,7 @@ with sync_playwright() as p:
     page.click("#completeSale")
     wait_invoice_shown(page, "INV-000001")
     go(page, "stock")
-    check(page.locator("#stockBody tr td").nth(3).inner_text().strip().startswith("0"), "only the 10 delivered boxes left stock (0 left): " + stock_text(page))
+    check(page.locator("#stockBody tr td").nth(5).inner_text().strip().startswith("0"), "only the 10 delivered boxes left stock (0 left): " + stock_text(page))
 
     # Invoices list: paid AND awaiting collection, two separate statuses
     go(page, "invoices")
@@ -87,9 +88,7 @@ with sync_playwright() as p:
 
     # Restock 3, over-delivery and over-stock are refused, then collect 3
     go(page, "stock")
-    page.select_option("#rProduct", index=0)
-    page.fill("#rQty", "3")
-    page.click('#restockForm button[type="submit"]')
+    restock(page, 3)
     go(page, "invoices")
     page.click('#invoiceBody [data-action="collect"]')
     page.fill("[data-collect-qty]", "6")
@@ -124,8 +123,7 @@ with sync_playwright() as p:
 
     # Finish: restock and collect the last 2
     go(page, "stock")
-    page.fill("#rQty", "2")
-    page.click('#restockForm button[type="submit"]')
+    restock(page, 2)
     go(page, "invoices")
     page.click('#invoiceBody [data-action="collect"]')
     page.click("#collectAll")

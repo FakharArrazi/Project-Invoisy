@@ -143,10 +143,14 @@ function productDetails(product) {
 
 // "1,000 DA / m² · 300 DA / piece · 1,440 DA / box": every price the product has, each with its own unit.
 // A product saved without a price unit shows just the amount.
-function priceLabel(product) {
+function priceLines(product) {
   const prices = Calc.getSellingPrices(product);
-  if (prices.length === 0) return money(product.sellingPrice);
-  return prices.map((entry) => `${money(entry.price)} / ${Calc.unitLabel(entry.unit)}`).join(" · ");
+  if (prices.length === 0) return [money(product.sellingPrice)];
+  return prices.map((entry) => `${money(entry.price)} / ${Calc.unitLabel(entry.unit)}`);
+}
+
+function priceLabel(product) {
+  return priceLines(product).join(" · ");
 }
 
 // "20 Boxes" (stock counted in boxes), or just "20" for an old product with no stock unit.
@@ -155,12 +159,18 @@ function stockText(product, amount = product.stock) {
   return numberFormat.format(amount) + (unit ? ` ${unit}` : "");
 }
 
-// "20 Boxes (80 Pieces)": the stock also shown in pieces when it is counted in boxes.
-function stockLabel(product) {
-  const text = stockText(product);
-  if (product.stockUnit !== "box") return text;
+// The stock as { main: "20 Boxes", sub: "80 Pieces" }: the stock also shown in pieces when it is counted in boxes ("" otherwise).
+function stockParts(product) {
+  const main = stockText(product);
+  if (product.stockUnit !== "box") return { main, sub: "" };
   const pieces = Calc.stockIn(product, "piece");
-  return pieces.error ? text : `${text} (${stockText({ stockUnit: "piece" }, pieces.value)})`;
+  return { main, sub: pieces.error ? "" : stockText({ stockUnit: "piece" }, pieces.value) };
+}
+
+// "20 Boxes (80 Pieces)"
+function stockLabel(product) {
+  const { main, sub } = stockParts(product);
+  return sub ? `${main} (${sub})` : main;
 }
 
 // "60*120" or "60 × 120 cm" -> "60 × 120"
@@ -230,6 +240,8 @@ const state = {
   selectedId: null,       // product selected in the picker
   previewInvoice: null,   // saved invoice shown in the preview (null = live sale)
   editingId: null,        // product being edited in the Stock form
+  productFormOpen: false, // the Stock page's product form is open above the table (screen-only)
+  stockSort: "name-asc",  // how the Stock table is ordered (screen-only; the stored product order never changes)
   priceRows: [],          // the selling price rows of the Stock form, as typed: { rowId, unit, price } (kept by stockForm)
   addUnitFor: null,       // product the Sell page unit list was last set up for
   debtUi: { armed: false, dismissedKey: null, suggestions: [], suggestIndex: -1 },   // screen-only: never saved
@@ -826,14 +838,65 @@ function findProduct(id, data = state) {
   return data.products.find((p) => p.id === id);
 }
 
-function searchProducts(query) {
+// The products matching every word typed (name, manufacturer, tile size, SKU, category), in stored order.
+function filterProducts(query) {
   const terms = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
-  return state.products
-    .filter((p) => {
-      const haystack = (p.name + " " + (p.manufacturer || "") + " " + p.tileSize + " " + p.sku + " " + p.category).toLowerCase();
-      return terms.every((t) => haystack.includes(t));
-    })
-    .sort((a, b) => productLabel(a).localeCompare(productLabel(b)));
+  return state.products.filter((p) => {
+    const haystack = (p.name + " " + (p.manufacturer || "") + " " + p.tileSize + " " + p.sku + " " + p.category).toLowerCase();
+    return terms.every((t) => haystack.includes(t));
+  });
+}
+
+function searchProducts(query) {
+  return filterProducts(query).sort((a, b) => productLabel(a).localeCompare(productLabel(b)));
+}
+
+/* ---------- Stock table: tile size and sorting ----------
+   Sorting only orders the list that is drawn; state.products (and what is saved) keeps its own order. */
+
+// "60 × 120 cm": the stored size (kept in cm as "60*120") in one readable format. Text that is not a size (an old product) is shown as typed.
+function tileSizeLabel(product) {
+  const raw = String((product && product.tileSize) || "").trim();
+  if (!raw) return "";
+  const size = Calc.parseTileSize(raw);
+  if (!size) return ltr(raw);
+  const n = (value) => numberFormat.format(Calc.cleanNumber(value));
+  return ltr(`${n(size.width)} × ${n(size.height)} cm`);
+}
+
+// The area of one piece in cm² (30 × 60 = 1800), or null when the product has no readable size.
+function tileArea(product) {
+  const size = Calc.parseTileSize(product && product.tileSize);
+  return size ? size.width * size.height : null;
+}
+
+const STOCK_SORTS = ["name-asc", "name-desc", "manufacturer-asc", "manufacturer-desc", "size-asc", "size-desc", "qty-asc", "qty-desc"];
+
+// A copy of the list in the order the Stock page asks for ("name-asc", "size-desc" ...). A product with nothing to compare (no
+// manufacturer, no readable size) goes last whichever way the list is sorted; ties keep the usual name / size / manufacturer order.
+function sortProducts(list, key) {
+  const [field, direction] = String(STOCK_SORTS.includes(key) ? key : "name-asc").split("-");
+  const sign = direction === "desc" ? -1 : 1;
+  const text = (value) => String(value == null ? "" : value).trim();
+  const number = (value) => (value === null || value === "" || !Number.isFinite(Number(value)) ? null : Number(value));
+  const valueOf = {
+    name: (p) => text(p.name),
+    manufacturer: (p) => text(p.manufacturer),
+    size: (p) => tileArea(p),
+    qty: (p) => number(p.stock),
+  }[field];
+  const missing = (v) => v === null || v === "";
+  const byLabel = (a, b) => productLabel(a).localeCompare(productLabel(b));
+  return [...list].sort((a, b) => {
+    const va = valueOf(a);
+    const vb = valueOf(b);
+    if (missing(va) !== missing(vb)) return missing(va) ? 1 : -1;
+    if (!missing(va)) {
+      const order = typeof va === "number" ? va - vb : va.localeCompare(vb);
+      if (order !== 0) return order * sign;
+    }
+    return byLabel(a, b);
+  });
 }
 
 // Sell page search: nothing is listed until the user types. Best matches first:
@@ -880,9 +943,9 @@ async function addProduct(values) {
     notify(r.error, "error");
     return;
   }
-  resetProductForm();
+  closeProductForm({ force: true });
   renderAll();
-  $("pName").focus();
+  $("stockAddToggle").focus();
 }
 
 async function updateProduct(id, values) {
@@ -896,8 +959,9 @@ async function updateProduct(id, values) {
     notify(r.error, "error");
     return;
   }
-  resetProductForm();
+  closeProductForm({ force: true });
   renderAll();
+  $("stockAddToggle").focus();
 }
 
 async function deleteProduct(id) {
@@ -908,22 +972,12 @@ async function deleteProduct(id) {
   if (r.error) { notify(r.error, "error"); return; }
   state.sale.items = state.sale.items.filter((i) => i.productId !== id);
   if (state.selectedId === id) state.selectedId = null;
-  if (state.editingId === id) resetProductForm();
+  if (state.editingId === id) closeProductForm({ force: true });
   renderAll();
 }
 
-async function adjustStock(id, delta) {
-  const r = await commit((d) => {
-    const product = findProduct(id, d);
-    if (!product) return { skip: true };
-    product.stock = Math.max(0, Calc.cleanNumber(product.stock + delta));
-  });
-  if (r.error) { notify(r.error, "error"); return; }
-  renderStock();
-  renderResults();
-  renderSelected();
-}
-
+// Adds boxes / pieces / ... to a product's stock (checked, saved atomically). The Stock page no longer has a screen for it (a product's
+// stock is changed by editing the product); this is the one tested way to add to a stock quantity.
 async function addStock(id, rawQty) {
   if (!findProduct(id)) return { error: t("product.selectFirst") };
   const stockUnit = findProduct(id).stockUnit;
@@ -957,8 +1011,7 @@ function suggestionHtml(p, typedSize) {
     `<div class="similar-text"><strong>${esc(p.name)}</strong>` +
     `<span class="muted small">${esc(details.length ? details.join(" · ") : t("stock.similar.noDetails"))}</span>` +
     (same ? `<span class="similar-same small">${esc(t("stock.similar.sameSize"))}</span>` : "") + `</div>` +
-    `<div class="similar-actions"><button type="button" class="btn small" data-similar="view">${esc(t("stock.similar.view"))}</button>` +
-    `<button type="button" class="btn small" data-similar="stock">${esc(t("stock.similar.addStock"))}</button></div></li>`;
+    `<div class="similar-actions"><button type="button" class="btn small" data-similar="view">${esc(t("stock.similar.view"))}</button></div></li>`;
 }
 
 function renderProductSuggestions() {
@@ -968,35 +1021,61 @@ function renderProductSuggestions() {
   if (!query.trim()) { box.hidden = true; box.innerHTML = ""; return; }
   const found = productSuggestions();
   const typedSize = Calc.normalizeTileSize($("pTileSize").value);
-  box.hidden = false;
+  box.hidden = found.length === 0;
   box.innerHTML = found.length
-    ? `<p class="small"><strong>${esc(t("stock.similar.title"))}</strong> <span class="muted">${esc(t("stock.similar.hint"))}</span></p><ul class="similar-list">${found.map((p) => suggestionHtml(p, typedSize)).join("")}</ul>`
-    : `<p class="muted small">${esc(t("stock.similar.none"))}</p>`;
+    ? `<p class="small"><strong>${esc(t("stock.similar.title"))}</strong></p><ul class="similar-list">${found.map((p) => suggestionHtml(p, typedSize)).join("")}</ul>`
+    : "";
 }
 
-// A suggestion's buttons: open the product to review or edit it, or go straight to adding stock to it.
-function useSuggestion(id, action) {
-  const p = findProduct(id);
-  if (!p) return false;
-  if (action === "stock") {
-    $("rProduct").value = id;
-    renderRestockInfo();
-    $("rQty").focus();
-  } else startEditProduct(id);
+// A suggestion's button opens that product to review or edit it (its stock is changed there too).
+function useSuggestion(id) {
+  if (!findProduct(id)) return false;
+  startEditProduct(id);
+  return true;
+}
+
+// Typed work in the product form is never thrown away silently: leaving it asks first.
+function confirmDiscardProductForm() {
+  return !(state.productFormOpen && productFormTouched) || confirm(t("stock.discardConfirm"));
+}
+
+// Brings the (open) product form into view; the table below it simply moves down.
+function revealProductForm() {
+  const panel = $("stockFormPanel");
+  if (panel && typeof panel.scrollIntoView === "function") panel.scrollIntoView({ block: "nearest" });
+}
+
+function openProductForm() {
+  state.productFormOpen = true;
+  renderProductFormMode();
+  revealProductForm();
+  $("pName").focus();
+}
+
+// Closes the form and clears it. force: true skips the question (the product was just saved, or no longer exists).
+function closeProductForm(options) {
+  if (!(options && options.force) && !confirmDiscardProductForm()) return false;
+  state.productFormOpen = false;
+  resetProductForm();
   return true;
 }
 
 function startEditProduct(id) {
   const p = findProduct(id);
   if (!p) return;
+  if (!confirmDiscardProductForm()) return;
   state.editingId = id;
+  state.productFormOpen = true;
+  productFormTouched = false;
   stockForm.fill(p);
   renderProductFormMode();
   clearProductErrors();
   renderProductSuggestions();
+  revealProductForm();
   $("pName").focus();
 }
 
+// Empties the form and goes back to "new product" (whether the form is shown is state.productFormOpen's business).
 function resetProductForm() {
   state.editingId = null;
   productFormTouched = false;
@@ -1007,12 +1086,17 @@ function resetProductForm() {
   resumeBackup();   // nothing typed is left on this form: a waiting backup file may be written
 }
 
-// The Stock form's title and buttons depend on whether a product is being edited.
+// The Stock page's button, the form's title and its Save button depend on whether the form is open and whether a product is being edited.
 function renderProductFormMode() {
   const editing = Boolean(state.editingId);
+  const open = Boolean(state.productFormOpen);
+  $("stockFormPanel").hidden = !open;
+  $("stockAddToggle").setAttribute("aria-expanded", open ? "true" : "false");
+  $("stockAddPlus").hidden = open;
+  $("stockAddClose").hidden = !open;
+  $("stockAddLabel").textContent = t(open ? "stock.closeForm" : "stock.addNewProduct");
   $("productFormTitle").textContent = t(editing ? "stock.editProduct" : "stock.addProduct");
-  $("productSubmit").textContent = t(editing ? "stock.saveChanges" : "stock.addProductBtn");
-  $("productCancel").hidden = !editing;
+  $("productSubmit").textContent = t(editing ? "stock.saveChanges" : "stock.saveProduct");
 }
 
 function clearProductErrors() {
@@ -3313,13 +3397,33 @@ function renderStock() {
   return keepFocus(renderStockNow);
 }
 
+// One row of the Stock table: row number, product, tile size, manufacturer, price(s), quantity, Edit / Delete.
+function stockRowHtml(p, number) {
+  const none = '<span class="muted">-</span>';
+  const size = tileSizeLabel(p);
+  const stock = stockParts(p);
+  return `<tr data-id="${esc(p.id)}">` +
+    `<td class="col-index muted">${number}</td>` +
+    `<td class="stock-name">${esc(p.name)}</td>` +
+    `<td class="stock-size">${size ? esc(size) : none}</td>` +
+    `<td class="stock-maker">${p.manufacturer ? esc(p.manufacturer) : none}</td>` +
+    `<td class="num stock-price">${priceLines(p).map((line) => `<div>${esc(line)}</div>`).join("")}</td>` +
+    `<td class="num stock-qty"><div>${esc(stock.main)}${stockBadge(p.stock)}</div>${stock.sub ? `<div class="muted small">(${esc(stock.sub)})</div>` : ""}</td>` +
+    `<td class="num"><div class="row-actions">` +
+    `<button type="button" class="btn small" data-action="edit" title="${esc(t("stock.editAria", { name: p.name }))}" aria-label="${esc(t("stock.editAria", { name: p.name }))}">${esc(t("common.edit"))}</button>` +
+    `<button type="button" class="btn small danger" data-action="delete" title="${esc(t("stock.deleteAria", { name: p.name }))}" aria-label="${esc(t("stock.deleteAria", { name: p.name }))}">${esc(t("common.delete"))}</button>` +
+    `</div></td></tr>`;
+}
+
 function renderStockNow() {
   renderProductSuggestions();   // the stock list changed: the suggestions follow it
   const hasProducts = state.products.length > 0;
-  const list = searchProducts($("stockFilter").value);
+  // Search first, then sort what was found; the row numbers are the position in this displayed list.
+  const list = sortProducts(filterProducts($("stockFilter").value), state.stockSort);
   const empty = $("stockEmpty");
 
-  $("stockFilter").hidden = !hasProducts;
+  $("stockToolbar").hidden = !hasProducts;
+  $("stockSort").value = state.stockSort;
   $("stockTable").hidden = list.length === 0;
   empty.hidden = list.length > 0;
 
@@ -3332,39 +3436,11 @@ function renderStockNow() {
     empty.innerHTML = `<p class="muted">${esc(t("results.noMatch", { query: $("stockFilter").value }))}</p>`;
   }
 
-  $("stockBody").innerHTML = list.map((p) =>
-    `<tr data-id="${esc(p.id)}">` +
-    `<td><div>${esc(productLabel(p))}</div>${[productDetails(p), p.category].filter(Boolean).length ? `<div class="muted small">${esc([productDetails(p), p.category].filter(Boolean).join(", "))}</div>` : ""}</td>` +
-    `<td>${p.sku ? esc(p.sku) : '<span class="muted">-</span>'}</td>` +
-    `<td class="num">${esc(priceLabel(p))}</td>` +
-    `<td class="num">${esc(stockLabel(p))}${stockBadge(p.stock)}</td>` +
-    `<td class="num"><div class="row-actions">` +
-    `<button type="button" class="btn small" data-action="dec" aria-label="${esc(t("stock.decAria", { name: p.name }))}"${p.stock < 1 ? " disabled" : ""}>-</button>` +
-    `<button type="button" class="btn small" data-action="inc" aria-label="${esc(t("stock.incAria", { name: p.name }))}">+</button>` +
-    `<button type="button" class="btn small" data-action="edit">${esc(t("common.edit"))}</button>` +
-    `<button type="button" class="btn small danger" data-action="delete">${esc(t("common.delete"))}</button>` +
-    `</div></td></tr>`
-  ).join("");
+  $("stockBody").innerHTML = list.map((p, index) => stockRowHtml(p, index + 1)).join("");
 
-  // Restock selector (keep the current choice) and category suggestions.
-  const select = $("rProduct");
-  const previous = select.value;
-  const sorted = [...state.products].sort((a, b) => productLabel(a).localeCompare(productLabel(b)));
-  select.innerHTML = sorted.map((p) => `<option value="${esc(p.id)}">${esc(productLabel(p))}</option>`).join("");
-  if (sorted.some((p) => p.id === previous)) select.value = previous;
-  select.disabled = !hasProducts;
+  // Category suggestions for the product form.
   $("categoryList").innerHTML = [...new Set(state.products.map((p) => p.category).filter(Boolean))]
     .map((c) => `<option value="${esc(c)}"></option>`).join("");
-  renderRestockInfo();
-}
-
-function renderRestockInfo() {
-  const p = findProduct($("rProduct").value);
-  if (!p) { $("restockInfo").textContent = t("restock.addFirst"); return; }
-  const raw = $("rQty").value;
-  const checked = Calc.validateQuantity(raw, p.stockUnit);
-  $("restockInfo").textContent = t("restock.current", { n: stockLabel(p) }) +
-    (!checked.error ? t("restock.after", { n: stockText(p, Calc.cleanNumber(p.stock + checked.value)) }) : "");
 }
 
 // What the history screen shows: the search box, the two filters and the sort, which all work together.
@@ -3809,7 +3885,7 @@ function refreshAfterLoad() {
     showView("invoices");
     notify(t("edit.gone"), "error");
   }
-  if (state.editingId && !findProduct(state.editingId)) resetProductForm();
+  if (state.editingId && !findProduct(state.editingId)) closeProductForm({ force: true });
   if (state.selectedId && !findProduct(state.selectedId)) state.selectedId = null;
   const notes = syncSaleWithProducts();
   showError("saleError", "");
@@ -4343,8 +4419,7 @@ function showView(name, options) {
 }
 
 function goToAddProduct() {
-  showView("stock");
-  $("pName").focus();
+  if (showView("stock")) openProductForm();
 }
 
 /* ==========================================================================
@@ -4628,6 +4703,12 @@ function bindEvents() {
   }
   $("saleDoneDialog").addEventListener("cancel", (e) => { e.preventDefault(); saleDoneAction("later"); });
 
+  // Stock: the header button opens / closes the product form above the table
+  $("stockAddToggle").addEventListener("click", () => {
+    if (state.productFormOpen) closeProductForm();
+    else openProductForm();
+  });
+
   // Stock: product form
   const productForm = $("productForm");
   productForm.addEventListener("submit", (e) => {
@@ -4645,41 +4726,24 @@ function bindEvents() {
       else await addProduct(result.values);
     });
   });
-  $("productCancel").addEventListener("click", resetProductForm);
+  $("productCancel").addEventListener("click", () => {
+    if (closeProductForm()) $("stockAddToggle").focus();
+  });
   // Anything typed or chosen in the Stock form counts as unsaved until the product is saved or the form is cleared.
   productForm.addEventListener("input", () => { productFormTouched = true; });
   productForm.addEventListener("change", () => { productFormTouched = true; });
 
-  // Stock: add stock
-  $("restockForm").addEventListener("submit", (e) => {
-    e.preventDefault();
-    guard(async () => {
-      const result = await addStock($("rProduct").value, $("rQty").value.trim());
-      if (result.error) {
-        showError("restockError", result.error);
-        $("rQty").focus();
-        return;
-      }
-      showError("restockError", "");
-      $("rQty").value = "";
-      renderStock();
-      renderResults();
-      renderSelected();
-      $("rQty").focus();
-    });
-  });
-  $("rProduct").addEventListener("change", renderRestockInfo);
-  $("rQty").addEventListener("input", () => { showError("restockError", ""); renderRestockInfo(); });
-
-  // Stock: table
+  // Stock: search, sort and the table
   $("stockFilter").addEventListener("input", renderStock);
+  $("stockSort").addEventListener("change", () => {
+    state.stockSort = STOCK_SORTS.includes($("stockSort").value) ? $("stockSort").value : "name-asc";
+    renderStock();
+  });
   $("stockBody").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-action]");
     if (!btn) return;
     const id = btn.closest("tr").dataset.id;
-    if (btn.dataset.action === "inc") adjustStock(id, 1);
-    else if (btn.dataset.action === "dec") adjustStock(id, -1);
-    else if (btn.dataset.action === "edit") startEditProduct(id);
+    if (btn.dataset.action === "edit") startEditProduct(id);
     else if (btn.dataset.action === "delete") deleteProduct(id);
   });
 
@@ -4890,7 +4954,19 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     paymentInfo,
     addPayment,
     stockLabel,
+    stockParts,
     stockText,
+    priceLines,
+    tileSizeLabel,
+    tileArea,
+    filterProducts,
+    sortProducts,
+    stockRowHtml,
+    renderStock,
+    openProductForm,
+    closeProductForm,
+    getStockView: () => ({ open: state.productFormOpen, editingId: state.editingId, sort: state.stockSort }),
+    setStockSort: (key) => { state.stockSort = key; },
     unitProblem,
     priceNote,
     linePriceUnit,
@@ -4922,6 +4998,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     loadFromDatabase,
     addProduct,
     updateProduct,
+    deleteProduct,
     addStock,
     completeSale,
     deleteInvoice,

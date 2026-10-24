@@ -7,7 +7,7 @@ Uses a brand new browser profile and a disposable IndexedDB.
 import os, sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
-from e2e_common import wait_idle
+from e2e_common import wait_idle, open_product_form
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()
 problems = []
@@ -71,6 +71,7 @@ with sync_playwright() as p:
 
     # --- stock: a product, then suggestions
     go(page, "stock")
+    open_product_form(page)
     page.fill("#pName", "Tile A")
     page.fill("#pTileSize", "60*60")
     page.fill("#pCoveragePerBox", "1.44")
@@ -79,10 +80,11 @@ with sync_playwright() as p:
     page.fill("#pStock", "10")
     page.click("#productSubmit")
     page.wait_for_selector("#stockBody tr")
+    open_product_form(page)
     page.fill("#pName", "tile-a")
     check("Tile A" in text(page, "#productSimilar") and page.locator("#productSimilar [data-similar='view']").count() == 1, "typing 'tile-a' suggests Tile A")
     page.fill("#pName", "Brand New Thing")
-    check("No similar products found" in text(page, "#productSimilar"), "no match says 'No similar products found'")
+    check(page.is_hidden("#productSimilar"), "no match: the suggestions box stays hidden (no message)")
     page.fill("#pName", "")
     check(page.is_hidden("#productSimilar"), "box hidden when the name is empty")
 
@@ -113,7 +115,7 @@ with sync_playwright() as p:
     row = text(page, "#invoiceBody tr")
     check("Alexandre" in row and "INV-000001" in row and "3,456" in row, "invoice edited in place: " + row.replace("\n", " ")[:100])
     go(page, "stock")
-    check(text(page, "#stockBody tr td:nth-child(4)").startswith("7"), "stock is 7 (10 - 3)")
+    check(text(page, "#stockBody tr td:nth-child(6)").startswith("7"), "stock is 7 (10 - 3)")
 
     # unsaved changes warning
     go(page, "invoices")

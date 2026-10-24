@@ -9,6 +9,7 @@ It opens index.html straight from disk in a brand new browser profile, so no rea
 import os, sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+from e2e_common import open_product_form
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()
 problems = []
@@ -50,6 +51,7 @@ with sync_playwright() as p:
 
     # --- a product, then a sale: Save Invoice opens the dialog
     go(page, "stock")
+    open_product_form(page)
     page.fill("#pName", "Tile A"); page.fill("#pTileSize", "60*60"); page.fill("#pCoveragePerBox", "1.44")
     page.locator("#priceRows input[data-field='price']").first.fill("800")
     page.locator("#priceRows select[data-field='unit']").first.select_option("m2")
@@ -87,7 +89,7 @@ with sync_playwright() as p:
     go(page, "invoices")
     check(page.locator("#invoiceBody tr").count() == 1, "exactly one invoice is saved")
     go(page, "stock")
-    check(page.inner_text("#stockBody tr td:nth-child(4)").strip().startswith("8"), "stock was deducted once (10 - 2 = 8)")
+    check(page.inner_text("#stockBody tr td:nth-child(6)").strip().startswith("8"), "stock was deducted once (10 - 2 = 8)")
 
     # --- typed work: an outside reload asks first, and Cancel keeps everything
     page.evaluate("window.__marker = 'alive'")
@@ -96,6 +98,7 @@ with sync_playwright() as p:
     ready(page)
     go(page, "stock")
     page.evaluate("window.__marker = 'alive'")
+    open_product_form(page)
     page.type("#pName", "Typed by hand", delay=15)
     page.fill("#pStock", "7")
     outside_reload(page, seen)

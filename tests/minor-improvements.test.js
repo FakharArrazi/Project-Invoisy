@@ -590,7 +590,8 @@ test("suggestions: the Stock form shows full name, tile size, type and manufactu
   assert.match(box.innerHTML, /60 ?[×x*] ?60|60\*60/);
   assert.doesNotMatch(box.innerHTML, /Marmo Nero/);
   assert.match(box.innerHTML, /data-similar="view"/);
-  assert.match(box.innerHTML, /data-similar="stock"/);
+  assert.doesNotMatch(box.innerHTML, /data-similar="stock"/, "stock is changed by editing the product: no separate add-stock shortcut");
+  assert.doesNotMatch(box.innerHTML, /Review one or add stock/, "no instruction text in the form");
 
   // Typing is answered from memory: the database is not read again.
   let reads = 0;
@@ -602,13 +603,13 @@ test("suggestions: the Stock form shows full name, tile size, type and manufactu
   assert.match(box.innerHTML, /Marmo Nero/);
 });
 
-test("suggestions: \"No similar products found\" when nothing matches; the box hides when the name is empty", async () => {
+test("suggestions: the box stays hidden (no message) when nothing matches or the name is empty", async () => {
   const ctx = await boot();
   await ctx.api.addProduct(tileValues());
   ctx.app.field("pName").value = "Completely New Thing";
   ctx.api.renderProductSuggestions();
-  assert.equal(ctx.app.field("productSimilar").hidden, false);
-  assert.match(ctx.app.field("productSimilar").innerHTML, /No similar products found/);
+  assert.equal(ctx.app.field("productSimilar").hidden, true);
+  assert.equal(ctx.app.field("productSimilar").innerHTML, "");
   ctx.app.field("pName").value = "";
   ctx.api.renderProductSuggestions();
   assert.equal(ctx.app.field("productSimilar").hidden, true);
@@ -630,7 +631,7 @@ test("suggestions: nothing is merged or deleted; a similar name with another siz
   assert.equal(V.findDuplicateProduct({ name: "Cotto Bianco", manufacturer: "Timgad Ceramic", tileSize: "45*45", sku: "CB-45" }, products), null);
 });
 
-test("suggestions: choosing a suggestion opens it for review or points the restock box at it, without saving anything", async () => {
+test("suggestions: choosing a suggestion opens that product for review / editing, without saving anything", async () => {
   const ctx = await boot();
   const { api, app } = ctx;
   await api.addProduct(tileValues({ name: "Cotto Bianco", sku: "CB-60" }));
@@ -639,8 +640,9 @@ test("suggestions: choosing a suggestion opens it for review or points the resto
   const revision = (await api.db.loadAll()).revision;
   assert.equal(api.useSuggestion(a.id, "view"), true);
   assert.equal(api.getState().editingId, a.id);
-  assert.equal(api.useSuggestion(b.id, "stock"), true);
-  assert.equal(app.field("rProduct").value, b.id);
+  assert.equal(api.getStockView().open, true, "the product form is open on the Stock page");
+  assert.equal(api.useSuggestion(b.id, "view"), true);
+  assert.equal(api.getState().editingId, b.id);
   assert.equal(api.useSuggestion("missing", "view"), false);
   assert.equal((await api.db.loadAll()).revision, revision);
 });

@@ -5,7 +5,7 @@ Optional and manual, like browser_check.py:   python3 tests/e2e/debt_check.py
 import os, sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
-from e2e_common import SKIP_SALE_DIALOG, wait_invoice_shown
+from e2e_common import SKIP_SALE_DIALOG, wait_invoice_shown, open_product_form
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()
 problems = []
@@ -38,6 +38,7 @@ with sync_playwright() as p:
     page.wait_for_function("document.getElementById('dataState').textContent === 'Ready'", timeout=10000)
 
     go(page, "stock")
+    open_product_form(page)
     page.fill("#pName", "Slab")
     page.locator("#priceRows input[data-field='price']").first.fill("1000")
     page.locator("#priceRows select[data-field='unit']").first.select_option("piece")

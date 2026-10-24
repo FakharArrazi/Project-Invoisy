@@ -8,7 +8,7 @@ It uses a brand new browser profile and a disposable IndexedDB, so no real busin
 import json, os, sys, tempfile
 from pathlib import Path
 from playwright.sync_api import sync_playwright
-from e2e_common import SKIP_SALE_DIALOG, wait_invoice_shown, wait_payment_recorded
+from e2e_common import SKIP_SALE_DIALOG, wait_invoice_shown, wait_payment_recorded, open_product_form, restock
 
 URL = os.environ.get("INVOISY_URL") or (Path(__file__).resolve().parents[2] / "index.html").as_uri()   # INVOISY_URL=http://localhost:8000/ to try a web server
 OUT = tempfile.mkdtemp(prefix="invoisy-e2e-")
@@ -45,6 +45,7 @@ with sync_playwright() as p:
 
     # --- create a product through the real form
     go(page, "stock")
+    open_product_form(page)
     page.fill("#pName", "Tile A")
     page.fill("#pTileSize", "60*60")
     page.fill("#pCoveragePerBox", "1.44")
@@ -56,9 +57,8 @@ with sync_playwright() as p:
     check("Tile A" in text(page, "#stockBody"), "product saved and listed")
 
     # --- add stock
-    page.fill("#rQty", "5")
-    page.click('#restockForm button[type="submit"]')
-    page.wait_for_function("document.querySelector('#stockBody tr td:nth-child(4)').textContent.trim().startsWith('15')")
+    restock(page, 5)
+    page.wait_for_function("document.querySelector('#stockBody tr td:nth-child(6)').textContent.trim().startsWith('15')")
     check(True, "restock 10 + 5 = 15")
 
     # --- sell 2 boxes, pay 1000 of 2304
@@ -92,7 +92,7 @@ with sync_playwright() as p:
     page.wait_for_function("document.getElementById('dataState').textContent === 'Ready'", timeout=10000)
     check(text(page, "#dataSummary") == "1 product, 1 invoice", "after reload: 1 product, 1 invoice (read from IndexedDB)")
     go(page, "stock")
-    check(text(page, "#stockBody tr td:nth-child(4)").startswith("13"), "after reload: stock is 13 (15 - 2 sold)")
+    check(text(page, "#stockBody tr td:nth-child(6)").startswith("13"), "after reload: stock is 13 (15 - 2 sold)")
     go(page, "invoices")
     check("Paid" in text(page, "#invoiceBody tr"), "after reload: invoice still Paid")
 
