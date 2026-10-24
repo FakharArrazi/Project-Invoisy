@@ -309,10 +309,16 @@
     }
 
     // Checks what is typed with the one set of product rules. { values } to save, or { field: id of the box, error }.
-    function read() {
-      const checked = Validation.readProductInput(readRaw(), {
+    // read({ asNew: true }) checks the form as a NEW product, even while a product is being edited: nothing is "being edited"
+    // (so the product it started from is checked like any other: its SKU / name cannot be repeated), and the stock starts at 0
+    // like every new product (the quantity on the original is stock, not part of what describes the product).
+    function read(mode) {
+      const asNew = Boolean(mode && mode.asNew);
+      const raw = readRaw();
+      if (asNew) raw.stock = "0";
+      const checked = Validation.readProductInput(raw, {
         products: options.products ? options.products() : [],
-        editing: options.editing ? options.editing() : null,
+        editing: asNew ? null : (options.editing ? options.editing() : null),
         stockFromPurchase: fromPurchase,
       });
       if (!checked.error) return { values: checked.values };

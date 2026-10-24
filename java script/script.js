@@ -932,20 +932,41 @@ const stockForm = ProductForm.create({
 });
 
 // { values } to save, or { field: id of the box, error }.
-function readProductForm() {
-  return stockForm.read();
+function readProductForm(asNew) {
+  return stockForm.read(asNew ? { asNew: true } : undefined);
 }
 
+// Returns true when the product was saved, false when it was not (the form then stays open with what was typed).
 async function addProduct(values) {
   const r = await commit((d) => { d.products.push({ id: uid(), manufacturer: "", ...values }); });
   if (r.error) {
     showError("productError", r.error);
     notify(r.error, "error");
-    return;
+    return false;
   }
   closeProductForm({ force: true });
   renderAll();
   $("stockAddToggle").focus();
+  return true;
+}
+
+// "Save as New Product" while a product is being edited: what the form shows becomes a separate, new product (new id, stock 0,
+// none of the original's invoices, purchases or stock history) through the same create path and the same rules as "Add New
+// Product". The product being edited is never touched. On success the form closes and clears, so nothing typed afterwards can
+// be saved over the original; on any problem the form stays open with what was typed and nothing is saved.
+async function addProductAsNew() {
+  if (!state.editingId) return false;   // the button only exists while a product is being edited
+  clearProductErrors();
+  const result = readProductForm(true);
+  if (result.error) {
+    showError("productError", result.error);
+    $(result.field).setAttribute("aria-invalid", "true");
+    $(result.field).focus();
+    return false;
+  }
+  const saved = await addProduct(result.values);
+  if (saved) notify(t("stock.addedAsNew", { name: result.values.name }));
+  return saved;
 }
 
 async function updateProduct(id, values) {
@@ -1097,6 +1118,7 @@ function renderProductFormMode() {
   $("stockAddLabel").textContent = t(open ? "stock.closeForm" : "stock.addNewProduct");
   $("productFormTitle").textContent = t(editing ? "stock.editProduct" : "stock.addProduct");
   $("productSubmit").textContent = t(editing ? "stock.saveChanges" : "stock.saveProduct");
+  $("productSaveAsNew").hidden = !editing;
 }
 
 function clearProductErrors() {
@@ -4726,6 +4748,8 @@ function bindEvents() {
       else await addProduct(result.values);
     });
   });
+  // guard() ignores a second click while the first is still being saved, so a double click cannot add two products.
+  $("productSaveAsNew").addEventListener("click", () => guard(addProductAsNew));
   $("productCancel").addEventListener("click", () => {
     if (closeProductForm()) $("stockAddToggle").focus();
   });
@@ -5032,6 +5056,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     backupShouldWait, resumeBackup, notify, saveLanguage, savePaper,
     markSettingsTouched: () => { settingsTouched = true; },
     touchProductForm: () => { productFormTouched = true; },
+    addProductAsNew, guard, t,
     invoiceParts, invoiceHtml, printItems, continuationHeadHtml,
     businessPhonesHtml, fillSettingsForm, saveBusinessSettings, addPhoneRow, removePhoneRow, setPhoneRow, renderPhoneRows,
     getPhoneRows: () => state.phoneRows,

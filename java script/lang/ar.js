@@ -150,6 +150,8 @@ I18n.register("ar", "العربية", {
   "stock.category": "الفئة",
   "stock.addProductBtn": "إضافة المنتج",
   "stock.saveChanges": "حفظ التغييرات",
+  "stock.saveAsNew": "إضافة كمنتج جديد",
+  "stock.addedAsNew": "تمت إضافة {name} كمنتج جديد. المنتج الأصلي لم يتغير.",
   "stock.filterLabel": "البحث عن منتج",
   "stock.filterPlaceholder": "ابحث عن منتج...",
   "col.tileSize": "مقاس البلاط",

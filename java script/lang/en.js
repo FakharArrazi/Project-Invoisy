@@ -147,6 +147,8 @@ I18n.register("en", "English", {
   "stock.category": "Category",
   "stock.addProductBtn": "Add Product",
   "stock.saveChanges": "Save Changes",
+  "stock.saveAsNew": "Save as New Product",
+  "stock.addedAsNew": "{name} was added as a new product. The original product is unchanged.",
   "stock.filterLabel": "Search products",
   "stock.filterPlaceholder": "Search products...",
   "col.tileSize": "Tile Size",

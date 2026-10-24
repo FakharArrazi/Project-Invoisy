@@ -151,6 +151,8 @@
     "stock.category": "Catégorie",
     "stock.addProductBtn": "Ajouter le produit",
     "stock.saveChanges": "Enregistrer les modifications",
+    "stock.saveAsNew": "Ajouter comme nouveau produit",
+    "stock.addedAsNew": "{name} a été ajouté comme nouveau produit. Le produit d'origine n'a pas changé.",
     "stock.filterLabel": "Rechercher un produit",
     "stock.filterPlaceholder": "Rechercher un produit...",
     "col.tileSize": "Dimensions",
