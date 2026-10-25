@@ -430,6 +430,12 @@
             <div class="phone-rows" id="sPhones" role="group" aria-labelledby="sPhonesLabel"></div>
             <button type="button" class="btn small" id="addPhone" data-i18n="settings.addPhone">Add phone number</button>
           </div>
+          <div class="field staff-field">
+            <label id="sStaffLabel" data-i18n="settings.staff">Staff contacts</label>
+            <p class="muted small staff-hint" data-i18n="settings.staffHint">Printed centered under the business name on invoices: one person per line, with one or more phone numbers.</p>
+            <div class="staff-rows" id="sStaff" role="group" aria-labelledby="sStaffLabel"></div>
+            <button type="button" class="btn small" id="addStaff" data-i18n="settings.addStaff">Add person</button>
+          </div>
           <div class="field">
             <label for="sEmail" data-i18n="settings.email">Email</label>
             <input type="text" id="sEmail" autocomplete="off">
@@ -460,7 +466,7 @@
             <button type="button" class="btn danger" id="removeLogo" data-i18n="settings.removeLogo">Remove Logo</button>
           </div>
         </div>
-        <p class="muted small" data-i18n="settings.logoNote">PNG image. It is resized to fit and shown above the business name on invoices.</p>
+        <p class="muted small" data-i18n="settings.logoNote">PNG image. It is resized to fit a fixed square at the top center of invoices (3 × 3 cm on A4, 2.5 × 2.5 cm on A5).</p>
         <p class="error" id="logoError" role="alert"></p>
       </div>
       <div class="panel">

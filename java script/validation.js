@@ -609,17 +609,47 @@
     return cleanPhoneList([s.phone]);
   }
 
-  // The business details an invoice keeps as they were when it was made. With one number (or none) it has exactly the shape it
-  // always had; the list is only added when there are several.
+  /* ---------- The staff contacts (printed under the business name on invoices) ----------
+     `staff` is a list of people, each a name and a list of phone numbers: [{ name, phones: [..] }]. Any number of numbers per
+     person (not one field per number). It is only present in the settings once it was saved, and only in the business details
+     of an invoice that has people to print, so settings and invoices saved before it existed keep exactly their old shape. */
+
+  const MAX_STAFF = 10;
+  const MAX_STAFF_NAME_LENGTH = 60;
+
+  // The people as a clean list: tidy name, clean numbers (same rules as the business numbers), a person with neither a name
+  // nor a number left out, and the limits applied (too many people or numbers are cut, never refused: this also reads old files).
+  function cleanStaff(list) {
+    const out = [];
+    for (const raw of Array.isArray(list) ? list : []) {
+      if (!isObj(raw)) continue;
+      const name = String(isStr(raw.name) ? raw.name : "").replace(/\s+/g, " ").trim().slice(0, MAX_STAFF_NAME_LENGTH);
+      const phones = cleanPhoneList(Array.isArray(raw.phones) ? raw.phones.filter(isStr) : []).slice(0, MAX_BUSINESS_PHONES);
+      if (!name && !phones.length) continue;
+      out.push({ name, phones });
+      if (out.length >= MAX_STAFF) break;
+    }
+    return out;
+  }
+
+  // The people of the settings, or of the business details saved inside an invoice. [] when there are none.
+  function businessStaff(source) {
+    return cleanStaff((source || {}).staff);
+  }
+
+  // The business details an invoice keeps as they were when it was made. With one number (or none) and no staff it has exactly
+  // the shape it always had; the list of numbers and the staff are only added when there is something to print.
   function businessSnapshot(settings) {
     const s = settings || {};
     const phones = businessPhones(s);
+    const staff = businessStaff(s).filter((c) => c.phones.length);   // a person without a number has nothing to print
     return {
       name: s.businessName,
       address: s.address,
       phone: phones.length > 1 ? phones[0] : (String(s.phone || "") || phones[0] || ""),
       ...(phones.length > 1 ? { phones } : {}),
       email: s.email,
+      ...(staff.length ? { staff } : {}),
     };
   }
 
@@ -636,6 +666,8 @@
       }
       // The list of phone numbers (the one setting that is a list). Only present when it was saved: older settings keep their shape.
       if (Array.isArray(stored.phones)) settings.phones = cleanPhoneList(stored.phones.filter(isStr)).slice(0, MAX_BUSINESS_PHONES);
+      // The staff contacts (a list of people), likewise only present when saved.
+      if (Array.isArray(stored.staff)) settings.staff = cleanStaff(stored.staff);
     }
     if (!settings.currency.trim()) settings.currency = CURRENCY;
     if (!settings.logo.startsWith("data:image/")) settings.logo = "";
@@ -930,6 +962,11 @@
     if (s.logo && !s.logo.startsWith("data:image/")) return t("problem.logo");
     if (s.phones !== undefined) {
       if (!Array.isArray(s.phones) || s.phones.length > MAX_BUSINESS_PHONES || s.phones.some((p) => !isStr(p) || p.length > MAX_PHONE_LENGTH)) return t("problem.phones", { max: MAX_BUSINESS_PHONES });
+    }
+    if (s.staff !== undefined) {
+      const badPerson = (c) => !isObj(c) || (c.name !== undefined && (!isStr(c.name) || c.name.length > MAX_STAFF_NAME_LENGTH))
+        || !Array.isArray(c.phones) || c.phones.length > MAX_BUSINESS_PHONES || c.phones.some((p) => !isStr(p) || p.length > MAX_PHONE_LENGTH);
+      if (!Array.isArray(s.staff) || s.staff.length > MAX_STAFF || s.staff.some(badPerson)) return t("problem.staff", { max: MAX_STAFF });
     }
     return "";
   }
@@ -1430,6 +1467,7 @@
     normalizeName, phoneDigits, isWalkInName, customerKeys, customerGroups, findGroup, sameCustomer,
     transferProblem, ledgerProblems,
     MAX_BUSINESS_PHONES, MAX_PHONE_LENGTH, cleanPhoneList, businessPhones, businessSnapshot,
+    MAX_STAFF, MAX_STAFF_NAME_LENGTH, cleanStaff, businessStaff,
     isTileSize, normalizeTileSize, normalizeProduct, readProductInput, findDuplicateProduct, findSimilarProducts, suggestProducts, normalizeInvoice, normalizeSettings, paymentSummary, paymentDetail, stripDerived,
     productProblem, invoiceProblem, invoiceWarnings, settingsProblem, legacyProductIssue, legacyInvoiceIssue,
     buildData, hasMeaningfulData, countsOf, buildBackup, prepareBackupFile, parseBackup, backupFileName,

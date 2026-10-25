@@ -123,6 +123,34 @@ function businessPhonesHtml(biz) {
   return `<div class="inv-phones">${phones.map((p) => `<span class="inv-phone">${esc(ltr(p))}</span>`).join('<span class="inv-sep"> · </span>')}</div>`;
 }
 
+// The numbers of one staff member on the invoice: one line, a dot between numbers. Each number stays whole (never broken inside),
+// and the dot belongs to the number before it, so a line that wraps ends with a dot instead of starting with one.
+function staffPhonesHtml(phones) {
+  return phones.map((p) => `<span class="inv-phone">${esc(ltr(p))}</span>`).join('<span class="inv-sep">\u00A0· </span>');
+}
+
+// The company header of the printed invoice (the invoice only: the collection document keeps its own header).
+//   line 1: business name (left, with the phone and email it always had) | logo square (centre, fixed size) | invoice title (right)
+//   line 2: the staff contacts, centred, one person per line   - nothing at all when there are none
+//   line 3: the address, centred                               - nothing at all when there is none
+// The logo square is always drawn, empty or not. Its size is set in css (3 x 3 cm on A4, 2.5 x 2.5 cm on A5), never by the image.
+function invoiceHeadHtml(biz, logoSrc) {
+  const staff = Validation.businessStaff(biz).filter((c) => c.phones.length);
+  const staffHtml = staff.length
+    ? `<div class="inv-staff">${staff.map((c) => `<div class="inv-staff-line">${c.name ? `<span class="inv-staff-name">${esc(c.name)}:</span> ` : ""}${staffPhonesHtml(c.phones)}</div>`).join("")}</div>`
+    : "";
+  const address = String(biz.address || "").trim();
+  const addressHtml = address ? `<div class="inv-address">${esc(address)}</div>` : "";
+  const logo = logoSrc ? `<img src="${esc(logoSrc)}" alt="${esc(t("logo.alt"))}">` : "";
+  return `<header class="inv-head inv-head-stack">
+      <div class="inv-head-row">
+        <div class="inv-head-name"><div class="inv-biz-name">${esc(biz.name)}</div>${businessPhonesHtml(biz)}${biz.email ? `<div>${esc(biz.email)}</div>` : ""}</div>
+        <div class="inv-logo-box">${logo}</div>
+        <div class="inv-title">${esc(t("inv.title"))}</div>
+      </div>${staffHtml}${addressHtml}
+    </header>`;
+}
+
 /* ---------- Data model ---------- */
 
 // Units a line on a sale can be sold in. The unit belongs to the sale line, not to the product.
@@ -256,6 +284,7 @@ const state = {
   invoiceEdit: null,      // set while a saved invoice is edited on the Sell page (state.sale is that invoice; screen-only until Save changes): see startEditInvoice
   saleDone: null,         // the sale just saved while its "What would you like to do?" dialog is open: { id, number } (screen-only)
   phoneRows: [],          // the business phone numbers of the Settings form, as typed: { rowId, value } (screen-only until saved)
+  staffRows: [],          // the staff contacts of the Settings form, as typed: { rowId, name, phones: [{ rowId, value }] } (screen-only until saved)
 };
 
 function applyData(d) {
@@ -3158,8 +3187,6 @@ function invoiceParts(inv) {
   const cust = inv.customer || { name: WALK_IN, phone: "", address: "" };
   const num = (n) => numberFormat.format(toNumber(n));
   const pct = (p) => (p ? ` (${numberFormat.format(p)}%)` : "");
-  const line = (text) => (text ? `<div>${esc(text)}</div>` : "");
-  const logo = state.settings.logo ? `<img class="inv-logo" src="${esc(state.settings.logo)}" alt="${esc(t("logo.alt"))}">` : "";
 
   // Goods sold in several deliveries: each line shows what was handed over and what is still to collect. The quantity,
   // price and total of the line are always those of the sale.
@@ -3257,10 +3284,7 @@ function invoiceParts(inv) {
     : null;
 
   return {
-    head: `<header class="inv-head">
-      <div>${logo}<div class="inv-biz-name">${esc(biz.name)}</div>${line(biz.address)}${businessPhonesHtml(biz)}${line(biz.email)}</div>
-      <div class="inv-title">${esc(t("inv.title"))}</div>
-    </header>`,
+    head: invoiceHeadHtml(biz, state.settings.logo),
     meta: `<div class="inv-meta">
       ${customerBlockHtml(inv, cust)}
       <div class="right"><div><span class="label">${esc(t("inv.number"))}</span> ${esc(inv.invoiceNumber)}</div><div><span class="label">${esc(t("inv.date"))}</span> ${esc(formatDateTime(inv.date))}</div></div>
@@ -3795,6 +3819,84 @@ function setPhoneRow(rowId, value) {
   if (row) row.value = String(value == null ? "" : value);
 }
 
+/* ---------- The staff contacts (Settings -> Business details) ----------
+   People with a name and any number of phone numbers, printed under the business name on invoices. What is typed lives in
+   state.staffRows until Save Settings. A person always keeps at least one number box; there can be no people at all. */
+
+let staffSerial = 0;
+const newStaffPhone = (value) => ({ rowId: ++staffSerial, value: String(value == null ? "" : value) });
+
+function staffRowsFrom(settings) {
+  return Validation.businessStaff(settings).map((c) => ({
+    rowId: ++staffSerial, name: c.name, phones: (c.phones.length ? c.phones : [""]).map(newStaffPhone),
+  }));
+}
+
+const findStaff = (rowId) => state.staffRows.find((r) => String(r.rowId) === String(rowId));
+
+function renderStaffRows() {
+  const rows = state.staffRows;
+  $("sStaff").innerHTML = rows.map((person, i) =>
+    `<div class="staff-card" data-staff="${person.rowId}">` +
+      `<div class="staff-head">` +
+        `<input type="text" class="staff-name" value="${esc(person.name)}" maxlength="${Validation.MAX_STAFF_NAME_LENGTH}" placeholder="${esc(t("settings.staffName"))}" aria-label="${esc(t("settings.staffNameN", { n: i + 1 }))}" autocomplete="off">` +
+        `<button type="button" class="btn small" data-action="remove-staff" aria-label="${esc(t("settings.removeStaffN", { n: i + 1 }))}">${esc(t("settings.removeStaff"))}</button>` +
+      `</div>` +
+      person.phones.map((ph, j) =>
+        `<div class="phone-row" data-phone="${ph.rowId}">` +
+        `<input type="text" inputmode="tel" class="phone-input staff-phone" value="${esc(ph.value)}" maxlength="${Validation.MAX_PHONE_LENGTH}" aria-label="${esc(t("settings.staffPhoneN", { person: i + 1, n: j + 1 }))}" autocomplete="off">` +
+        `<button type="button" class="btn small" data-action="remove-staff-phone" aria-label="${esc(t("settings.removeStaffPhoneN", { person: i + 1, n: j + 1 }))}"${person.phones.length < 2 ? " disabled" : ""}>${esc(t("common.remove"))}</button>` +
+        `</div>`
+      ).join("") +
+      `<button type="button" class="btn small" data-action="add-staff-phone"${person.phones.length >= Validation.MAX_BUSINESS_PHONES ? " disabled" : ""}>${esc(t("settings.addStaffPhone"))}</button>` +
+    `</div>`
+  ).join("");
+  $("addStaff").disabled = rows.length >= Validation.MAX_STAFF;
+}
+
+function addStaffRow() {
+  if (state.staffRows.length >= Validation.MAX_STAFF) return null;
+  const row = { rowId: ++staffSerial, name: "", phones: [newStaffPhone("")] };
+  state.staffRows.push(row);
+  return row;
+}
+
+function removeStaffRow(rowId) {
+  const before = state.staffRows.length;
+  state.staffRows = state.staffRows.filter((r) => String(r.rowId) !== String(rowId));
+  return state.staffRows.length < before;
+}
+
+function setStaffName(rowId, value) {
+  const person = findStaff(rowId);
+  if (person) person.name = String(value == null ? "" : value);
+}
+
+function addStaffPhone(rowId) {
+  const person = findStaff(rowId);
+  if (!person || person.phones.length >= Validation.MAX_BUSINESS_PHONES) return null;
+  const phone = newStaffPhone("");
+  person.phones.push(phone);
+  return phone;
+}
+
+// A person keeps at least one number box (an empty one means no number).
+function removeStaffPhone(rowId, phoneId) {
+  const person = findStaff(rowId);
+  if (!person || person.phones.length < 2) return false;
+  person.phones = person.phones.filter((p) => String(p.rowId) !== String(phoneId));
+  return true;
+}
+
+function setStaffPhone(rowId, phoneId, value) {
+  const person = findStaff(rowId);
+  const phone = person && person.phones.find((p) => String(p.rowId) === String(phoneId));
+  if (phone) phone.value = String(value == null ? "" : value);
+}
+
+// What is typed, as the list that is saved: blank boxes, repeated numbers and people with neither name nor number left out.
+const typedStaff = () => Validation.cleanStaff(state.staffRows.map((p) => ({ name: p.name, phones: p.phones.map((x) => x.value) })));
+
 // Save Settings: the business details, with every phone number typed (blank rows and repeats of the same number left out).
 function saveBusinessSettings() {
   return guard(async () => {
@@ -3806,6 +3908,7 @@ function saveBusinessSettings() {
         address: $("sAddress").value.trim(),
         phone: phones[0] || "",
         phones,
+        staff: typedStaff(),
         email: $("sEmail").value.trim(),
         currency: $("sCurrency").value.trim() || CURRENCY,
       };
@@ -3827,10 +3930,12 @@ function fillSettingsForm(options) {
     $("sName").value = s.businessName;
     $("sAddress").value = s.address;
     state.phoneRows = phoneRowsFrom(s);
+    state.staffRows = staffRowsFrom(s);
     $("sEmail").value = s.email;
     $("sCurrency").value = s.currency;
   }
   renderPhoneRows();   // from what is typed (state.phoneRows), in the current language
+  renderStaffRows();
   renderLogoSetting();
   renderLanguageSetting();
 }
@@ -5072,6 +5177,44 @@ function bindEvents() {
     const box = $("sPhones").querySelector(`[data-row="${row.rowId}"] input`);
     if (box) box.focus();
   });
+  // Staff contacts: typing only updates state.staffRows (no redraw, so the cursor stays); the buttons redraw the list.
+  $("sStaff").addEventListener("input", (e) => {
+    const card = e.target.closest("[data-staff]");
+    if (!card) return;
+    if (e.target.classList.contains("staff-name")) { setStaffName(card.dataset.staff, e.target.value); return; }
+    const row = e.target.closest("[data-phone]");
+    if (row) setStaffPhone(card.dataset.staff, row.dataset.phone, e.target.value);
+  });
+  $("sStaff").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-action]");
+    const card = btn && btn.closest("[data-staff]");
+    if (!card) return;
+    const id = card.dataset.staff;
+    let focusSelector = null;
+    if (btn.dataset.action === "remove-staff") {
+      if (!removeStaffRow(id)) return;
+    } else if (btn.dataset.action === "add-staff-phone") {
+      const phone = addStaffPhone(id);
+      if (!phone) return;
+      focusSelector = `[data-staff="${id}"] [data-phone="${phone.rowId}"] input`;
+    } else if (btn.dataset.action === "remove-staff-phone") {
+      if (!removeStaffPhone(id, btn.closest("[data-phone]").dataset.phone)) return;
+    } else {
+      return;
+    }
+    settingsTouched = true;
+    renderStaffRows();
+    const box = focusSelector && $("sStaff").querySelector(focusSelector);
+    if (box) box.focus();
+  });
+  $("addStaff").addEventListener("click", () => {
+    const row = addStaffRow();
+    if (!row) return;
+    settingsTouched = true;
+    renderStaffRows();
+    const box = $("sStaff").querySelector(`[data-staff="${row.rowId}"] .staff-name`);
+    if (box) box.focus();
+  });
 
   // Language
   $("sLanguage").addEventListener("change", () => saveLanguage($("sLanguage").value));
@@ -5231,6 +5374,8 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     businessPhonesHtml, fillSettingsForm, saveBusinessSettings, addPhoneRow, removePhoneRow, setPhoneRow, renderPhoneRows,
     getPhoneRows: () => state.phoneRows,
     sellerNameOf, invoiceFooterHtml, renderSellerName, saveSellerName, onSellerInput, submitSellerName, updateSellerButton,
+    invoiceHeadHtml, renderStaffRows, addStaffRow, removeStaffRow, setStaffName, addStaffPhone, removeStaffPhone, setStaffPhone,
+    getStaffRows: () => state.staffRows,
   });
 } else {
   bindEvents();
