@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="css/style.css">
   <link rel="stylesheet" href="css/pricing.css">
   <link rel="stylesheet" href="css/stock.css">
+  <link rel="stylesheet" href="css/sell.css">
   <link rel="stylesheet" href="css/rtl.css">
   <style id="paperStyle"></style>
   <script id="noNativeSubmit">
@@ -71,7 +72,17 @@
 
     <!-- SELL -->
     <section class="view" id="view-sell">
-      <h1 class="sr-only" data-i18n="nav.sell">Sell</h1>
+      <header class="sell-header">
+        <h1 class="sell-title" data-i18n="nav.sell">Sell</h1>
+        <!-- The seller is kept between sales (it is a setting) and printed in the footer of each new invoice. Nothing happens while
+             it is typed: the name is kept, and the preview follows, when Save is pressed (or Enter). -->
+        <form class="seller-form" id="sellerForm" autocomplete="off">
+          <label for="sellerName" class="sr-only" data-i18n="sell.sellerName">Seller name</label>
+          <input type="text" id="sellerName" maxlength="80" placeholder="Seller name" data-i18n-placeholder="sell.sellerName" title="Printed at the bottom of the invoice" data-i18n-title="sell.sellerNamePlaceholder" autocomplete="off">
+          <button type="submit" class="btn small" id="sellerSave">Save</button>
+          <p class="muted small seller-locked" id="sellerLocked" data-i18n="sell.sellerLocked" hidden>A saved invoice keeps the seller it was made with.</p>
+        </form>
+      </header>
 
       <!-- Shown only while a saved invoice is edited on this page (the rest of the page is the normal Sell page) -->
       <div class="panel edit-banner no-print" id="editBanner" hidden>
@@ -80,10 +91,13 @@
         <p class="warn-box" id="editNotes" hidden></p>
       </div>
 
-      <div class="panel">
+      <div class="panel sell-add">
         <h2 data-i18n="sell.addProducts">Add products</h2>
         <label class="sr-only" for="search" data-i18n="sell.searchLabel">Search products</label>
-        <input type="search" id="search" placeholder="Search products by name, SKU or category..." data-i18n-placeholder="sell.searchPlaceholder" autocomplete="off">
+        <div class="sell-search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+          <input type="search" id="search" placeholder="Search products by name, SKU or category..." data-i18n-placeholder="sell.searchPlaceholder" autocomplete="off">
+        </div>
         <div class="results" id="results" role="listbox" aria-label="Products" data-i18n-aria-label="sell.productsAria"></div>
         <form class="add-row" id="addForm" novalidate>
           <div class="selected" id="selectedInfo"></div>
@@ -106,7 +120,7 @@
         <p class="error" id="addError" role="alert"></p>
       </div>
 
-      <div class="panel">
+      <div class="panel sell-sale">
         <h2 data-i18n="sell.currentSale">Current sale</h2>
         <div class="table-wrap">
           <table class="table sale-table">
@@ -155,29 +169,32 @@
             </p>
           </fieldset>
 
-          <fieldset>
-            <legend data-i18n="sell.discountTaxLegend">Discount and tax</legend>
-            <div class="field">
-              <label for="discountValue" data-i18n="sell.discount">Discount</label>
-              <div class="with-unit">
-                <input type="number" id="discountValue" min="0" step="any" placeholder="0">
-                <select id="discountType" aria-label="Discount type" data-i18n-aria-label="sell.discountType">
-                  <option value="amount" data-currency></option>
-                  <option value="percent">%</option>
-                </select>
+          <div class="sale-fields-side">
+            <fieldset>
+              <legend data-i18n="sell.discountTaxLegend">Discount and tax</legend>
+              <div class="field">
+                <label for="discountValue" data-i18n="sell.discount">Discount</label>
+                <div class="with-unit">
+                  <input type="number" id="discountValue" min="0" step="any" placeholder="0">
+                  <select id="discountType" aria-label="Discount type" data-i18n-aria-label="sell.discountType">
+                    <option value="amount" data-currency></option>
+                    <option value="percent">%</option>
+                  </select>
+                </div>
               </div>
-            </div>
-            <div class="field">
-              <label for="taxValue" data-i18n="sell.tax">Tax</label>
-              <div class="with-unit">
-                <input type="number" id="taxValue" min="0" step="any" placeholder="0">
-                <select id="taxType" aria-label="Tax type" data-i18n-aria-label="sell.taxType">
-                  <option value="amount" data-currency></option>
-                  <option value="percent">%</option>
-                </select>
+              <div class="field">
+                <label for="taxValue" data-i18n="sell.tax">Tax</label>
+                <div class="with-unit">
+                  <input type="number" id="taxValue" min="0" step="any" placeholder="0">
+                  <select id="taxType" aria-label="Tax type" data-i18n-aria-label="sell.taxType">
+                    <option value="amount" data-currency></option>
+                    <option value="percent">%</option>
+                  </select>
+                </div>
               </div>
-            </div>
-          </fieldset>
+            </fieldset>
+
+          </div>
         </div>
 
         <!-- Warning about the customer's unpaid invoices. It appears here, next to the customer fields, and never replaces the sale. -->
@@ -526,7 +543,7 @@
 <!-- What is printed for goods still to collect (hidden on screen, shown only when printing) -->
 <article class="invoice collection-print" id="collectionPrint"></article>
 <!-- The invoice laid out page by page, built just before printing (invoice-print.js); hidden on screen -->
-<div class="inv-pages" id="invoicePages" aria-hidden="true"></div>
+<div class="inv-pages inv-sheets" id="invoicePages" aria-hidden="true"></div>
 <!-- Confirmation before old debt is added to the sale being prepared. Nothing is saved from here. -->
 <dialog class="debt-dialog no-print" id="debtDialog" aria-labelledby="debtDialogTitle">
   <form id="debtForm" novalidate>

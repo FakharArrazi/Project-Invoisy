@@ -1,0 +1,121 @@
+/* Sell page: the same look as the Stock page (title, 42px controls, table header, bar of buttons that stays in view), and the live
+   preview drawn as a small sheet of paper. It reuses the colours, borders, radii and controls of the rest of the app, adds no
+   animation, and changes no behaviour: only how the page looks. */
+
+/* ---------- Title ---------- */
+
+/* The page's top spacing is the title's margin (as on Stock), so the preview's first row lines up with it. */
+.app[data-view="sell"] main { padding-top: 0; }
+.sell-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 20px 0 16px; min-height: 34px; }
+.sell-title { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+
+/* The seller name sits on the title's row, at the far end: a box and a small Save button (nothing is saved while typing). */
+.seller-form { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-inline-start: auto; }
+.seller-form input { width: 260px; max-width: 100%; height: 38px; font-size: 14px; border-radius: 6px; }
+.seller-form .btn { min-height: 38px; min-width: 88px; padding: 0 14px; font-size: 14px; white-space: nowrap; }
+.seller-form .seller-locked { flex-basis: 100%; margin: 0; text-align: end; }
+
+/* ---------- The two cards: Add products, Current sale ---------- */
+
+.sell-add, .sell-sale { padding: 20px; }
+.sell-add h2, .sell-sale h2 { margin-bottom: 14px; font-size: 16px; }
+
+/* Search: the same box as the Stock page's (icon inside, 42px high). */
+.sell-search { position: relative; }
+.sell-search svg { position: absolute; top: 50%; inset-inline-start: 13px; width: 18px; height: 18px; margin-top: -9px; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.sell-search input { height: 42px; padding-inline-start: 40px; padding-inline-end: 12px; font-size: 14px; border-radius: 6px; }
+
+.sell-add .results { margin: 10px 0 0; border-radius: 6px; }
+.sell-add .result { padding: 10px 12px; }
+
+/* The chosen product on the left; quantity, unit and the blue button on one line, all as high as the search box. */
+.sell-add .add-row { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); gap: 12px 14px; align-items: flex-end; }
+.sell-add .selected { min-height: 42px; }
+.sell-add .add-qty, .sell-add .add-unit { width: auto; }
+.sell-add .add-qty { flex: 0 0 96px; }
+.sell-add .add-unit { flex: 0 0 120px; }
+.sell-add .add-qty label, .sell-add .add-unit label { margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.sell-add .add-row input, .sell-add .add-row select { height: 42px; border-radius: 6px; }
+.sell-add .add-row .btn { min-height: 42px; padding: 0 22px; font-size: 15px; font-weight: 600; white-space: nowrap; }
+
+/* ---------- The products of the sale: the Stock table's look ---------- */
+
+@media (min-width: 721px) {
+  .sell-sale .sale-table { border-collapse: separate; border-spacing: 0; }
+  .sell-sale .sale-table thead th { padding: 12px 12px; background: #f6f8fa; border-bottom: 1px solid var(--border-strong); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+  .sell-sale .sale-table td { padding: 14px 12px; }
+  .sell-sale .sale-table tbody tr:last-child td { border-bottom: 0; }
+  .sell-sale .sale-table .empty-row td { padding: 28px 12px; }
+  .sell-sale .sale-table td.sale-product { min-width: 170px; }
+}
+
+/* ---------- Customer, discount and tax, invoice details ---------- */
+
+/* Two columns when there is room for them, one when there is not (no breakpoint to keep in step with the preview's width). */
+.sell-sale .sale-fields { grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; align-items: start; margin-top: 20px; }
+.sale-fields-side { display: grid; gap: 16px; min-width: 0; }
+.sell-sale fieldset { padding: 12px 16px 4px; border-radius: 6px; }
+.sell-sale legend { padding: 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
+.sell-sale .sale-fields .field { margin-bottom: 12px; }
+.sell-sale .sale-fields input, .sell-sale .sale-fields select { min-height: 38px; }
+
+/* ---------- Totals: one quiet card on the right ---------- */
+
+.sell-sale .totals { max-width: 340px; margin: 20px 0 0; margin-inline-start: auto; padding: 12px 16px; background: #f6f8fa; border: 1px solid var(--border); border-radius: 6px; }
+.sell-sale .totals > div > span:last-child { font-variant-numeric: tabular-nums; }
+.sell-sale .totals .grand { font-size: 18px; }
+
+/* ---------- Buttons: a bar that stays in view, as on the Stock form ---------- */
+
+.sell-sale .actions { position: sticky; bottom: 0; z-index: 2; margin: 20px -20px -20px; padding: 14px 20px; background: var(--panel); border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; }
+.sell-sale .actions .btn { min-height: 42px; padding: 0 24px; font-size: 15px; }
+.sell-sale .actions .btn.primary { font-weight: 600; }
+
+/* The bar covers the bottom of the screen, so whatever the page scrolls into view (the debt notice, a field reached with Tab, an error
+   message) has to stop above it. scroll-padding says so: wide screens scroll <main>, narrow ones scroll the whole page. */
+.app[data-view="sell"] main { scroll-padding-bottom: 88px; }
+html:has(.app[data-view="sell"]) { scroll-padding-bottom: 88px; }
+
+@media (max-width: 720px) {
+  .sell-add, .sell-sale { padding: 14px; }
+  .sell-title { font-size: 19px; }
+  .sell-header { flex-wrap: wrap; }
+  .seller-form { flex: 1 1 100%; justify-content: stretch; }
+  .seller-form input { flex: 1 1 160px; width: auto; min-width: 0; }
+  .sell-add .add-row { gap: 12px; }
+  .sell-add .selected { flex-basis: 100%; min-height: 0; }
+  .sell-add .add-qty { flex: 1 1 90px; }
+  .sell-add .add-unit { flex: 1 1 110px; }
+  .sell-add .add-row .btn { flex: 1 1 100%; }
+  .sell-sale .totals { max-width: none; }
+  .sell-sale .actions { margin: 16px -14px -14px; padding: 12px 14px; }
+  .sell-sale .actions .btn { flex: 1 1 0; padding: 0 12px; }
+}
+
+/* ---------- The live preview: a small sheet of paper ----------
+   The preview holds the very pages that are printed (see renderPreviewSheets in script.js): same size, margins, type and footer.
+   Each page is scaled down with a transform (--sheet-scale, set from the width of the panel); its box is sized to match, so
+   nothing overflows. Only on screen: on paper the pages keep their real size, whatever happened here. */
+
+/* Room for the scroll bar is always kept, so a longer invoice appearing cannot change the panel's width (and so the scale). */
+.preview-panel { scrollbar-gutter: stable; }
+
+.invoice.invoice-sheets { padding: 0; border: 0; background: transparent; font: inherit; }
+
+@media screen {
+  /* max-width + overflow keep the sheet inside the panel even for the instant after the window is resized, before the script has set
+     the new scale: the page (laid out at full size) can never make the screen scroll sideways. The shadow is on this box, not on
+     the page, so the clipping does not cut it. */
+  .invoice-sheets .inv-sheet { width: calc(var(--page-w) * var(--sheet-scale, 0.5)); height: calc(var(--page-h) * var(--sheet-scale, 0.5)); max-width: 100%; margin: 0 auto; overflow: hidden; box-shadow: 0 0 0 1px rgba(27, 31, 36, 0.08), 0 2px 10px rgba(27, 31, 36, 0.14); }
+  .invoice-sheets .inv-sheet + .inv-sheet { margin-top: 14px; }
+  .invoice-sheets .inv-sheet > .inv-page { transform: scale(var(--sheet-scale, 0.5)); transform-origin: top left; }
+}
+
+/* A preview of unsaved changes never looks like the saved invoice: the dashed frame goes around each sheet. */
+.invoice-sheets.invoice-unsaved { outline: 0; }
+.invoice-sheets.invoice-unsaved .inv-page { outline: 2px dashed #8a5a00; outline-offset: -2px; }
+@media print { .invoice-sheets.invoice-unsaved .inv-page { outline: 0; } }
+
+@media (max-width: 1180px) {
+  .preview-panel { scrollbar-gutter: auto; }
+}

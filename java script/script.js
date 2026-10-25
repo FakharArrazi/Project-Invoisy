@@ -99,6 +99,13 @@ function secondCustomerName(record) {
   return second && typeof second.name === "string" ? second.name.trim() : "";
 }
 
+// The seller's name of an invoice, of the sale being prepared or of the settings, as it prints: trimmed, runs of spaces made
+// single. "" when there is none (an older invoice, or no name typed): nothing is printed then.
+function sellerNameOf(record) {
+  const name = record && record.sellerName;
+  return typeof name === "string" ? name.replace(/\s+/g, " ").trim() : "";
+}
+
 // The customer block of an invoice or collection document. One customer reads exactly as before; with a second
 // name, a labelled line is added below the first customer's details.
 function customerBlockHtml(inv, cust) {
@@ -214,6 +221,7 @@ function newSale() {
     items: [],                              // { lineId, productId, qty, sellingUnit, unitPrice, priceUnit, priceQty, requestedArea, ... }: qty is sold / taken from stock in sellingUnit; unitPrice is per priceUnit and is billed for priceQty, the quantity the goods really contain in that unit (see addToSale); requestedArea is the m² the customer asked for, kept only while the line is exactly what that request produced; a line sold beyond the stock also has partial / deliverNow (see deliverNowQty)
     customer: { name: "", phone: "", address: "" },
     secondCustomer: { name: "" },           // optional second name on the same invoice (e.g. the builder when an architect buys); never a debt identity
+    sellerName: "",                         // who handles this sale ("Nom du vendeur"): follows the saved setting (see renderSellerName); copied onto the invoice when it is made
     discountType: "amount", discountValue: "",
     taxType: "amount", taxValue: "",
     paidValue: "",                          // amount paid now; empty = 0 (nothing paid yet)
@@ -1749,7 +1757,9 @@ function syncSaleWithProducts() {
 
 function clearSale() {
   if (state.invoiceEdit) return;
+  const seller = state.sale.sellerName;   // the seller is a setting, not part of what is cleared: the next sale starts with the same name
   state.sale = newSale();
+  state.sale.sellerName = seller || "";
   $("custName").value = "";
   $("custPhone").value = "";
   $("custAddress").value = "";
@@ -1866,6 +1876,9 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
     },
     // Second customer: its own field, only present when filled in, so older invoices and one-customer invoices keep their shape.
     ...(secondCustomerName(sale) ? { secondCustomer: { name: secondCustomerName(sale) } } : {}),
+    // The seller, as it was when the invoice was made: only present when a name was typed, so older invoices keep their shape and
+    // changing the name later never rewrites an invoice that is already saved.
+    ...(sellerNameOf(sale) ? { sellerName: sellerNameOf(sale) } : {}),
     items,
     // Debt carried forward from older invoices: its own lines, never products. subtotal, discount, tax and total
     // above stay the figures of this purchase; what the customer owes is total + the carried lines.
@@ -1906,6 +1919,9 @@ function applySale(d, sale) {
   }
   const createdAt = new Date().toISOString();
   const invoice = { id: uid(), ...buildInvoiceData(sale, formatInvoiceNumber(d.counter + 1), createdAt, d) };
+  // The seller of this sale is also the seller of the next one until it is changed: it is saved with the invoice, in the same
+  // transaction, so the name on the page and the name that is kept can never differ after a sale.
+  if (typeof sale.sellerName === "string" && sellerNameOf(sale) !== sellerNameOf(d.settings)) d.settings.sellerName = sellerNameOf(sale);
   // A returning customer (confirmed from the list, or the exact same name and phone) keeps one id from now on.
   const resolved = Debt.resolve(sale.customer, Debt.directory(d.invoices, d.debtTransfers), sale.identity);
   const customerId = Debt.customerIdFor(resolved);
@@ -2207,6 +2223,7 @@ function saleFromInvoice(inv) {
   const c = inv.customer || {};
   sale.customer = { name: !c.name || c.name === WALK_IN ? "" : c.name, phone: c.phone || "", address: c.address || "" };
   sale.secondCustomer = { name: secondCustomerName(inv) };
+  sale.sellerName = sellerNameOf(inv);   // shown, never changed: a saved invoice keeps the seller it was made with
   Object.assign(sale, invoiceAdjustInputs(inv));
   sale.items = inv.items.map((item, index) => saleLineFromItem(item, index));
   return sale;
@@ -2223,6 +2240,75 @@ function loadSaleIntoForm(sale) {
   $("taxValue").value = sale.taxValue;
   $("taxType").value = sale.taxType;
   $("amountPaid").value = sale.paidValue;
+  $("sellerName").value = sale.sellerName || "";
+  sellerDirty = false;
+  showSellerLock();
+}
+
+// While a saved invoice is edited the seller box shows that invoice's seller and can not be typed in: the name of the setting is
+// not touched, and the invoice keeps the seller it was made with. A short note says why.
+function showSellerLock() {
+  const locked = Boolean(state.invoiceEdit);
+  $("sellerName").disabled = locked;
+  $("sellerLocked").hidden = !locked;
+  updateSellerButton();
+}
+
+// The Save button: ready ("Save") when the box holds a name that is not the kept one yet, quiet ("Saved") otherwise.
+function updateSellerButton() {
+  const button = $("sellerSave");
+  const changed = sellerNameOf({ sellerName: $("sellerName").value }) !== sellerNameOf(state.settings);
+  const ready = changed && !state.invoiceEdit;
+  button.disabled = !ready;
+  button.textContent = t(ready || state.invoiceEdit ? "sell.sellerSave" : "sell.sellerSaved");
+  button.classList.toggle("primary", ready);
+}
+
+// The seller box follows the saved name (the setting), so a new sale, a reload, a restored backup or a change made in another
+// window all show the right name. A name that was typed and not saved yet is left alone (it is not lost by clicking elsewhere,
+// or by starting another sale), and so is the box while an invoice is edited.
+let sellerDirty = false;   // something was typed in the box since the last Save
+function renderSellerName() {
+  showSellerLock();
+  if (state.invoiceEdit || sellerDirty) return;
+  state.sale.sellerName = sellerNameOf(state.settings);
+  $("sellerName").value = state.sale.sellerName;
+  updateSellerButton();
+}
+
+// Typing only updates the button: no redraw of the preview, no write.
+function onSellerInput() {
+  if (state.invoiceEdit) return;
+  sellerDirty = true;
+  updateSellerButton();
+}
+
+// Save (the button, or Enter in the box): the name becomes the seller of this sale and of the next ones, and the preview shows it.
+// Not wrapped in guard(): that would ignore a click on Complete Sale made while this small save is still running. commit()
+// already runs saves one after another, so the order is kept.
+function submitSellerName() {
+  if (state.invoiceEdit) return Promise.resolve();
+  state.sale.sellerName = $("sellerName").value;
+  sellerDirty = false;
+  refreshLive();
+  return saveSellerName();
+}
+
+// Keeps the seller of the sale as the seller from now on (the setting). One small write, never part of an invoice: an invoice only
+// gets the name when it is made.
+function saveSellerName() {
+  if (state.invoiceEdit) return Promise.resolve();
+  const name = sellerNameOf(state.sale);
+  return commit((d) => {
+    if (sellerNameOf(d.settings) === name) return { skip: true };
+    d.settings.sellerName = name;
+  }).then((r) => {
+    if (r.error) notify(r.error, "error");
+    else renderSellerName();
+    return r;
+  }, (e) => {
+    notify(t("app.somethingWrong", { error: errorText(e) }), "error");
+  });
 }
 
 // What is typed on the edited sale, as text, so a change can be told from no change (the "unsaved changes" warnings).
@@ -3260,6 +3346,16 @@ function clearPrintPages() {
   delete document.documentElement.dataset.invoicePages;
 }
 
+// The bottom line of a page: the invoice number on the left, the seller's name in the middle, the page number on the right.
+// All three are always present (the middle one is empty without a seller), so the grid in css/style.css keeps the name in
+// the middle of the sheet, not merely in the space left between the other two. The preview and the print use this same function.
+function invoiceFooterHtml(inv, page, total) {
+  const seller = sellerNameOf(inv);
+  return `<div class="inv-page-foot"><span class="foot-number">${esc(inv.invoiceNumber)}</span>` +
+    `<span class="foot-seller" dir="auto"${seller ? ` title="${esc(seller)}"` : ""}>${esc(seller)}</span>` +
+    `<span class="foot-page">${esc(t("inv.pageOf", { page, total }))}</span></div>`;
+}
+
 // Runs just before the browser prints (the Print button, Ctrl+P, the browser menu). Anything that goes wrong leaves the
 // browser's own pagination of the preview, which is how invoices were printed before.
 function buildPrintPages() {
@@ -3270,7 +3366,7 @@ function buildPrintPages() {
     const host = $("invoicePages");
     InvoicePrint.paginate(host, printItems(inv), {
       continuation: continuationHeadHtml(inv),
-      footer: (page, total) => `<div class="inv-page-foot"><span>${esc(inv.invoiceNumber)}</span><span>${esc(t("inv.pageOf", { page, total }))}</span></div>`,
+      footer: (page, total) => invoiceFooterHtml(inv, page, total),
     });
     document.documentElement.dataset.invoicePages = "1";
     // A logo that is still loading has no height yet, so the pages were measured too short: lay them out again once it is there.
@@ -3278,6 +3374,62 @@ function buildPrintPages() {
   } catch (e) {
     clearPrintPages();
   }
+}
+
+/* ---------- The live preview: the printed pages, scaled down ----------
+   The preview does not have a layout of its own. It is laid out by the same code as the print (printItems + InvoicePrint.paginate),
+   with the same page size, margins, type sizes and footer, then each page is scaled down with a CSS transform to fit the
+   panel. The transform changes only how the page is drawn on screen: the pages built for printing are never scaled, and in
+   print the preview is not used at all. */
+
+const PREVIEW_MAX_SCALE = 0.85;   // on a wide panel (small screens put the preview under the form) the sheet stays a "small sheet of paper"
+
+// Draws the invoice as pages in the preview. false when it could not (the caller then shows the plain invoice).
+function renderPreviewSheets(inv) {
+  if (typeof InvoicePrint === "undefined" || !inv) return false;
+  try {
+    const view = $("invoice");
+    // The preview is not on screen outside the Sell page; it is drawn again when the person comes back to it.
+    if (state.view !== "sell" && view.querySelector(".inv-page")) return true;
+    const host = $("invoicePages");
+    InvoicePrint.paginate(host, printItems(inv), {
+      continuation: continuationHeadHtml(inv),
+      footer: (page, total) => invoiceFooterHtml(inv, page, total),
+    });
+    // The pages are moved (not copied) into the preview, one sheet each, so a logo that is already loaded stays loaded.
+    const sheets = document.createDocumentFragment();
+    for (const page of Array.from(host.children)) {
+      const sheet = document.createElement("div");
+      sheet.className = "inv-sheet";
+      sheet.appendChild(page);
+      sheets.appendChild(sheet);
+    }
+    view.classList.toggle("inv-sheets", true);
+    view.classList.toggle("invoice-sheets", true);
+    view.textContent = "";
+    view.appendChild(sheets);
+    host.textContent = "";
+    fitPreviewSheets();
+    // A logo that is still loading had no height yet when the pages were measured: lay them out again once it is there.
+    view.querySelectorAll("img").forEach((img) => { if (!img.complete) img.addEventListener("load", renderInvoice, { once: true }); });
+    return true;
+  } catch (e) {
+    try { $("invoicePages").textContent = ""; } catch { /* nothing to clean */ }
+    return false;
+  }
+}
+
+// Sets how far the pages are scaled down: the panel's width over the width of the sheet (a transform does not change the width
+// the sheet is laid out with, so that is read from the page itself). Runs after each drawing and whenever the panel changes size.
+function fitPreviewSheets() {
+  const view = $("invoice");
+  const first = view.querySelector ? view.querySelector(".inv-page") : null;
+  if (!first || typeof getComputedStyle !== "function") return;
+  const natural = parseFloat(getComputedStyle(first).width);
+  const room = view.clientWidth;
+  if (!(natural > 0) || !(room > 0)) return;   // the panel is hidden: it is fitted when it shows again
+  const value = Math.min(PREVIEW_MAX_SCALE, room / natural).toFixed(4);
+  if (view.style.getPropertyValue("--sheet-scale") !== value) view.style.setProperty("--sheet-scale", value);
 }
 
 // The collection document: what is still to collect on an invoice, and nothing else. It is NOT an invoice: it has no
@@ -3403,7 +3555,13 @@ function renderInvoice() {
   const editing = Boolean(state.invoiceEdit);
   const saved = state.previewInvoice;
   const shown = previewedInvoice();
-  $("invoice").innerHTML = invoiceHtml(shown);
+  // The preview shows the printed pages themselves (same pieces, same page layout, same footer), scaled down like a small
+  // sheet of paper. If that can not be done the plain invoice is shown as it always was.
+  if (!renderPreviewSheets(shown)) {
+    $("invoice").classList.toggle("inv-sheets", false);
+    $("invoice").classList.toggle("invoice-sheets", false);
+    $("invoice").innerHTML = invoiceHtml(shown);
+  }
   clearPrintPages();   // the printed pages are laid out again just before printing (buildPrintPages), so none can be out of date
   $("previewStatus").textContent = t(editing ? "edit.previewStatus" : saved ? "preview.saved" : "preview.live");
   $("previewStatus").classList.toggle("preview-unsaved", editing);   // an unsaved preview never looks like the saved invoice
@@ -3991,6 +4149,7 @@ function renderEverything() {
   applyCurrency();
   renderResults();
   renderSelected();
+  renderSellerName();   // before the preview, which prints the name
   renderSale();
   renderStock();
   renderInvoices();
@@ -4155,8 +4314,14 @@ function onCustomerSettled() {
   ui.armed = true;
   ui.suggestions = [];
   ui.suggestIndex = -1;
+  const notice = $("debtNotice");
+  const wasShown = !notice.hidden;
+  const before = debtNoticeCache;
   renderDebtUi();
-  scrollDebtNoticeIntoView();
+  // Bring the card into view when it has just appeared or changed. When it was already showing, the page stays where it is: this
+  // runs when the name box loses focus, which is also what happens the moment a button of the card is pressed (mousedown), and
+  // scrolling then would move that button out from under the pointer, so the click would be lost.
+  if (!notice.hidden && (!wasShown || debtNoticeCache !== before)) scrollDebtNoticeIntoView();
 }
 
 function scrollDebtNoticeIntoView() {
@@ -4629,6 +4794,9 @@ function bindEvents() {
     state.sale.secondCustomer.name = $("custName2").value;
     refreshLive();
   });
+  // The seller name: typing changes nothing but the Save button; Save (or Enter) keeps the name and the preview follows.
+  $("sellerName").addEventListener("input", onSellerInput);
+  $("sellerForm").addEventListener("submit", (e) => { e.preventDefault(); submitSellerName(); });
   // The debt of a returning customer is looked up when the person settles on them (leaves the field, Enter, or picks
   // a suggestion), never while they are still typing.
   for (const id of ["custName", "custPhone"]) {
@@ -4874,6 +5042,8 @@ function bindEvents() {
 
   // Preview
   $("printBtn").addEventListener("click", () => printInvoice());
+  // The sheets are scaled to the width of the panel: scale them again when the window (or the layout) changes size.
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(fitPreviewSheets).observe($("invoice"));
   // The printed pages are laid out whenever the browser is about to print: the Print button, Ctrl+P or the browser menu.
   window.addEventListener("beforeprint", buildPrintPages);
   $("backToSale").addEventListener("click", () => {
@@ -5060,6 +5230,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     invoiceParts, invoiceHtml, printItems, continuationHeadHtml,
     businessPhonesHtml, fillSettingsForm, saveBusinessSettings, addPhoneRow, removePhoneRow, setPhoneRow, renderPhoneRows,
     getPhoneRows: () => state.phoneRows,
+    sellerNameOf, invoiceFooterHtml, renderSellerName, saveSellerName, onSellerInput, submitSellerName, updateSellerButton,
   });
 } else {
   bindEvents();

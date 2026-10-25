@@ -10,7 +10,7 @@
   --accent-tint: #e6eef9;
   --danger: #b3261e;
   --sidebar-w: 84px;
-  --preview-w: 440px;
+  --preview-w: clamp(440px, 34vw, 620px);   /* the sheet is scaled to this width, so a wider window gives a more readable sheet */
   --topbar-h: 52px;
 }
 
@@ -556,40 +556,54 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 .inv-pages { display: none; }
 .inv-pages.measuring { display: block; position: absolute; left: -10000px; top: 0; visibility: hidden; }   /* laid out off screen, never seen */
 
-#invoicePages .inv-page {
+.inv-sheets {
   --page-w: 210mm; --page-h: 296.5mm;          /* a hair under the sheet, so a page can never spill onto an extra blank sheet */
   --pad-x: 15mm; --pad-top: 15mm; --pad-bottom: 20mm; --foot: 9mm;
+}
+html[data-paper="a5"] .inv-sheets { --page-w: 148mm; --page-h: 209.5mm; --pad-x: 10mm; --pad-top: 10mm; --pad-bottom: 16mm; --foot: 6mm; }
+
+.inv-sheets .inv-page {
   position: relative; width: var(--page-w); height: var(--page-h); padding: var(--pad-top) var(--pad-x) var(--pad-bottom);
   overflow: hidden; color: #000; background: #fff; font: 11pt/1.4 Arial, Helvetica, sans-serif;
   break-after: page; page-break-after: always;
 }
-#invoicePages .inv-page:last-child { break-after: auto; page-break-after: auto; }
-html[data-paper="a5"] #invoicePages .inv-page { --page-w: 148mm; --page-h: 209.5mm; --pad-x: 10mm; --pad-top: 10mm; --pad-bottom: 16mm; --foot: 6mm; font-size: 10pt; }
+.inv-sheets .inv-page:last-child { break-after: auto; page-break-after: auto; }
+html[data-paper="a5"] .inv-sheets .inv-page { font-size: 10pt; }
 
-#invoicePages .inv-page-body { height: 100%; display: flow-root; }
-#invoicePages .inv-page-body > :first-child { margin-top: 0; }
-#invoicePages .inv-biz-name { font-size: 15pt; }
-#invoicePages .inv-title { font-size: 20pt; }
-#invoicePages .inv-table th, #invoicePages .inv-table td { font-size: 10.5pt; }
-html[data-paper="a5"] #invoicePages .inv-biz-name { font-size: 13pt; }
-html[data-paper="a5"] #invoicePages .inv-title { font-size: 17pt; }
-html[data-paper="a5"] #invoicePages .inv-table th, html[data-paper="a5"] #invoicePages .inv-table td { font-size: 9.5pt; }
+.inv-sheets .inv-page-body { height: 100%; display: flow-root; }
+.inv-sheets .inv-page-body > :first-child { margin-top: 0; }
+.inv-sheets .inv-biz-name { font-size: 15pt; }
+.inv-sheets .inv-title { font-size: 20pt; }
+.inv-sheets .inv-table th, .inv-sheets .inv-table td { font-size: 10.5pt; }
+html[data-paper="a5"] .inv-sheets .inv-biz-name { font-size: 13pt; }
+html[data-paper="a5"] .inv-sheets .inv-title { font-size: 17pt; }
+html[data-paper="a5"] .inv-sheets .inv-table th, html[data-paper="a5"] .inv-sheets .inv-table td { font-size: 9.5pt; }
 
 /* The header of a continuation page: compact, same black rule as the first page's header. */
-#invoicePages .inv-cont-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; padding-bottom: 6px; border-bottom: 2px solid #000; }
-#invoicePages .inv-cont-head + * { margin-top: 10px; }
-#invoicePages .inv-cont-left, #invoicePages .inv-cont-right { min-width: 0; }
-#invoicePages .inv-cont-right { text-align: right; }
-#invoicePages .inv-cont-biz { font-size: 12pt; font-weight: 700; }
-#invoicePages .inv-cont-title { font-size: 10pt; font-weight: 700; letter-spacing: 1px; }
-#invoicePages .inv-cont-sub { font-size: 9pt; color: #333; overflow-wrap: anywhere; }
-#invoicePages .inv-cont-sub .label { color: #555; }
+.inv-sheets .inv-cont-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; padding-bottom: 6px; border-bottom: 2px solid #000; }
+.inv-sheets .inv-cont-head + * { margin-top: 10px; }
+.inv-sheets .inv-cont-left, .inv-sheets .inv-cont-right { min-width: 0; }
+.inv-sheets .inv-cont-right { text-align: right; }
+.inv-sheets .inv-cont-biz { font-size: 12pt; font-weight: 700; }
+.inv-sheets .inv-cont-title { font-size: 10pt; font-weight: 700; letter-spacing: 1px; }
+.inv-sheets .inv-cont-sub { font-size: 9pt; color: #333; overflow-wrap: anywhere; }
+.inv-sheets .inv-cont-sub .label { color: #555; }
 /* A history section that starts a page sits right under that header: no extra gap, no second rule. */
-#invoicePages .inv-cont-head + .inv-payments { padding-top: 0; border-top: 0; }
+.inv-sheets .inv-cont-head + .inv-payments { padding-top: 0; border-top: 0; }
 
-#invoicePages .inv-page-foot {
+/* The footer: invoice number on the left, seller name in the middle, page number on the right. The middle column is a fixed share of
+   the width and the two side columns are equal (1fr each), so the name sits in the middle of the SHEET however long or short the
+   other two are. A long name wraps (at most two lines, then it is cut) inside its own column and can never push the others. */
+.inv-sheets .inv-page-foot {
   position: absolute; left: var(--pad-x); right: var(--pad-x); bottom: var(--foot);
-  display: flex; justify-content: space-between; gap: 12px; padding-top: 4px; border-top: 1px solid #ddd; font-size: 8.5pt; color: #666;
+  display: grid; grid-template-columns: 1fr minmax(0, 44%) 1fr; align-items: start; column-gap: 8px;
+  padding-top: 4px; border-top: 1px solid #ddd; font-size: 8.5pt; line-height: 1.3; color: #666;
+}
+.inv-sheets .foot-number { min-width: 0; text-align: start; overflow-wrap: anywhere; }
+.inv-sheets .foot-page { min-width: 0; text-align: end; white-space: nowrap; }
+.inv-sheets .foot-seller {
+  min-width: 0; text-align: center; color: #333;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere;
 }
 
 @media print {

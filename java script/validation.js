@@ -50,6 +50,7 @@
     logo: "",                         // store logo, stored as a PNG data URL
     paper: "A4",                      // invoice paper size: "A4" or "A5"
     language: "en",                   // language of the app and of invoices (a code registered in java script/lang/)
+    sellerName: "",                   // who handles the sales ("Nom du vendeur" on the Sell page); kept until it is changed, printed in the footer of each new invoice
   };
 
   // Units a line on a sale can be sold in. The unit belongs to the sale line, not to the product.
@@ -830,6 +831,8 @@
     if (inv.customer != null && !isObj(inv.customer)) return t("problem.badCustomer");
     // Optional second customer (older invoices do not have one): { name: string }.
     if (inv.secondCustomer !== undefined && (!isObj(inv.secondCustomer) || typeof inv.secondCustomer.name !== "string")) return t("problem.badSecondCustomer");
+    // Optional seller name (older invoices do not have one): the name that was on the Sell page when the invoice was made.
+    if (inv.sellerName !== undefined && typeof inv.sellerName !== "string") return t("problem.badSellerName");
     if (inv.carriedForward !== undefined) {
       if (!Array.isArray(inv.carriedForward)) return t("problem.badCarried");
       const seenTransfers = new Set();

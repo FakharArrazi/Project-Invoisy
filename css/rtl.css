@@ -114,7 +114,9 @@ html[dir="rtl"] .inv-totals td:last-child { text-align: left; }
 html[dir="rtl"] .inv-status { text-align: left; }
 html[dir="rtl"] .inv-open { margin-left: 0; margin-right: auto; }
 html[dir="rtl"] .collect-title { text-align: left; }
-html[dir="rtl"] #invoicePages .inv-cont-right { text-align: left; }
+html[dir="rtl"] .inv-sheets .inv-cont-right { text-align: left; }
+/* The preview scales each page from the edge it starts at: in a right-to-left page that is the right edge. */
+html[dir="rtl"] .invoice-sheets .inv-sheet > .inv-page { transform-origin: top right; }
 
 /* ---------- Smaller screens: the rules above must not undo what the small-screen rules reset ---------- */
 
