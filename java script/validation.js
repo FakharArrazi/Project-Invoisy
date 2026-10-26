@@ -24,6 +24,12 @@
 
   const APP_NAME = "Invoisy";
   const CURRENCY = "DA";                 // default currency (can be changed in Settings)
+  // How amounts are SHOWN on invoices (Settings -> Currency display). Only the display changes: every amount is stored and
+  // calculated in dinars, and shown in centimes (1 DA = 100 centimes) by the display code in script.js.
+  const CURRENCY_UNITS = ["dinars", "centimes"];
+  const DEFAULT_CURRENCY_UNIT = "dinars";
+  const CENTIMES_PER_DINAR = 100;
+  const CENTIMES_LABEL = "centimes";     // the label of an amount shown in centimes (the dinar label is the currency above)
   const DATA_VERSION = 1;                // version of the old invoisy-data.json file format
   const BACKUP_FORMAT_VERSION = 2;       // version of the backup file made by Export Backup (1 = before suppliers and purchases; still readable)
   const P = globalThis.Purchases;        // suppliers, purchases and supplier payments (purchases.js)
@@ -49,6 +55,7 @@
     currency: CURRENCY,
     logo: "",                         // store logo, stored as a PNG data URL
     paper: "A4",                      // invoice paper size: "A4" or "A5"
+    currencyUnit: DEFAULT_CURRENCY_UNIT,   // unit amounts are shown in on invoices: "dinars" or "centimes" (display only)
     language: "en",                   // language of the app and of invoices (a code registered in java script/lang/)
     sellerName: "",                   // who handles the sales ("Nom du vendeur" on the Sell page); kept until it is changed, printed in the footer of each new invoice
   };
@@ -672,6 +679,8 @@
     if (!settings.currency.trim()) settings.currency = CURRENCY;
     if (!settings.logo.startsWith("data:image/")) settings.logo = "";
     if (!["A4", "A5"].includes(settings.paper)) settings.paper = "A4";
+    // Settings saved before this option existed (or with an unknown value) show amounts in dinars, as they always did.
+    if (!CURRENCY_UNITS.includes(settings.currencyUnit)) settings.currencyUnit = DEFAULT_CURRENCY_UNIT;
     // An unknown language (for example from a newer backup) falls back to the default instead of blocking the file.
     if (!I18n.has(settings.language)) settings.language = DEFAULT_SETTINGS.language;
     return settings;
@@ -959,6 +968,7 @@
     }
     if (s.currency !== undefined && !s.currency.trim()) return t("problem.currency");
     if (s.paper !== undefined && !["A4", "A5"].includes(s.paper)) return t("problem.paper");
+    if (s.currencyUnit !== undefined && !CURRENCY_UNITS.includes(s.currencyUnit)) return t("problem.currencyUnit");
     if (s.logo && !s.logo.startsWith("data:image/")) return t("problem.logo");
     if (s.phones !== undefined) {
       if (!Array.isArray(s.phones) || s.phones.length > MAX_BUSINESS_PHONES || s.phones.some((p) => !isStr(p) || p.length > MAX_PHONE_LENGTH)) return t("problem.phones", { max: MAX_BUSINESS_PHONES });
@@ -1457,7 +1467,7 @@
   }
 
   globalThis.Validation = {
-    APP_NAME, CURRENCY, DATA_VERSION, BACKUP_FORMAT_VERSION, MIRROR_KEY, LEGACY_KEYS, DEFAULT_BACKUP_DAYS,
+    APP_NAME, CURRENCY, CURRENCY_UNITS, DEFAULT_CURRENCY_UNIT, CENTIMES_PER_DINAR, CENTIMES_LABEL, DATA_VERSION, BACKUP_FORMAT_VERSION, MIRROR_KEY, LEGACY_KEYS, DEFAULT_BACKUP_DAYS,
     DEFAULT_SETTINGS, SELLING_UNITS, PRODUCT_TYPES, normalizeProductType, INVOICE_STATUSES, DERIVED_INVOICE_FIELDS, WALK_IN,
     isObj, isStr, isNum, isDate, round2, toNumber, uid, sameValue,
     formatInvoiceNumber, invoiceSequence, highestInvoiceNumber,

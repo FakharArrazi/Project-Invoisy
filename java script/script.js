@@ -61,6 +61,33 @@ function money(amount, currency) {
   return ltr(numberFormat.format(amount) + " " + (currency || state.settings.currency));
 }
 
+/* ---------- Currency display (Settings -> Currency display) ----------
+   Invoices can show amounts in dinars (1,500 DA) or in centimes (150,000 centimes). This is a DISPLAY choice only: every
+   amount is stored and calculated in dinars, and the conversion (x 100) happens here, on the way to the screen and the
+   printed page. Nothing that is saved is ever multiplied. Typing fields (prices, payments, refunds) stay in dinars. */
+
+// "dinars" or "centimes": a setting that is missing or unknown (older saved data) counts as dinars.
+function currencyUnit() {
+  return state.settings && state.settings.currencyUnit === "centimes" ? "centimes" : "dinars";
+}
+
+// The number to show for an amount that is stored in dinars. cleanNumber removes floating point noise (1.15 x 100 =
+// 114.99999999999999) without rounding real values, so no precision is lost.
+function displayAmount(amount) {
+  const n = toNumber(amount);
+  return currencyUnit() === "centimes" ? Calc.cleanNumber(n * Validation.CENTIMES_PER_DINAR) : n;
+}
+
+// The label that goes with displayAmount(): the currency's own label ("DA") or "centimes".
+function displayCurrency(currency) {
+  return currencyUnit() === "centimes" ? Validation.CENTIMES_LABEL : (currency || state.settings.currency);
+}
+
+// An amount of money as it reads on an invoice, in the chosen unit: "1,500 DA" or "150,000 centimes".
+function invoiceMoney(amount, currency) {
+  return money(displayAmount(amount), displayCurrency(currency));
+}
+
 function formatDate(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return "";
@@ -3184,10 +3211,14 @@ function refreshLive() {
 // The invoice as separate pieces of markup. The preview on screen puts them together (invoiceHtml); the printed pages
 // are laid out from the same pieces (buildPrintPages), so what is printed is what the preview shows.
 function invoiceParts(inv) {
-  const cur = inv.currency || state.settings.currency;
+  // Amounts are shown in the chosen unit (dinars or centimes): `cur` is the label of that unit, `amt` formats a stored amount
+  // (dinars) as the number to show, `cash` as a number with its label. Quantities are never converted (`num`).
+  const cur = displayCurrency(inv.currency || state.settings.currency);
   const biz = inv.business || Validation.businessSnapshot(state.settings);
   const cust = inv.customer || { name: WALK_IN, phone: "", address: "" };
   const num = (n) => numberFormat.format(toNumber(n));
+  const amt = (n) => numberFormat.format(displayAmount(n));
+  const cash = (n) => money(displayAmount(n), cur);
   const pct = (p) => (p ? ` (${numberFormat.format(p)}%)` : "");
 
   // Goods sold in several deliveries: each line shows what was handed over and what is still to collect. The quantity,
@@ -3201,7 +3232,7 @@ function invoiceParts(inv) {
         const toCollect = left && left.remaining > 0
           ? `<div class="inv-sub inv-open">${esc(t("inv.deliveredOf", { delivered: qtyText(left.delivered, i.sellingUnit), remaining: qtyText(left.remaining, i.sellingUnit) }))}</div>`
           : "";
-        return `<tr><td>${esc(invoiceItemLabel(i))}${invoiceItemTypeHtml(i)}</td><td class="num">${num(i.qty)}${i.sellingUnit ? ` ${esc(unitLabel(i.sellingUnit, i.qty))}` : ""}${inPriceUnit}${toCollect}</td><td class="num">${num(shown.price)}${shown.unit ? ` <span class="inv-unit">/ ${esc(unitLabel(shown.unit))}</span>` : ""}</td><td class="num">${num(i.total != null ? i.total : Calc.calculateLineTotal(i.qty, i.unitPrice))}</td></tr>`;
+        return `<tr><td>${esc(invoiceItemLabel(i))}${invoiceItemTypeHtml(i)}</td><td class="num">${num(i.qty)}${i.sellingUnit ? ` ${esc(unitLabel(i.sellingUnit, i.qty))}` : ""}${inPriceUnit}${toCollect}</td><td class="num">${amt(shown.price)}${shown.unit ? ` <span class="inv-unit">/ ${esc(unitLabel(shown.unit))}</span>` : ""}</td><td class="num">${amt(i.total != null ? i.total : Calc.calculateLineTotal(i.qty, i.unitPrice))}</td></tr>`;
       })
     : [`<tr><td colspan="4" class="none">${esc(t("inv.noItems"))}</td></tr>`];   // one row per product: a row is never split between two printed pages
 
@@ -3212,24 +3243,24 @@ function invoiceParts(inv) {
   const carried = Validation.carriedLines(inv);
   const carriedBlock = carried.length
     ? `<section class="inv-carried"><h3>${esc(t("inv.carriedHeading"))}</h3><table class="inv-table inv-carried-table"><tbody>${
-        carried.map((l) => `<tr><td>${esc(t("inv.carriedLine", { number: l.sourceInvoiceNumber, date: formatDate(l.sourceDate) }))}</td><td class="num">${num(l.amount)}</td></tr>`).join("")
+        carried.map((l) => `<tr><td>${esc(t("inv.carriedLine", { number: l.sourceInvoiceNumber, date: formatDate(l.sourceDate) }))}</td><td class="num">${amt(l.amount)}</td></tr>`).join("")
       }</tbody></table></section>`
     : "";
   const totalRows = carried.length
-    ? `<tr class="purchase"><td>${esc(t("inv.totalPurchase"))}</td><td>${esc(money(toNumber(inv.total), cur))}</td></tr>
-      <tr><td>${esc(t("inv.carriedTotal"))}</td><td>${esc(money(pay.carried, cur))}</td></tr>
-      <tr class="grand"><td>${esc(t("inv.totalDue"))}</td><td>${esc(money(pay.due, cur))}</td></tr>`
-    : `<tr class="grand"><td>${esc(t(cancelled ? "inv.cancelledTotal" : "inv.grandTotal"))}</td><td>${esc(money(toNumber(inv.total), cur))}</td></tr>`;
+    ? `<tr class="purchase"><td>${esc(t("inv.totalPurchase"))}</td><td>${esc(cash(toNumber(inv.total)))}</td></tr>
+      <tr><td>${esc(t("inv.carriedTotal"))}</td><td>${esc(cash(pay.carried))}</td></tr>
+      <tr class="grand"><td>${esc(t("inv.totalDue"))}</td><td>${esc(cash(pay.due))}</td></tr>`
+    : `<tr class="grand"><td>${esc(t(cancelled ? "inv.cancelledTotal" : "inv.grandTotal"))}</td><td>${esc(cash(toNumber(inv.total)))}</td></tr>`;
   // On an older invoice whose balance moved to a newer one, the original total is untouched and the move is shown as its own line.
   const movedRow = pay.transferredOut > 0
-    ? `<tr class="moved"><td>${esc(t("inv.transferredOut", { numbers: carriedToNumbers(inv) }))}</td><td>${esc(money(pay.transferredOut, cur))}</td></tr>`
+    ? `<tr class="moved"><td>${esc(t("inv.transferredOut", { numbers: carriedToNumbers(inv) }))}</td><td>${esc(cash(pay.transferredOut))}</td></tr>`
     : "";
   // Paid more than the invoice now asks for (after a return): the amount owed back to the customer, on its own line.
   const refundRow = pay.refundDue > 0
-    ? `<tr class="due refund"><td>${esc(t("inv.refundDue"))}</td><td>${esc(money(pay.refundDue, cur))}</td></tr>`
+    ? `<tr class="due refund"><td>${esc(t("inv.refundDue"))}</td><td>${esc(cash(pay.refundDue))}</td></tr>`
     : "";
   const paidRows = hasItems
-    ? `<tr><td>${esc(t("inv.totalPaid"))}</td><td>${esc(money(pay.paid, cur))}</td></tr>${pay.refunded > 0 ? `<tr class="refunded"><td>${esc(t("inv.refunded"))}</td><td>${esc(money(pay.refunded, cur))}</td></tr>` : ""}${movedRow}<tr class="due"><td>${esc(t("inv.remaining"))}</td><td>${esc(money(pay.remaining, cur))}</td></tr>${refundRow}`
+    ? `<tr><td>${esc(t("inv.totalPaid"))}</td><td>${esc(cash(pay.paid))}</td></tr>${pay.refunded > 0 ? `<tr class="refunded"><td>${esc(t("inv.refunded"))}</td><td>${esc(cash(pay.refunded))}</td></tr>` : ""}${movedRow}<tr class="due"><td>${esc(t("inv.remaining"))}</td><td>${esc(cash(pay.remaining))}</td></tr>${refundRow}`
     : "";
   // The payment status belongs to the totals: together they are the financial summary, one block that is never split
   // between two printed pages (the status must never be left alone at the top of the next one).
@@ -3238,9 +3269,9 @@ function invoiceParts(inv) {
     : "";
   const summary = `<div class="inv-summary">
       <table class="inv-totals">
-        <tr><td>${esc(t("inv.subtotal"))}</td><td>${esc(money(toNumber(inv.subtotal), cur))}</td></tr>
-        <tr><td>${esc(t("inv.discount"))}${pct(inv.discountPercent)}</td><td>${esc(money(toNumber(inv.discount), cur))}</td></tr>
-        <tr><td>${esc(t("inv.tax"))}${pct(inv.taxPercent)}</td><td>${esc(money(toNumber(inv.tax), cur))}</td></tr>
+        <tr><td>${esc(t("inv.subtotal"))}</td><td>${esc(cash(toNumber(inv.subtotal)))}</td></tr>
+        <tr><td>${esc(t("inv.discount"))}${pct(inv.discountPercent)}</td><td>${esc(cash(toNumber(inv.discount)))}</td></tr>
+        <tr><td>${esc(t("inv.tax"))}${pct(inv.taxPercent)}</td><td>${esc(cash(toNumber(inv.tax)))}</td></tr>
         ${totalRows}
         ${paidRows}
       </table>
@@ -3251,7 +3282,7 @@ function invoiceParts(inv) {
     ? {
         cls: "inv-payments", lead: "", title: t("inv.history"),
         entries: pay.payments.length
-          ? pay.payments.map((p) => `<div class="inv-pay"><span class="when">${esc(formatDateTime(p.timestamp))}</span><span>${esc(t("inv.paidLine", { amount: money(p.amount, cur) }))}</span></div>`)
+          ? pay.payments.map((p) => `<div class="inv-pay"><span class="when">${esc(formatDateTime(p.timestamp))}</span><span>${esc(t("inv.paidLine", { amount: cash(p.amount) }))}</span></div>`)
           : [`<div class="inv-pay"><span class="when">${esc(t("inv.noPayments"))}</span></div>`],
       }
     : null;
@@ -3260,12 +3291,12 @@ function invoiceParts(inv) {
   const refunds = refundList.length
     ? {
         cls: "inv-payments inv-refunds", lead: "", title: t("inv.refundHistory"),
-        entries: refundList.map((r) => `<div class="inv-pay"><span class="when">${esc(formatDateTime(r.timestamp))}</span><span>${esc(t("inv.refundLine", { amount: money(r.amount, cur) }))} (${esc(t("inv.refundReason." + r.reason))})</span></div>`),
+        entries: refundList.map((r) => `<div class="inv-pay"><span class="when">${esc(formatDateTime(r.timestamp))}</span><span>${esc(t("inv.refundLine", { amount: cash(r.amount) }))} (${esc(t("inv.refundReason." + r.reason))})</span></div>`),
       }
     : null;
   // A cancelled sale says so at the top: when it was cancelled and what was refunded; the products below are what was sold.
   const cancelBanner = cancelled
-    ? `<div class="inv-cancelled"><strong>${esc(t("inv.cancelledBanner"))}</strong> ${esc(t("inv.cancelledOn", { date: formatDateTime(inv.cancellation.at), refund: money(toNumber(inv.cancellation.refund), cur) }))}</div>`
+    ? `<div class="inv-cancelled"><strong>${esc(t("inv.cancelledBanner"))}</strong> ${esc(t("inv.cancelledOn", { date: formatDateTime(inv.cancellation.at), refund: cash(toNumber(inv.cancellation.refund)) }))}</div>`
     : "";
   // Delivery is shown apart from payment: a paid invoice can still have goods waiting.
   const deliveries = hasItems && delivery.tracked
@@ -3993,6 +4024,23 @@ async function savePaper(paper) {
   applyPaperSize();
 }
 
+// Shows the saved Currency display choice in Settings and tells the stylesheet (long centime amounts must wrap, never overlap).
+function applyCurrencyUnit() {
+  const unit = currencyUnit();
+  document.documentElement.dataset.currencyUnit = unit;
+  $(unit === "centimes" ? "currencyUnitCentimes" : "currencyUnitDinars").checked = true;
+}
+
+// Saves the chosen unit with the other settings and redraws the invoice at once (no reload). Only the setting changes:
+// no invoice, payment, stock level or counter is touched. If it can't be saved the choice goes back to the saved one.
+async function saveCurrencyUnit(unit) {
+  if (!Validation.CURRENCY_UNITS.includes(unit)) { applyCurrencyUnit(); return; }
+  const r = await commit((d) => { d.settings.currencyUnit = unit; });
+  if (r.error) notify(r.error, "error");
+  applyCurrencyUnit();
+  renderInvoice();
+}
+
 function updateBannerHeight() {
   const banner = $("storageBanner");
   document.documentElement.style.setProperty("--banner-h", banner.hidden ? "0px" : banner.offsetHeight + "px");
@@ -4253,6 +4301,7 @@ function renderEverything() {
   renderProductFormMode();
   stockForm.renderRows();
   applyPaperSize();
+  applyCurrencyUnit();
   applyCurrency();
   renderResults();
   renderSelected();
@@ -5250,6 +5299,7 @@ function bindEvents() {
   $("logoFile").addEventListener("change", (e) => { chooseLogo(e.target.files[0]); e.target.value = ""; });
   $("removeLogo").addEventListener("click", () => saveLogo(""));
   document.querySelectorAll('input[name="paper"]').forEach((r) => r.addEventListener("change", () => savePaper(r.value)));
+  document.querySelectorAll('input[name="currencyUnit"]').forEach((r) => r.addEventListener("change", () => saveCurrencyUnit(r.value)));
 }
 
 /* ---------- Start ---------- */
@@ -5368,7 +5418,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     addPhoneRow, removePhoneRow, setPhoneRow, saveBusinessSettings, fillSettingsForm, businessPhonesHtml,
     saleDoneAction, openSaleDoneDialog, getSaleDone: () => state.saleDone, printInvoice,
     restoreSaleDone, rememberedSaleDone, reloadedRightAfterSave, markCommit, hasUnsavedWork,
-    backupShouldWait, resumeBackup, notify, saveLanguage, savePaper,
+    backupShouldWait, resumeBackup, notify, saveLanguage, savePaper, saveCurrencyUnit, applyCurrencyUnit, currencyUnit, displayAmount, displayCurrency, invoiceMoney,
     markSettingsTouched: () => { settingsTouched = true; },
     touchProductForm: () => { productFormTouched = true; },
     addProductAsNew, guard, t,

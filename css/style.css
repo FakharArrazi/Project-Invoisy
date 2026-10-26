@@ -333,6 +333,12 @@ legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 .inv-totals { width: 62%; margin: 14px 0 0 auto; border-collapse: collapse; }
 .inv-totals td { padding: 3px 4px; }
 .inv-totals td:last-child { text-align: right; white-space: nowrap; }
+/* Currency display = centimes: an amount has two more digits and a longer label. Only the money cells (price and total of a
+   product line, the totals) may wrap inside their own cell, so a very long amount never runs into its neighbour. Quantities and
+   the dinars layout are untouched. */
+html[data-currency-unit="centimes"] :is(.invoice, #invoicePages) .inv-table td.num:nth-child(n+3),
+html[data-currency-unit="centimes"] :is(.invoice, #invoicePages) .inv-carried-table td.num,
+html[data-currency-unit="centimes"] :is(.invoice, #invoicePages) .inv-totals td:last-child { white-space: normal; overflow-wrap: break-word; }
 .inv-totals .grand td { font-weight: 700; font-size: 15px; border-top: 1px solid #000; padding-top: 7px; }
 .inv-thanks { margin-top: 28px; text-align: center; color: #333; }
 

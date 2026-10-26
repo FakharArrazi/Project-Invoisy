@@ -457,6 +457,14 @@
         </div>
       </div>
       <div class="panel">
+        <h2 data-i18n="settings.currencyDisplay">Currency display</h2>
+        <div class="radio-row" role="radiogroup" aria-label="Currency display" data-i18n-aria-label="settings.currencyDisplay">
+          <label><input type="radio" name="currencyUnit" id="currencyUnitDinars" value="dinars"> <span data-i18n="settings.currencyDinars">Dinars (DA)</span></label>
+          <label><input type="radio" name="currencyUnit" id="currencyUnitCentimes" value="centimes"> <span data-i18n="settings.currencyCentimes">Centimes (centimes)</span></label>
+        </div>
+        <p class="muted small" data-i18n="settings.currencyDisplayNote">Changes only how amounts are shown on invoices (1 DA = 100 centimes). Saved prices, totals and payments stay the same.</p>
+      </div>
+      <div class="panel">
         <h2 data-i18n="settings.logo">Store logo</h2>
         <div class="logo-setting">
           <div id="logoPreview"></div>
