@@ -1,8 +1,8 @@
 "use strict";
 
-// The company header of the printed invoice: business name | logo square | invoice title, then the staff contacts, then the address.
+// The company header of the printed invoice: business name, staff contacts and address on the left; logo square with the invoice title under it on the right.
 // Everything runs through the application's own functions (script.js) against a disposable in-memory IndexedDB. What a real
-// browser prints (the 3 x 3 cm / 2.5 x 2.5 cm square, centring, wrapping) is measured in tests/e2e/invoice_header_check.py.
+// browser prints (the 3 x 3 cm / 2.5 x 2.5 cm square, centring of the title under the logo, wrapping) is measured in tests/e2e/invoice_header_check.py.
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -55,12 +55,15 @@ const headOf = (api, business, logo) => {
 
 /* ---------- Structure ---------- */
 
-test("header: name on the left, a logo square in the centre, the invoice title on the right, in that order", async () => {
+test("header: name on the left; on the right the logo square with the invoice title directly under it", async () => {
   const { api } = await boot();
   const head = headOf(api, { name: "Hedjazi Ceramic", address: "", phone: "", email: "" }, "");
-  const order = ["inv-biz-name", "inv-logo-box", "inv-title"].map((c) => head.indexOf(c));
-  assert.ok(order.every((n) => n >= 0), "all three are there");
-  assert.deepEqual(order, order.slice().sort((a, b) => a - b), "name, logo square, title");
+  const order = ["inv-biz-name", "inv-head-side", "inv-logo-box", "inv-title"].map((c) => head.indexOf(c));
+  assert.ok(order.every((n) => n >= 0), "all four are there");
+  assert.deepEqual(order, order.slice().sort((a, b) => a - b), "name, then the right column: logo square, title");
+  const side = head.slice(head.indexOf('class="inv-head-side"'));
+  assert.ok(side.indexOf("inv-logo-box") < side.indexOf("inv-title"), "the title is under the logo square, in the same column");
+  assert.ok(!head.slice(0, head.indexOf('class="inv-head-side"')).includes("inv-title"), "the title is no longer on the left");
   assert.match(head, /class="inv-biz-name">Hedjazi Ceramic</);
   assert.match(head, /class="inv-title">INVOICE</, "the title keeps its wording");
 });
@@ -117,14 +120,18 @@ test("staff: no people and no address means no blank section at all", async () =
   assert.doesNotMatch(blank, /inv-address|inv-staff/, "a blank address and an empty list print nothing");
 });
 
-test("staff: the address is centred under the staff, no longer stacked under the business name", async () => {
+test("staff: the staff and the address sit under the business name on the left, beside the logo", async () => {
   const { api } = await boot();
   const head = headOf(api, { name: "Shop", address: "Rue 1", phone: "0550 11 22 33", email: "a@b.dz", staff: PEOPLE }, "");
-  const nameCell = head.slice(head.indexOf('class="inv-head-name"'), head.indexOf('class="inv-logo-box"'));
-  assert.ok(!nameCell.includes("Rue 1"), "the address left the name cell");
+  const nameCell = head.slice(head.indexOf('class="inv-head-name"'), head.indexOf('class="inv-head-side"'));
+  const at = (text) => nameCell.indexOf(text);
+  assert.ok(nameCell.includes("Rue 1"), "the address is in the left column");
   assert.ok(nameCell.includes("0550 11 22 33") && nameCell.includes("a@b.dz"), "the phone and email it always had are still under the name");
-  assert.ok(head.indexOf("inv-staff") < head.indexOf("inv-address"), "the address comes after the staff");
-  assert.ok(head.indexOf("inv-logo-box") < head.indexOf("inv-staff"), "the staff come after the first line");
+  for (const p of PEOPLE) for (const text of [p.name, ...p.phones]) assert.ok(nameCell.includes(text), `${text} is in the left column`);
+  assert.ok(at("inv-biz-name") < at("0550 11 22 33") && at("0550 11 22 33") < at("a@b.dz") && at("a@b.dz") < at("inv-staff") && at("inv-staff") < at("inv-address"),
+    "name, then its phone and email, then the staff, then the address");
+  const side = head.slice(head.indexOf('class="inv-head-side"'));
+  assert.doesNotMatch(side, /inv-staff|inv-address|Rue 1|Mohamed/, "the right column holds only the logo square and the title");
 });
 
 test("staff: a person with no name prints only the numbers; a person with no number is not printed; text is escaped", async () => {
@@ -303,6 +310,16 @@ test("print: the logo square is 3 x 3 cm on A4 and 2.5 x 2.5 cm on A5, fixed, wi
     assert.doesNotMatch(css.slice(from, end), /inv-logo-box/, "a print block resizes the logo square");
     from = end;
   }
+});
+
+test("print: the right column centres the title under the logo square; the left column takes the remaining width", () => {
+  const side = rule(".inv-head-side");
+  assert.match(side, /flex-direction: column/);
+  assert.match(side, /align-items: center/, "the logo square and the title share one centre line");
+  assert.match(rule(".inv-head-side .inv-title"), /text-align: center/);
+  assert.match(rule(".inv-head-row"), /grid-template-columns: minmax\(0, 1fr\) auto;/, "name column | logo column");
+  assert.doesNotMatch(rule(".inv-staff"), /text-align: center/, "the staff are no longer centred");
+  assert.doesNotMatch(rule(".inv-address"), /text-align: center/, "the address is no longer centred");
 });
 
 test("print: both paper sizes use the same header markup; only the css sizes differ (the paper setting drives data-paper)", async () => {

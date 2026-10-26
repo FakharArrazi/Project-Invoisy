@@ -1,11 +1,11 @@
-"""Real-browser check of the printed invoice header (file://, disposable profile): logo square, staff contacts, address.
+"""Real-browser check of the printed invoice header (file://, disposable profile): logo square, title, staff contacts, address.
 
 Optional and manual, like invoice_pagination_check.py:   python3 tests/e2e/invoice_header_check.py
 Needs Playwright with Chromium and pdfplumber (pip install pdfplumber).
 
 Each invoice is printed to a PDF the way the browser's Print / Save as PDF does (window "beforeprint" included) and the PDF is
-measured: the logo square must be 3 x 3 cm on A4 and 2.5 x 2.5 cm on A5, centred, and nothing below the header may move whatever
-the logo picture is. The PDFs are kept (INVOISY_PDF_DIR, else a temporary folder) so they can be looked at.
+measured: the logo square must be 3 x 3 cm on A4 and 2.5 x 2.5 cm on A5, at the top right with the title centred under it, the
+name, staff contacts and address must read down the left, and nothing below the header may move whatever the logo picture is. The PDFs are kept (INVOISY_PDF_DIR, else a temporary folder) so they can be looked at.
 """
 import os, sys, tempfile
 from pathlib import Path
@@ -90,6 +90,7 @@ def run():
         logos = {"none": "", "square": page.evaluate(PNG_JS, [600, 600]), "wide": page.evaluate(PNG_JS, [4000, 300]),
                  "tall": page.evaluate(PNG_JS, [200, 2800]), "huge": page.evaluate(PNG_JS, [5000, 5000]), "tiny": page.evaluate(PNG_JS, [16, 16])}
         full = {**BIZ, "staff": PEOPLE}
+        pad = {"A4": 15, "A5": 10}   # page side margin in mm (the invoice's own padding)
 
         for paper, side in (("A4", 3), ("A5", 2.5)):
             print(f"--- {paper}")
@@ -100,7 +101,7 @@ def run():
                 check(box is not None, f"{paper} {key}: a {side} x {side} cm square is drawn")
                 if box:
                     centre = (box["x0"] + box["x1"]) / 2
-                    check(abs(centre - pdf["w"] / 2) < 1.5, f"{paper} {key}: the square is centred on the page (off by {centre - pdf['w'] / 2:.2f} pt)")
+                    check(centre > pdf["w"] / 2 and box["top"] < 2 * pad[paper] * CM / 10 + 1, f"{paper} {key}: the square is at the top right")
                     for im in pdf["images"]:
                         inside = im["x0"] >= box["x0"] - .5 and im["x1"] <= box["x1"] + .5 and im["top"] >= box["top"] - .5 and im["bottom"] <= box["bottom"] + .5
                         check(inside, f"{paper} {key}: the picture stays inside the square")
@@ -119,37 +120,43 @@ def run():
                 tops[key] = (word_top(pdf, "Yacine"), word_top(pdf, "Product"))
             check(len(set(tops.values())) == 1, f"{paper}: the rest of the invoice sits at the same height whatever the logo ({set(tops.values())})")
 
-        print("--- layout of the three header parts (A4, square logo)")
+        print("--- layout of the header parts (A4, square logo)")
         pdf = read(OUT / "A4-square.pdf")
         name = [w for w in pdf["words"] if w["text"].startswith("Hedjazi")][0]
         title = [w for w in pdf["words"] if w["text"] == "INVOICE"][0]
         box = logo_box(pdf, 3)
-        check(name["x0"] < box["x0"] and name["x1"] <= box["x0"] and title["x0"] >= box["x1"], "name left of the square, title right of it")
-        check(abs(name["top"] - title["top"]) < 6, "name and title share the first line")
+        margin = pad["A4"] * CM / 10
+        check(name["x1"] <= box["x0"] and name["x0"] < pdf["w"] / 2, "name at the top left, left of the square")
+        check(abs(name["x0"] - margin) < 3, f"name starts at the left margin ({name['x0'] - margin:.2f} pt off)")
+        check(abs(name["top"] - box["top"]) < 8, "name and the square start on the same line")
+        check(title["top"] >= box["bottom"] - 1 and title["top"] - box["bottom"] < 20, f"title directly under the square ({title['top'] - box['bottom']:.1f} pt below)")
+        check(abs((title["x0"] + title["x1"]) / 2 - (box["x0"] + box["x1"]) / 2) < 2, "title centred under the square")
+        check(abs(max(title["x1"], box["x1"]) - (pdf["w"] - margin)) < 3, "the logo column ends at the right margin")
+        left = [w for w in pdf["words"] if w["x1"] <= box["x0"]]   # the left column only
         lines = {}
-        for w in pdf["words"]:
-            if w["top"] > box["top"] + 3 * CM * 0 and w["top"] < pdf["h"]:
-                lines.setdefault(round(w["top"]), []).append(w)
+        for w in left:
+            lines.setdefault(round(w["top"]), []).append(w)
         for person in PEOPLE:
             row = [ws for ws in lines.values() if any(w["text"] == person["name"] + ":" for w in ws)]
             check(len(row) == 1, f"{person['name']}: name and all numbers on one line")
             if row:
                 ws = row[0]
                 check(" ".join(w["text"] for w in ws).count("·") == len(person["phones"]) - 1, f"{person['name']}: {len(person['phones'])} numbers separated by dots")
-                centre = (min(w["x0"] for w in ws) + max(w["x1"] for w in ws)) / 2
-                check(abs(centre - pdf["w"] / 2) < 3, f"{person['name']}: line centred ({centre - pdf['w'] / 2:.2f} pt)")
+                check(abs(min(w["x0"] for w in ws) - name["x0"]) < 3, f"{person['name']}: line starts at the same left edge as the name")
+                check(ws[0]["top"] > name["bottom"], f"{person['name']}: line is under the business name")
+                check(ws[0]["top"] < box["bottom"], f"{person['name']}: line sits beside the square, in the space that was empty")
         addr = [ws for ws in lines.values() if any(w["text"] == "industrielle," for w in ws)]
         check(len(addr) == 1, "address on its own line")
         if addr:
-            centre = (min(w["x0"] for w in addr[0]) + max(w["x1"] for w in addr[0])) / 2
-            check(abs(centre - pdf["w"] / 2) < 3, f"address centred ({centre - pdf['w'] / 2:.2f} pt)")
+            check(abs(min(w["x0"] for w in addr[0]) - name["x0"]) < 3, "address starts at the same left edge as the name")
             check(addr[0][0]["top"] > max(w["top"] for w in pdf["words"] if w["text"] == "Yacine:"), "address is under the staff lines")
+            check(addr[0][0]["top"] < box["bottom"], "address sits beside the square")
 
         print("--- empty and long content")
         empty = read(print_pdf(page, "A4-nothing", {"business": {"name": "Hedjazi Ceramic", "address": "", "phone": "", "email": ""}, "logo": ""}))
         with_staff = read(OUT / "A4-square.pdf")
         check("Mohamed:" not in empty["text"] and "Zone" not in empty["text"], "no staff and no address: nothing is printed for them")
-        check(word_top(empty, "Yacine") < word_top(with_staff, "Yacine") - 30, "no staff, no address: the header is shorter (no blank rows)")
+        check(abs(word_top(empty, "Yacine") - word_top(with_staff, "Yacine")) < 1, "staff and address fit beside the logo: the invoice below starts at the same height with or without them")
         long_biz = {**BIZ, "address": "Cité des 1000 logements, bâtiment B, entrée 4, route nationale numéro 5, zone d'activités commerciales, Sétif, Algérie", "staff": PEOPLE + [
             {"name": "Abderrahmane Bensalem-Bouzid", "phones": ["0550 00 00 01", "0660 00 00 02", "0770 00 00 03", "0790 00 00 04", "021 00 00 05", "036 00 00 06", "0555 00 00 07"]}]}
         for paper in ("A4", "A5"):
@@ -163,12 +170,13 @@ def run():
         print("--- Arabic (right to left)")
         pdf = read(print_pdf(page, "A4-ar", {"business": full, "logo": logos["square"]}, "A4", "ar"))
         box = logo_box(pdf, 3)
-        check(box is not None and abs((box["x0"] + box["x1"]) / 2 - pdf["w"] / 2) < 1.5, "Arabic: the square is still centred")
-        ar_title = [w for w in pdf["words"] if w["top"] < box["bottom"] and w["x1"] <= box["x0"]]
-        ar_name = [w for w in pdf["words"] if w["top"] < box["bottom"] and w["x0"] >= box["x1"]]
-        check(bool(ar_title) and bool(ar_name), "Arabic: the header text is split around the square (name on the right, title on the left)")
-        staff_line = [w for w in pdf["words"] if w["text"] in ("0550", "0660") and w["top"] > box["bottom"]]
-        check(len(staff_line) >= 2, "Arabic: the staff numbers are printed")
+        check(box is not None and (box["x0"] + box["x1"]) / 2 < pdf["w"] / 2, "Arabic: the square moves to the top left (the layout is mirrored)")
+        beside = [w for w in pdf["words"] if w["top"] < box["bottom"] and w["x0"] >= box["x1"]]
+        check(bool(beside), "Arabic: the name column is on the right of the square")
+        ar_title = [w for w in pdf["words"] if box["bottom"] - 1 <= w["top"] < box["bottom"] + 30 and w["x0"] >= box["x0"] - 40 and w["x1"] <= box["x1"] + 40]
+        check(bool(ar_title) and abs((min(w["x0"] for w in ar_title) + max(w["x1"] for w in ar_title)) / 2 - (box["x0"] + box["x1"]) / 2) < 3, "Arabic: the title is under the square, centred on it")
+        staff_line = [w for w in pdf["words"] if w["text"] in ("0550", "0660") and w["x0"] >= box["x1"]]
+        check(len(staff_line) >= 2, "Arabic: the staff numbers are printed in the right-hand column")
         browser.close()
 
 run()

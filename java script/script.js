@@ -130,9 +130,9 @@ function staffPhonesHtml(phones) {
 }
 
 // The company header of the printed invoice (the invoice only: the collection document keeps its own header).
-//   line 1: business name (left, with the phone and email it always had) | logo square (centre, fixed size) | invoice title (right)
-//   line 2: the staff contacts, centred, one person per line   - nothing at all when there are none
-//   line 3: the address, centred                               - nothing at all when there is none
+//   left column:  business name, then the phone and email it always had, then the staff contacts (one person per line), then the address
+//                 - the staff and the address print nothing at all when there are none
+//   right column: the logo square (fixed size), with the invoice title directly under it, centred on it
 // The logo square is always drawn, empty or not. Its size is set in css (3 x 3 cm on A4, 2.5 x 2.5 cm on A5), never by the image.
 function invoiceHeadHtml(biz, logoSrc) {
   const staff = Validation.businessStaff(biz).filter((c) => c.phones.length);
@@ -144,10 +144,12 @@ function invoiceHeadHtml(biz, logoSrc) {
   const logo = logoSrc ? `<img src="${esc(logoSrc)}" alt="${esc(t("logo.alt"))}">` : "";
   return `<header class="inv-head inv-head-stack">
       <div class="inv-head-row">
-        <div class="inv-head-name"><div class="inv-biz-name">${esc(biz.name)}</div>${businessPhonesHtml(biz)}${biz.email ? `<div>${esc(biz.email)}</div>` : ""}</div>
-        <div class="inv-logo-box">${logo}</div>
-        <div class="inv-title">${esc(t("inv.title"))}</div>
-      </div>${staffHtml}${addressHtml}
+        <div class="inv-head-name"><div class="inv-biz-name">${esc(biz.name)}</div>${businessPhonesHtml(biz)}${biz.email ? `<div>${esc(biz.email)}</div>` : ""}${staffHtml}${addressHtml}</div>
+        <div class="inv-head-side">
+          <div class="inv-logo-box">${logo}</div>
+          <div class="inv-title">${esc(t("inv.title"))}</div>
+        </div>
+      </div>
     </header>`;
 }
 
