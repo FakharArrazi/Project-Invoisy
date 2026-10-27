@@ -65,16 +65,11 @@
 .sell-sale .totals > div > span:last-child { font-variant-numeric: tabular-nums; }
 .sell-sale .totals .grand { font-size: 18px; }
 
-/* ---------- Buttons: a bar that stays in view, as on the Stock form ---------- */
+/* ---------- Buttons: a bar at the end of the sale card, scrolling with the page ---------- */
 
-.sell-sale .actions { position: sticky; bottom: 0; z-index: 2; margin: 20px -20px -20px; padding: 14px 20px; background: var(--panel); border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; }
+.sell-sale .actions { margin: 20px -20px -20px; padding: 14px 20px; background: var(--panel); border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; }
 .sell-sale .actions .btn { min-height: 42px; padding: 0 24px; font-size: 15px; }
 .sell-sale .actions .btn.primary { font-weight: 600; }
-
-/* The bar covers the bottom of the screen, so whatever the page scrolls into view (the debt notice, a field reached with Tab, an error
-   message) has to stop above it. scroll-padding says so: wide screens scroll <main>, narrow ones scroll the whole page. */
-.app[data-view="sell"] main { scroll-padding-bottom: 88px; }
-html:has(.app[data-view="sell"]) { scroll-padding-bottom: 88px; }
 
 @media (max-width: 720px) {
   .sell-add, .sell-sale { padding: 14px; }
