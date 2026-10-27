@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Invoisy</title>
+  <link rel="stylesheet" href="css/settings.css">
   <link rel="stylesheet" href="css/style.css">
   <link rel="stylesheet" href="css/pricing.css">
   <link rel="stylesheet" href="css/stock.css">
@@ -363,15 +364,88 @@
 
     <!-- SETTINGS -->
     <section class="view" id="view-settings" hidden>
-      <h1 class="sr-only" data-i18n="nav.settings">Settings</h1>
-      <div class="panel">
+      <header class="stock-header">
+        <h1 class="stock-title" data-i18n="nav.settings">Settings</h1>
+      </header>
+      <div class="settings-page">
+        <!-- Your business, as printed on invoices -->
+      <div class="panel settings-panel">
+        <h2 data-i18n="settings.business">Business details</h2>
+        <form id="settingsForm" novalidate>
+          <div class="settings-fields">
+          <div class="field">
+            <label for="sName" data-i18n="settings.businessName">Business name</label>
+            <input type="text" id="sName" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="sAddress" data-i18n="sell.address">Address</label>
+            <input type="text" id="sAddress" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="sEmail" data-i18n="settings.email">Email</label>
+            <input type="text" id="sEmail" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="sCurrency" data-i18n="settings.currency">Currency</label>
+            <input type="text" id="sCurrency" maxlength="8" autocomplete="off">
+          </div>
+          <div class="field phones-field settings-wide">
+            <label id="sPhonesLabel" data-i18n="settings.phones">Phone numbers</label>
+            <div class="phone-rows" id="sPhones" role="group" aria-labelledby="sPhonesLabel"></div>
+            <button type="button" class="btn small" id="addPhone" data-i18n="settings.addPhone">Add phone number</button>
+          </div>
+          <div class="field staff-field settings-wide">
+            <label id="sStaffLabel" data-i18n="settings.staff">Staff contacts</label>
+            <p class="muted small staff-hint" data-i18n="settings.staffHint">Printed centered under the business name on invoices: one person per line, with one or more phone numbers.</p>
+            <div class="staff-rows" id="sStaff" role="group" aria-labelledby="sStaffLabel"></div>
+            <button type="button" class="btn small" id="addStaff" data-i18n="settings.addStaff">Add person</button>
+          </div>
+          </div>
+          <div class="actions left">
+            <button type="submit" class="btn primary" data-i18n="settings.save">Save Settings</button>
+          </div>
+        </form>
+      </div>
+      <div class="panel settings-panel">
+        <h2 data-i18n="settings.logo">Store logo</h2>
+        <div class="logo-setting">
+          <div id="logoPreview"></div>
+          <div class="actions left">
+            <input type="file" id="logoFile" accept="image/png" hidden>
+            <button type="button" class="btn" id="chooseLogo" data-i18n="settings.chooseLogo">Choose Logo</button>
+            <button type="button" class="btn danger" id="removeLogo" data-i18n="settings.removeLogo">Remove Logo</button>
+          </div>
+        </div>
+        <p class="muted small" data-i18n="settings.logoNote">PNG image. It is resized to fit a fixed square at the top center of invoices (3 × 3 cm on A4, 2.5 × 2.5 cm on A5).</p>
+        <p class="error" id="logoError" role="alert"></p>
+      </div>
+        <!-- How the app and the invoices look -->
+        <div class="settings-grid">
+      <div class="panel settings-panel">
         <h2 data-i18n="settings.language">Language / Langue</h2>
         <div class="field">
           <label for="sLanguage" data-i18n="settings.languageLabel">Language of the app and of printed invoices</label>
           <select id="sLanguage"></select>
         </div>
       </div>
-      <div class="panel">
+      <div class="panel settings-panel">
+        <h2 data-i18n="settings.paper">Invoice paper size</h2>
+        <div class="radio-row" role="radiogroup" aria-label="Invoice paper size" data-i18n-aria-label="settings.paper">
+          <label><input type="radio" name="paper" id="paperA4" value="A4"> A4</label>
+          <label><input type="radio" name="paper" id="paperA5" value="A5"> A5</label>
+        </div>
+      </div>
+      <div class="panel settings-panel">
+        <h2 data-i18n="settings.currencyDisplay">Currency display</h2>
+        <div class="radio-row" role="radiogroup" aria-label="Currency display" data-i18n-aria-label="settings.currencyDisplay">
+          <label><input type="radio" name="currencyUnit" id="currencyUnitDinars" value="dinars"> <span data-i18n="settings.currencyDinars">Dinars (DA)</span></label>
+          <label><input type="radio" name="currencyUnit" id="currencyUnitCentimes" value="centimes"> <span data-i18n="settings.currencyCentimes">Centimes (centimes)</span></label>
+        </div>
+        <p class="muted small" data-i18n="settings.currencyDisplayNote">Changes only how amounts are shown on invoices (1 DA = 100 centimes). Saved prices, totals and payments stay the same.</p>
+      </div>
+        </div>
+        <!-- Where the data is kept and how it is backed up -->
+      <div class="panel settings-panel">
         <h2 data-i18n="settings.dataStorage">Data storage</h2>
         <dl class="data-info">
           <dt data-i18n="settings.database">Database</dt><dd id="dataFile"></dd>
@@ -405,7 +479,7 @@
           </div>
         </div>
       </div>
-      <div class="panel" id="autoBackupPanel">
+      <div class="panel settings-panel" id="autoBackupPanel">
         <h2 data-i18n="auto.title">Automatic backup file</h2>
         <p class="muted small" id="autoNote"></p>
         <dl class="data-info" id="autoInfo">
@@ -423,75 +497,13 @@
           <button type="button" class="btn" id="autoRetry" data-i18n="auto.retry" hidden>Retry backup</button>
         </div>
       </div>
-      <div class="panel">
-        <h2 data-i18n="settings.business">Business details</h2>
-        <form id="settingsForm" novalidate>
-          <div class="field">
-            <label for="sName" data-i18n="settings.businessName">Business name</label>
-            <input type="text" id="sName" autocomplete="off">
-          </div>
-          <div class="field">
-            <label for="sAddress" data-i18n="sell.address">Address</label>
-            <input type="text" id="sAddress" autocomplete="off">
-          </div>
-          <div class="field phones-field">
-            <label id="sPhonesLabel" data-i18n="settings.phones">Phone numbers</label>
-            <div class="phone-rows" id="sPhones" role="group" aria-labelledby="sPhonesLabel"></div>
-            <button type="button" class="btn small" id="addPhone" data-i18n="settings.addPhone">Add phone number</button>
-          </div>
-          <div class="field staff-field">
-            <label id="sStaffLabel" data-i18n="settings.staff">Staff contacts</label>
-            <p class="muted small staff-hint" data-i18n="settings.staffHint">Printed centered under the business name on invoices: one person per line, with one or more phone numbers.</p>
-            <div class="staff-rows" id="sStaff" role="group" aria-labelledby="sStaffLabel"></div>
-            <button type="button" class="btn small" id="addStaff" data-i18n="settings.addStaff">Add person</button>
-          </div>
-          <div class="field">
-            <label for="sEmail" data-i18n="settings.email">Email</label>
-            <input type="text" id="sEmail" autocomplete="off">
-          </div>
-          <div class="field">
-            <label for="sCurrency" data-i18n="settings.currency">Currency</label>
-            <input type="text" id="sCurrency" maxlength="8" autocomplete="off">
-          </div>
-          <div class="actions left">
-            <button type="submit" class="btn primary" data-i18n="settings.save">Save Settings</button>
-          </div>
-        </form>
-      </div>
-      <div class="panel">
-        <h2 data-i18n="settings.paper">Invoice paper size</h2>
-        <div class="radio-row" role="radiogroup" aria-label="Invoice paper size" data-i18n-aria-label="settings.paper">
-          <label><input type="radio" name="paper" id="paperA4" value="A4"> A4</label>
-          <label><input type="radio" name="paper" id="paperA5" value="A5"> A5</label>
-        </div>
-      </div>
-      <div class="panel">
-        <h2 data-i18n="settings.currencyDisplay">Currency display</h2>
-        <div class="radio-row" role="radiogroup" aria-label="Currency display" data-i18n-aria-label="settings.currencyDisplay">
-          <label><input type="radio" name="currencyUnit" id="currencyUnitDinars" value="dinars"> <span data-i18n="settings.currencyDinars">Dinars (DA)</span></label>
-          <label><input type="radio" name="currencyUnit" id="currencyUnitCentimes" value="centimes"> <span data-i18n="settings.currencyCentimes">Centimes (centimes)</span></label>
-        </div>
-        <p class="muted small" data-i18n="settings.currencyDisplayNote">Changes only how amounts are shown on invoices (1 DA = 100 centimes). Saved prices, totals and payments stay the same.</p>
-      </div>
-      <div class="panel">
-        <h2 data-i18n="settings.logo">Store logo</h2>
-        <div class="logo-setting">
-          <div id="logoPreview"></div>
-          <div class="actions left">
-            <input type="file" id="logoFile" accept="image/png" hidden>
-            <button type="button" class="btn" id="chooseLogo" data-i18n="settings.chooseLogo">Choose Logo</button>
-            <button type="button" class="btn danger" id="removeLogo" data-i18n="settings.removeLogo">Remove Logo</button>
-          </div>
-        </div>
-        <p class="muted small" data-i18n="settings.logoNote">PNG image. It is resized to fit a fixed square at the top center of invoices (3 × 3 cm on A4, 2.5 × 2.5 cm on A5).</p>
-        <p class="error" id="logoError" role="alert"></p>
-      </div>
-      <div class="panel">
+      <div class="panel settings-panel">
         <h2 data-i18n="settings.demo">Demo data</h2>
         <p class="muted" data-i18n="settings.demoNote">Add a few sample products to try the app. Products you already have are kept.</p>
         <div class="actions left">
           <button type="button" class="btn" id="loadDemo" data-i18n="settings.loadDemo">Load Demo Data</button>
         </div>
+      </div>
       </div>
     </section>
 
