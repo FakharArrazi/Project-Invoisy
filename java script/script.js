@@ -2094,36 +2094,73 @@ function answerSaleDone(done, action) {
   return { action: "later" };
 }
 
+// The question before an invoice is deleted (and the explanation when it can not be). It is the page's own dialog (#invoiceDeleteDialog),
+// not the browser's box. A browser without <dialog> falls back to confirm() / a message. Resolves true only when Delete was pressed.
+let invoiceDeleteAsk = null;   // set while the dialog is open: a second request, click or key press is ignored
+
+function askAboutInvoice(inv, { blocked = false, body, question }) {
+  const dialog = $("invoiceDeleteDialog");
+  if (typeof dialog.showModal !== "function") {
+    if (blocked) { notify(body, "error"); return Promise.resolve(false); }
+    return Promise.resolve(confirm(question));
+  }
+  if (invoiceDeleteAsk) return Promise.resolve(false);
+  const pay = paymentInfo(inv);
+  $("invoiceDeleteTitle").textContent = t(blocked ? "invoice.deleteBlockedTitle" : "invoice.deleteTitle");
+  // The invoice number comes first, with the customer, the date and the total, so the right invoice can be checked.
+  $("invoiceDeleteSubject").textContent = inv.invoiceNumber;
+  $("invoiceDeleteDetail").textContent = [customerLabel(inv.customer && inv.customer.name), formatDate(inv.date), money(pay.due, inv.currency)].join(" · ");
+  $("invoiceDeleteBody").textContent = body;
+  $("invoiceDeleteCancel").textContent = t(blocked ? "common.close" : "common.cancel");
+  $("invoiceDeleteConfirm").hidden = blocked;
+  return new Promise((resolve) => {
+    invoiceDeleteAsk = { resolve };
+    dialog.showModal();
+    $("invoiceDeleteCancel").focus();   // Enter must not delete by accident: Cancel has the focus
+  });
+}
+
+function answerInvoiceDelete(yes) {
+  const ask = invoiceDeleteAsk;
+  if (!ask) return;   // already answered
+  invoiceDeleteAsk = null;
+  const dialog = $("invoiceDeleteDialog");
+  if (typeof dialog.close === "function") dialog.close(); else dialog.removeAttribute("open");
+  ask.resolve(yes);
+}
+
 async function deleteInvoice(id) {
   const inv = state.invoices.find((i) => i.id === id);
   if (!inv) return;
-  // An invoice sold in several deliveries keeps its delivery log as an audit trail (the database refuses it too).
-  if (Validation.isTracked(inv)) {
-    notify(t("invoice.cannotDeleteDelivered", { number: inv.invoiceNumber }), "error");
-    return;
-  }
-  // A cancelled sale is a kept record (what was sold, paid and refunded): the database refuses to delete it too.
-  if (Validation.isCancelled(inv)) {
-    notify(t("invoice.cannotDeleteCancelled", { number: inv.invoiceNumber }), "error");
-    return;
-  }
-  // An invoice whose unpaid balance was carried to a newer invoice stays: deleting it would lose that debt.
-  if (Debt.carriedTo(inv, state.debtTransfers).length) {
-    notify(t("invoice.cannotDeleteCarried", { number: inv.invoiceNumber, numbers: carriedToNumbers(inv) }), "error");
+  // Three kinds of invoice are kept on purpose (the database refuses them too); the person is told why, never left guessing.
+  //  - an invoice sold in several deliveries keeps its delivery log as an audit trail,
+  //  - a cancelled sale is a kept record (what was sold, paid and refunded),
+  //  - an invoice whose unpaid balance was carried to a newer invoice stays: deleting it would lose that debt.
+  let why = "";
+  if (Validation.isTracked(inv)) why = t("invoice.cannotDeleteDelivered", { number: inv.invoiceNumber });
+  else if (Validation.isCancelled(inv)) why = t("invoice.cannotDeleteCancelled", { number: inv.invoiceNumber });
+  else if (Debt.carriedTo(inv, state.debtTransfers).length) why = t("invoice.cannotDeleteCarried", { number: inv.invoiceNumber, numbers: carriedToNumbers(inv) });
+  if (why) {
+    await askAboutInvoice(inv, { blocked: true, body: why });
     return;
   }
   const carriedFrom = Validation.carriedLines(inv).map((l) => l.sourceInvoiceNumber).join(", ");
-  const question = t("invoice.confirmDelete", { number: inv.invoiceNumber }) + (carriedFrom ? "\n\n" + t("invoice.confirmDeleteRestores", { number: inv.invoiceNumber, from: carriedFrom }) : "");
-  if (!confirm(question)) return;
+  const restores = carriedFrom ? t("invoice.confirmDeleteRestores", { number: inv.invoiceNumber, from: carriedFrom }) : "";
+  const body = [t("invoice.deleteBody"), restores].filter(Boolean).join(" ");
+  const question = t("invoice.confirmDelete", { number: inv.invoiceNumber }) + (restores ? "\n\n" + restores : "");
+  if (!(await askAboutInvoice(inv, { body, question }))) return;   // Cancel / Esc: nothing was touched
   // Deleting a new invoice also removes the ledger records that carried debt into it, so that balance is
   // collectible on the older invoice again (the database does the same, see commitInTx).
+  // Only the invoice (and those ledger records) go: the products, their stock and the invoice counter are not touched, so the
+  // number of a deleted invoice is never given out again.
   const r = await commit((d) => {
     d.invoices = d.invoices.filter((i) => i.id !== id);
     d.debtTransfers = (d.debtTransfers || []).filter((tr) => tr.targetInvoiceId !== id);
   });
-  if (r.error) { notify(r.error, "error"); return; }
+  if (r.error) { notify(r.error, "error"); return; }   // not saved: the invoice stays in the list
   renderAll();
   onDebtDataChanged();
+  notify(t("invoice.deleted", { number: inv.invoiceNumber }));
 }
 
 // Adds a cash payment (current date/time) to a saved invoice. Items and stock are never touched.
@@ -3697,12 +3734,14 @@ function invoiceMatchesView(inv, view) {
 }
 
 // The sort column: "number" (the number in INV-000012, so 9 comes before 10), "date" (by time), "customer" (A-Z, case-insensitive),
-// "total" (the amount due, as a number) or "status" (unpaid, partially paid, paid). Ties keep the newest invoice first.
+// "total", "paid" or "remaining" (amounts, as numbers) or "status" (unpaid, partially paid, paid). Ties keep the newest invoice first.
 function invoiceSortValue(inv, key) {
   if (key === "number") return Validation.invoiceSequence(inv.invoiceNumber);
   if (key === "date") return Date.parse(inv.date) || 0;
   if (key === "customer") return customerLabel(inv.customer && inv.customer.name).toLowerCase();
   if (key === "total") return paymentInfo(inv).due;
+  if (key === "paid") return paymentInfo(inv).paid;
+  if (key === "remaining") return paymentInfo(inv).remaining;
   if (key === "status") return PAYMENT_RANK[paymentInfo(inv).cls] ?? 9;
   return 0;
 }
@@ -3759,6 +3798,7 @@ function renderInvoicesNow() {
   $("invoiceFilter").hidden = !hasInvoices;
   $("invoiceFilters").hidden = !hasInvoices;
   $("invoiceClear").hidden = !narrowed;
+  $("invoiceSearchClear").hidden = !query;
   $("invoiceCount").textContent = hasInvoices ? t("invoices.count", { shown: list.length, total: state.invoices.length }) : "";
   document.querySelectorAll("[data-sort-th]").forEach((th) => {
     const on = th.dataset.sortTh === invoiceView.sortKey;
@@ -3769,7 +3809,8 @@ function renderInvoicesNow() {
   $("invoiceTable").hidden = list.length === 0;
   $("invoiceEmpty").hidden = list.length > 0;
   $("invoiceEmpty").innerHTML = hasInvoices
-    ? `<p class="muted">${esc(query.trim() ? t("invoices.noMatch", { query }) : t("invoices.noMatchFilters"))}</p>`
+    ? `<p class="muted">${esc(query.trim() ? t("invoices.noMatch", { query }) : t("invoices.noMatchFilters"))}</p>` +
+      `<div class="actions"><button type="button" class="btn" data-action="clear-filters">${esc(t("invoices.clearFilters"))}</button></div>`
     : `<p><strong>${esc(t("invoices.none"))}</strong></p><p class="muted">${esc(t("invoices.noneHint"))}</p>`;
   $("invoiceBody").innerHTML = list.map((inv) => {
     const pay = paymentInfo(inv);
@@ -3787,21 +3828,26 @@ function renderInvoicesNow() {
     const deliveryBadge = delivery.tracked
       ? `<div class="status-line"><span class="badge ${{ complete: "dl-received", partial: "dl-partial", pending: "dl-pending" }[delivery.status]}">${esc(t("badge.delivery." + delivery.status))}</span></div>`
       : "";
+    // Each button names its invoice for screen readers ("Delete INV-000012"), as the Stock buttons name their product.
+    const action = (key, label, extra = {}) => {
+      const aria = t("invoices.actionAria", { action: label, number: inv.invoiceNumber });
+      return `<button type="button" class="btn small${extra.cls ? " " + extra.cls : ""}" data-action="${key}"${extra.attrs || ""} aria-label="${esc(aria)}">${esc(label)}</button>`;
+    };
     return `<tr data-id="${esc(inv.id)}"${cancelled ? ' class="invoice-cancelled"' : ""}>` +
-      `<td>${esc(inv.invoiceNumber)}</td>` +
-      `<td>${esc(formatDate(inv.date))}</td>` +
-      `<td>${esc(customerLabel(inv.customer && inv.customer.name))}${secondCustomerName(inv) ? `<div class="muted small">${esc(secondCustomerName(inv))}</div>` : ""}</td>` +
-      `<td class="num">${esc(money(pay.due, inv.currency))}${notes.length ? `<div class="muted small">${notes.map(esc).join("<br>")}</div>` : ""}</td>` +
+      `<td class="invoice-no" title="${esc(inv.invoiceNumber)}">${esc(inv.invoiceNumber)}</td>` +
+      `<td class="invoice-date">${esc(formatDate(inv.date))}</td>` +
+      `<td class="invoice-customer">${esc(customerLabel(inv.customer && inv.customer.name))}${secondCustomerName(inv) ? `<div class="muted small">${esc(secondCustomerName(inv))}</div>` : ""}</td>` +
+      `<td class="num invoice-total">${esc(money(pay.due, inv.currency))}${notes.length ? `<div class="muted small">${notes.map(esc).join("<br>")}</div>` : ""}</td>` +
       `<td class="num">${esc(money(pay.paid, inv.currency))}</td>` +
       `<td class="num">${esc(money(pay.remaining, inv.currency))}</td>` +
-      `<td><span class="badge ${pay.cls}">${esc(label)}</span>${deliveryBadge}</td>` +
-      `<td class="num"><div class="row-actions">` +
-      `<button type="button" class="btn small" data-action="view">${esc(t("invoices.view"))}</button>` +
-      `<button type="button" class="btn small" data-action="pay"${pay.remaining <= 0 ? " disabled" : ""}>${esc(t("invoices.addPayment"))}</button>` +
-      (delivery.toCollect.length ? `<button type="button" class="btn small" data-action="collect">${esc(t("invoices.collect"))}</button>` : "") +
-      `<button type="button" class="btn small" data-action="print">${esc(t("invoices.print"))}</button>` +
-      `<button type="button" class="btn small" data-action="edit"${cancelled ? ` disabled title="${esc(t("edit.cancelledLocked", { number: inv.invoiceNumber }))}"` : ""}>${esc(t("invoices.edit"))}</button>` +
-      `<button type="button" class="btn small danger" data-action="delete">${esc(t("common.delete"))}</button>` +
+      `<td class="invoice-status"><span class="badge ${pay.cls}">${esc(label)}</span>${deliveryBadge}</td>` +
+      `<td class="num invoice-actions"><div class="row-actions">` +
+      action("view", t("invoices.view")) +
+      action("pay", t("invoices.addPayment"), { attrs: pay.remaining <= 0 ? " disabled" : "" }) +
+      (delivery.toCollect.length ? action("collect", t("invoices.collect")) : "") +
+      action("print", t("invoices.print")) +
+      action("edit", t("invoices.edit"), cancelled ? { attrs: ` disabled title="${esc(t("edit.cancelledLocked", { number: inv.invoiceNumber }))}"` } : {}) +
+      action("delete", t("common.delete"), { cls: "danger" }) +
       `</div></td></tr>`;
   }).join("");
 }
@@ -5113,6 +5159,19 @@ function bindEvents() {
   });
 
   $("invoiceFilter").addEventListener("input", renderInvoices);
+  // The cross inside the search box empties only the search (the filters and the sorting stay) and puts the cursor back in it.
+  $("invoiceSearchClear").addEventListener("click", () => {
+    $("invoiceFilter").value = "";
+    renderInvoices();
+    $("invoiceFilter").focus();
+  });
+  $("invoiceEmpty").addEventListener("click", (e) => {
+    if (e.target.closest("button[data-action=\"clear-filters\"]")) clearInvoiceFilters();
+  });
+  // The question before deleting: Delete deletes, Cancel / Close / Esc leaves everything as it was.
+  $("invoiceDeleteConfirm").addEventListener("click", () => answerInvoiceDelete(true));
+  $("invoiceDeleteCancel").addEventListener("click", () => answerInvoiceDelete(false));
+  $("invoiceDeleteDialog").addEventListener("cancel", (e) => { e.preventDefault(); answerInvoiceDelete(false); });
   $("invoicePayFilter").addEventListener("change", () => { invoiceView.pay = $("invoicePayFilter").value; renderInvoices(); });
   $("invoiceDeliveryFilter").addEventListener("change", () => { invoiceView.delivery = $("invoiceDeliveryFilter").value; renderInvoices(); });
   $("invoiceClear").addEventListener("click", clearInvoiceFilters);
@@ -5390,7 +5449,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     deleteProduct,
     addStock,
     completeSale,
-    deleteInvoice,
+    deleteInvoice, answerInvoiceDelete,
     exportBackup,
     importBackup,
     DEFAULT_SETTINGS,

@@ -191,6 +191,12 @@ I18n.register("en", "English", {
   "badge.unpaid": "Unpaid",
   "invoice.confirmDelete": "Delete {number}? Stock is not changed.",
   "invoice.deleted": "{number} deleted.",
+  "invoice.deleteTitle": "Delete this invoice?",
+  "invoice.deleteBody": "It is removed permanently. Products and stock are not changed.",
+  "invoice.deleteBlockedTitle": "This invoice can not be deleted",
+  "invoices.clearSearch": "Clear search",
+  "invoices.actionAria": "{action} {number}",
+  "common.close": "Close",
 
   // ----- Invoice preview and the printed invoice -----
   "preview.aria": "Invoice preview",

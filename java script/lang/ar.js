@@ -194,6 +194,12 @@ I18n.register("ar", "العربية", {
   "badge.unpaid": "غير مدفوعة",
   "invoice.confirmDelete": "حذف {number}؟ لن يتغيّر المخزون.",
   "invoice.deleted": "تم حذف {number}.",
+  "invoice.deleteTitle": "حذف هذه الفاتورة؟",
+  "invoice.deleteBody": "سيتم حذفها نهائيًا. لن تتغيّر المنتجات ولا المخزون.",
+  "invoice.deleteBlockedTitle": "لا يمكن حذف هذه الفاتورة",
+  "invoices.clearSearch": "مسح البحث",
+  "invoices.actionAria": "{action} {number}",
+  "common.close": "إغلاق",
 
   // ----- Invoice preview and the printed invoice -----
   "preview.aria": "معاينة الفاتورة",

@@ -41,10 +41,10 @@ when there is an unsaved sale or form. Pressing *Try again* several times starts
 again no longer leaves a second change listener running.
 
 **Routine operations are quiet.** No message for: saving, editing or deleting a product, restocking, adjusting stock,
-completing a sale, printing, deleting an invoice, recording a payment or a collection, saving settings, changing the
+completing a sale, printing, recording a payment or a collection, saving settings, changing the
 language or the paper size, changing the logo, adding or removing an outstanding debt, loading demo products, and
 cancelling a question you were just asked. The screen itself shows the result. Still shown: every error, backup export and
-restore results, migration notices, the area-to-boxes conversion, a price reset, "nothing changed", and the Purchases and
+restore results, the short "INV-… deleted." after an invoice is deleted, migration notices, the area-to-boxes conversion, a price reset, "nothing changed", and the Purchases and
 Suppliers confirmations (unchanged).
 
 ## What has to be fixed outside the app

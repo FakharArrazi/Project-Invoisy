@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="css/style.css">
   <link rel="stylesheet" href="css/pricing.css">
   <link rel="stylesheet" href="css/stock.css">
+  <link rel="stylesheet" href="css/invoices.css">
   <link rel="stylesheet" href="css/sell.css">
   <link rel="stylesheet" href="css/rtl.css">
   <style id="paperStyle"></style>
@@ -294,43 +295,51 @@
 
     <!-- INVOICES -->
     <section class="view" id="view-invoices" hidden>
-      <h1 class="sr-only" data-i18n="nav.invoices">Invoices</h1>
-      <div class="panel">
-        <div class="panel-head">
-          <h2 data-i18n="invoices.history">Invoice history</h2>
-          <label class="sr-only" for="invoiceFilter" data-i18n="invoices.searchLabel">Search invoices</label>
-          <input type="search" id="invoiceFilter" placeholder="Search invoice, customer or phone..." data-i18n-placeholder="invoices.searchPlaceholder" autocomplete="off">
+      <header class="stock-header">
+        <h1 class="stock-title" data-i18n="nav.invoices">Invoices</h1>
+        <span class="muted invoice-count" id="invoiceCount" aria-live="polite"></span>
+      </header>
+
+      <div class="panel stock-list invoice-list">
+        <div class="stock-toolbar invoice-toolbar" id="invoiceFilters">
+          <div class="stock-search invoice-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+            <label class="sr-only" for="invoiceFilter" data-i18n="invoices.searchLabel">Search invoices</label>
+            <input type="search" id="invoiceFilter" placeholder="Search invoice, customer or phone..." data-i18n-placeholder="invoices.searchPlaceholder" autocomplete="off">
+            <button type="button" class="invoice-search-clear" id="invoiceSearchClear" aria-label="Clear search" data-i18n-aria-label="invoices.clearSearch" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+          <div class="invoice-selects">
+            <label class="sr-only" for="invoicePayFilter" data-i18n="invoices.filterPayLabel">Payment status</label>
+            <select id="invoicePayFilter">
+              <option value="all" data-i18n="invoices.payAll">All payments</option>
+              <option value="unpaid" data-i18n="invoices.payUnpaid">Unpaid</option>
+              <option value="partial" data-i18n="invoices.payPartial">Partially paid</option>
+              <option value="paid" data-i18n="invoices.payPaid">Paid</option>
+              <option value="cancelled" data-i18n="invoices.payCancelled">Cancelled</option>
+            </select>
+            <label class="sr-only" for="invoiceDeliveryFilter" data-i18n="invoices.filterDelLabel">Delivery status</label>
+            <select id="invoiceDeliveryFilter">
+              <option value="all" data-i18n="invoices.delAll">All deliveries</option>
+              <option value="delivered" data-i18n="invoices.delDelivered">Delivered</option>
+              <option value="notDelivered" data-i18n="invoices.delNot">Not delivered</option>
+            </select>
+            <button type="button" class="btn" id="invoiceClear" data-i18n="invoices.clearFilters" hidden>Clear filters</button>
+          </div>
         </div>
-        <div class="invoice-filters" id="invoiceFilters">
-          <label class="sr-only" for="invoicePayFilter" data-i18n="invoices.filterPayLabel">Payment status</label>
-          <select id="invoicePayFilter">
-            <option value="all" data-i18n="invoices.payAll">All payments</option>
-            <option value="unpaid" data-i18n="invoices.payUnpaid">Unpaid</option>
-            <option value="partial" data-i18n="invoices.payPartial">Partially paid</option>
-            <option value="paid" data-i18n="invoices.payPaid">Paid</option>
-            <option value="cancelled" data-i18n="invoices.payCancelled">Cancelled</option>
-          </select>
-          <label class="sr-only" for="invoiceDeliveryFilter" data-i18n="invoices.filterDelLabel">Delivery status</label>
-          <select id="invoiceDeliveryFilter">
-            <option value="all" data-i18n="invoices.delAll">All deliveries</option>
-            <option value="delivered" data-i18n="invoices.delDelivered">Delivered</option>
-            <option value="notDelivered" data-i18n="invoices.delNot">Not delivered</option>
-          </select>
-          <button type="button" class="btn small" id="invoiceClear" data-i18n="invoices.clearFilters" hidden>Clear filters</button>
-          <span class="muted small" id="invoiceCount" aria-live="polite"></span>
-        </div>
-        <div class="table-wrap">
-          <table class="table" id="invoiceTable">
+        <div class="table-wrap stock-table-wrap">
+          <table class="table stock-table invoice-table" id="invoiceTable">
             <thead>
               <tr>
-                <th data-sort-th="number"><button type="button" class="th-sort" data-sort="number"><span data-i18n="col.invoice">Invoice</span><span class="sort-mark" aria-hidden="true"></span></button></th>
-                <th data-sort-th="date"><button type="button" class="th-sort" data-sort="date"><span data-i18n="col.date">Date</span><span class="sort-mark" aria-hidden="true"></span></button></th>
-                <th data-sort-th="customer"><button type="button" class="th-sort" data-sort="customer"><span data-i18n="col.customer">Customer</span><span class="sort-mark" aria-hidden="true"></span></button></th>
-                <th class="num" data-sort-th="total"><button type="button" class="th-sort" data-sort="total"><span data-i18n="col.total">Total</span><span class="sort-mark" aria-hidden="true"></span></button></th>
-                <th class="num" data-i18n="col.paid">Paid</th>
-                <th class="num" data-i18n="col.remaining">Remaining</th>
-                <th data-sort-th="status"><button type="button" class="th-sort" data-sort="status"><span data-i18n="col.status">Status</span><span class="sort-mark" aria-hidden="true"></span></button></th>
-                <th class="num" data-i18n="col.actions">Actions</th>
+                <th scope="col" data-sort-th="number"><button type="button" class="th-sort" data-sort="number"><span data-i18n="col.invoice">Invoice</span><span class="sort-mark" aria-hidden="true"></span></button></th>
+                <th scope="col" data-sort-th="date"><button type="button" class="th-sort" data-sort="date"><span data-i18n="col.date">Date</span><span class="sort-mark" aria-hidden="true"></span></button></th>
+                <th scope="col" data-sort-th="customer"><button type="button" class="th-sort" data-sort="customer"><span data-i18n="col.customer">Customer</span><span class="sort-mark" aria-hidden="true"></span></button></th>
+                <th scope="col" class="num" data-sort-th="total"><button type="button" class="th-sort" data-sort="total"><span data-i18n="col.total">Total</span><span class="sort-mark" aria-hidden="true"></span></button></th>
+                <th scope="col" class="num" data-sort-th="paid"><button type="button" class="th-sort" data-sort="paid"><span data-i18n="col.paid">Paid</span><span class="sort-mark" aria-hidden="true"></span></button></th>
+                <th scope="col" class="num" data-sort-th="remaining"><button type="button" class="th-sort" data-sort="remaining"><span data-i18n="col.remaining">Remaining</span><span class="sort-mark" aria-hidden="true"></span></button></th>
+                <th scope="col" data-sort-th="status"><button type="button" class="th-sort" data-sort="status"><span data-i18n="col.status">Status</span><span class="sort-mark" aria-hidden="true"></span></button></th>
+                <th scope="col" class="num" data-i18n="col.actions">Actions</th>
               </tr>
             </thead>
             <tbody id="invoiceBody"></tbody>
@@ -590,6 +599,18 @@
     <button type="button" class="btn primary" id="saleDonePrint" autofocus data-i18n="saleDone.print">Print Invoice</button>
     <button type="button" class="btn" id="saleDoneNew" data-i18n="saleDone.new">New Sale</button>
     <button type="button" class="btn" id="saleDoneLater" data-i18n="saleDone.later">Later</button>
+  </div>
+</dialog>
+
+<!-- Asks before an invoice is deleted for good (and explains why one can not be deleted). Opened from Invoices only. -->
+<dialog class="confirm-dialog no-print" id="invoiceDeleteDialog" aria-labelledby="invoiceDeleteTitle" aria-describedby="invoiceDeleteBody">
+  <h2 id="invoiceDeleteTitle">Delete this invoice?</h2>
+  <p class="confirm-dialog-subject" id="invoiceDeleteSubject"></p>
+  <p class="confirm-dialog-detail" id="invoiceDeleteDetail"></p>
+  <p class="muted" id="invoiceDeleteBody">It is removed permanently. Products and stock are not changed.</p>
+  <div class="actions">
+    <button type="button" class="btn" id="invoiceDeleteCancel" autofocus>Cancel</button>
+    <button type="button" class="btn danger-solid" id="invoiceDeleteConfirm" data-i18n="common.delete">Delete</button>
   </div>
 </dialog>
 

@@ -1,0 +1,87 @@
+/* Invoices page: header, search / filter toolbar and the invoice table, and the question asked before an invoice is deleted.
+   It reuses the Stock page's header, toolbar and table classes (css/stock.css), so the two pages look the same; only what is
+   specific to invoices is here. No animation or transition is used. */
+
+/* The page's top spacing is the header's margin here (as on Stock), so the sticky table header sits flush at the top edge. */
+.app[data-view="invoices"] main { padding-top: 0; }
+.invoice-count { flex: none; font-size: 14px; white-space: nowrap; }
+
+/* ---------- Search and filters ---------- */
+
+/* The toolbar wraps instead of squeezing the search box, so its placeholder is always readable. */
+.invoice-toolbar { flex-wrap: wrap; }
+.invoice-search { flex: 1 1 380px; }
+.invoice-search input, .invoice-search #invoiceFilter { width: 100%; max-width: none; padding-inline-end: 42px; }
+/* The browser's own clear mark of a search box differs from browser to browser: this one is always there and always the same. */
+.invoice-search input::-webkit-search-cancel-button { display: none; }
+.invoice-search-clear { position: absolute; top: 50%; inset-inline-end: 6px; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; margin-top: -15px; padding: 0; color: var(--muted); background: none; border: 0; border-radius: 4px; cursor: pointer; }
+.invoice-search-clear:hover { color: var(--text); background: #f1f3f6; }
+.invoice-search-clear svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+
+.invoice-selects { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.invoice-selects select { width: auto; min-width: 170px; height: 42px; border-radius: 6px; }
+.invoice-selects .btn { min-height: 42px; padding: 0 18px; font-size: 14px; font-weight: 600; }
+
+/* ---------- The table ---------- */
+
+/* A sortable heading is a real button: the whole label is the click target, the open column is shown in the accent colour. */
+.invoice-table .th-sort { display: inline-flex; align-items: center; gap: 6px; margin: -5px -8px; padding: 5px 8px; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; border-radius: 4px; }
+.invoice-table .th-sort:hover { color: var(--text); background: #e9edf2; }
+.invoice-table .th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.invoice-table th[aria-sort] .th-sort { color: var(--accent); }
+.invoice-table .sort-mark { display: inline-block; min-width: 10px; font-size: 10px; line-height: 1; }
+
+/* An invoice number stays on one line; a very long one is cut with "..." (the full number is in the tooltip). */
+.invoice-table .invoice-no { max-width: 190px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.invoice-table .invoice-date { white-space: nowrap; }
+.invoice-table .invoice-customer { min-width: 200px; overflow-wrap: anywhere; }
+.invoice-table .invoice-total { min-width: 140px; }
+.invoice-table .invoice-total .muted { min-width: 190px; margin-top: 2px; white-space: normal; }
+.invoice-table .invoice-status .badge { font-weight: 600; }
+.invoice-table tr.invoice-cancelled td { color: var(--muted); }
+
+/* Up to six buttons would not fit on one line: they wrap into rows inside the cell, so Delete is never pushed off the screen. */
+.invoice-table .invoice-actions { width: 270px; }
+.invoice-table .row-actions { flex-wrap: wrap; max-width: 270px; margin-inline-start: auto; }
+.invoice-table .row-actions .btn.danger { border-color: var(--danger); }
+.invoice-table .row-actions .btn.danger:hover { color: #fff; background: var(--danger); }
+
+.invoice-list .empty .actions { margin-top: 12px; }
+.invoice-list .empty .btn { min-height: 42px; padding: 0 22px; font-weight: 600; }
+
+/* ---------- Smaller screens ---------- */
+
+/* Below this width the table scrolls sideways inside its box (as the Stock table does); the actions stay in view at the edge. */
+@media (max-width: 1180px) {
+  .invoice-table { min-width: 880px; }
+  .invoice-table th:last-child, .invoice-table td:last-child { position: sticky; inset-inline-end: 0; background: var(--panel); border-inline-start: 1px solid var(--border); }
+  .invoice-table thead th:last-child { background: #f6f8fa; }
+}
+
+@media (max-width: 720px) {
+  .invoice-search { flex-basis: 100%; max-width: none; }
+  .invoice-selects { width: 100%; }
+  .invoice-selects select { flex: 1 1 150px; min-width: 0; }
+  .invoice-selects .btn { flex: 1 1 100%; }
+}
+
+/* ---------- The question before deleting an invoice ---------- */
+
+.confirm-dialog { width: min(440px, calc(100vw - 24px)); max-height: calc(100vh - 24px); padding: 22px; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--text); background: var(--panel); }
+.confirm-dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+.confirm-dialog h2 { margin: 0 0 12px; font-size: 18px; }
+.confirm-dialog p { margin: 0; }
+.confirm-dialog-subject { margin-bottom: 4px !important; font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
+.confirm-dialog-detail { margin-bottom: 12px !important; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.confirm-dialog-detail:empty { display: none; }
+.confirm-dialog .actions { margin-top: 22px; }
+.confirm-dialog .actions .btn { min-width: 116px; min-height: 42px; padding: 0 22px; font-size: 15px; font-weight: 600; }
+
+/* The destructive button of a question: filled, so it can not be mistaken for the neutral Cancel next to it. */
+.btn.danger-solid { color: #fff; background: var(--danger); border-color: var(--danger); }
+.btn.danger-solid:hover { background: #8f1f19; border-color: #8f1f19; }
+
+@media (max-width: 480px) {
+  .confirm-dialog { padding: 18px; }
+  .confirm-dialog .actions .btn { flex: 1 1 0; min-width: 0; }
+}

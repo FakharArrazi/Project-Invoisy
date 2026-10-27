@@ -195,6 +195,12 @@
     "badge.unpaid": "Impayée",
     "invoice.confirmDelete": "Supprimer {number} ? Le stock n’est pas modifié.",
     "invoice.deleted": "{number} supprimée.",
+    "invoice.deleteTitle": "Supprimer cette facture ?",
+    "invoice.deleteBody": "Elle est supprimée définitivement. Les produits et le stock ne sont pas modifiés.",
+    "invoice.deleteBlockedTitle": "Cette facture ne peut pas être supprimée",
+    "invoices.clearSearch": "Effacer la recherche",
+    "invoices.actionAria": "{action} {number}",
+    "common.close": "Fermer",
 
     // ----- Invoice preview and the printed invoice -----
     "preview.aria": "Aperçu de la facture",

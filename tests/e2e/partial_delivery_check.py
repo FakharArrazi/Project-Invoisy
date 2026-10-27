@@ -76,6 +76,9 @@ with sync_playwright() as p:
     check("Paid" in rows and "To collect" in rows, "list shows Paid and To collect as separate statuses: " + rows.replace("\n", " ")[:140])
     check(page.locator('#invoiceBody [data-action="delete"]').count() == 1, "delete button is there (the app explains the refusal)")
     page.click('#invoiceBody [data-action="delete"]')
+    page.wait_for_selector("#invoiceDeleteDialog[open]")
+    check("delivery" in page.inner_text("#invoiceDeleteBody").lower(), "the refusal is explained in the dialog: " + page.inner_text("#invoiceDeleteBody"))
+    page.click("#invoiceDeleteCancel")   # Close
     check(page.locator("#invoiceBody tr").count() == 1, "an invoice with delivery records is not deleted")
 
     # Collect: nothing in stock -> refused, nothing recorded

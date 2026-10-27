@@ -156,7 +156,7 @@ test("database: opening again after the connection was lost does not leave the e
 
 /* ---------- 4. Routine operations are quiet; genuine notices are not ---------- */
 
-test("quiet: product, restock, sale, payment, delete and settings finish without a message", async () => {
+test("quiet: product, restock, sale, payment and settings finish without a message (deleting an invoice says so, see invoices-page.test.js)", async () => {
   const { app, counters } = await startedApp();
   const toast = () => app.toast();
   assert.equal(toast(), "");
@@ -197,8 +197,9 @@ test("quiet: product, restock, sale, payment, delete and settings finish without
   await app.api.savePaper("A5");
   assert.equal(toast(), "", "paper size changed");
 
+  // Deleting an invoice is the one routine action that confirms itself, with a short message naming the invoice.
   await app.api.deleteInvoice(invoice.id);
-  assert.equal(toast(), "", "invoice deleted");
+  assert.equal(toast(), `${invoice.invoiceNumber} deleted.`, "invoice deleted");
   assert.equal(counters.reloads, 0, "and the page never reloaded");
 });
 
