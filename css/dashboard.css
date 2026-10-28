@@ -1,0 +1,70 @@
+/* Dashboard: the page Invoisy opens on. It is a column of sections; the first one is Supplier Price Insights.
+   It reuses the colours, borders, radii and buttons of the rest of the app. No animation or transition is used. */
+
+.app[data-view="dashboard"] main { padding-top: 0; }
+
+/* ---------- Supplier Price Insights ---------- */
+
+.pi-section { padding: 20px; }
+.pi-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.pi-section-head h2 { margin: 0 0 4px; font-size: 16px; }
+.pi-section-head p { margin: 0; max-width: 64ch; }
+.pi-count { flex: none; padding: 2px 10px; font-size: 12px; font-weight: 600; color: var(--accent-dark); background: var(--accent-tint); border-radius: 10px; white-space: nowrap; }
+
+.pi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; align-items: start; }
+
+.pi-card { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 14px 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+
+/* An open card takes the whole row, so its history table has room. */
+.pi-card.is-open { grid-column: 1 / -1; }
+
+.pi-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.pi-head { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; margin: 0; padding: 0; font: inherit; color: inherit; text-align: start; background: none; border: 0; cursor: pointer; }
+.pi-head:hover .pi-name { color: var(--accent-dark); }
+.pi-name { font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
+.pi-size { font-size: 12px; }
+
+/* The size of the gap, as a small pill. Only a large gap is coloured; a small one stays neutral. */
+.pi-diff { flex: none; padding: 2px 9px; font-size: 12px; font-weight: 600; white-space: nowrap; color: var(--muted); background: #f1f3f6; border: 1px solid var(--border); border-radius: 10px; }
+.pi-moderate .pi-diff { color: #8a5a00; background: #fff7e6; border-color: #e0b252; }
+.pi-high .pi-diff { color: var(--danger); background: #fdecea; border-color: #e6b3af; }
+
+.pi-rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 6px; }
+.pi-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 9px 12px; border-bottom: 1px solid var(--border); }
+.pi-row:last-child { border-bottom: 0; }
+.pi-row.is-lowest { background: #f1f8f3; }
+.pi-who { display: flex; flex-direction: column; min-width: 0; }
+.pi-supplier { font-weight: 600; overflow-wrap: anywhere; }
+.pi-date { font-size: 12px; }
+.pi-cost { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.pi-price { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pi-note { grid-column: 1 / -1; font-size: 12px; }
+.pi-tag { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
+.pi-tag-low { color: #1b6e3c; }
+.pi-tag-high { color: var(--muted); }
+.pi-more { margin: -4px 0 0; }
+
+.pi-explain { margin: 0; font-size: 13px; }
+.pi-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* The purchase history that opens inside a card. */
+.pi-detail { display: flex; flex-direction: column; gap: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.pi-detail h4 { margin: 0 0 4px; font-size: 13px; }
+.pi-changes ul { margin: 0; padding-inline-start: 18px; }
+.pi-changes li { margin-bottom: 3px; font-size: 13px; }
+.pi-table th, .pi-table td { padding: 7px 8px; font-size: 13px; vertical-align: top; }
+.pi-detail p { margin: 0; }
+
+.pi-footer { display: flex; justify-content: center; margin-top: 16px; }
+
+/* Nothing to review: quiet, not an empty hole in the page. */
+.pi-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 16px; text-align: center; color: var(--muted); }
+.pi-empty p { margin: 0; max-width: 56ch; }
+.pi-empty-icon { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; color: #1b6e3c; background: #f1f8f3; border-radius: 50%; }
+.pi-empty-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+
+@media (max-width: 560px) {
+  .pi-section { padding: 14px; }
+  .pi-grid { grid-template-columns: minmax(0, 1fr); }
+  .pi-section-head { flex-direction: column; gap: 8px; }
+}

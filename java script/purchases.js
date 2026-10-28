@@ -1579,6 +1579,142 @@
     return [...groups.values()].map((g) => ({ ...g, spent: round2(g.spent) })).sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  /* ---------- Supplier price insights (Dashboard) ----------
+     The same product bought from different suppliers at different prices. Only what is saved is used: confirmed purchases,
+     their supplier, their invoice date and each line's own unit price and unit. Products are matched by product id, never by
+     name or by manufacturer (a manufacturer is who makes the tile, a supplier is who it was bought from). The selling price
+     of a product is never read here.
+
+     For each product, the LATEST purchase of each supplier is compared (not the oldest against the newest), so a supplier
+     that changed its price is judged by what it charges now. When the lines were bought in different units (800 DA per m²
+     from one supplier, 1,152 DA per box from another) they are brought to one unit with the product's own saved
+     information (the same conversion the rest of Invoisy uses); a line that can not be converted reliably is left out of the
+     comparison instead of being guessed. Nothing is written anywhere. */
+
+  const PRICE_SAME_TOLERANCE = 0.005;     // below half a centime two prices are the same price
+  const PRICE_MODERATE_PCT = 3;           // under 3 %: a small difference, shown quietly
+  const PRICE_HIGH_PCT = 10;              // 10 % or more: worth a second look
+
+  function priceLevel(pct) {
+    if (pct === null) return "moderate";
+    return pct >= PRICE_HIGH_PCT ? "high" : pct >= PRICE_MODERATE_PCT ? "moderate" : "small";
+  }
+
+  // The unit price of one purchase line in `unit`, or null when the line can not be brought to that unit reliably.
+  function linePriceIn(line, unit, product) {
+    const price = toNumber(line.unitPrice);
+    if (!(price > 0)) return null;
+    if (line.unit === unit) return price;
+    if (product) {
+      const factor = Calc.getUnitFactor(product, unit, line.unit);          // how many of the bought unit are in one `unit`
+      if (!factor.error && factor.value > 0) return round2(price * factor.value);
+    } else if (line.stockUnit === unit && isNum(line.factor) && line.factor > 0) {
+      return round2(price / line.factor);                                   // the line's own saved conversion into stock units
+    }
+    return null;
+  }
+
+  // All the products that were bought from two or more suppliers at different prices, most relevant first.
+  //   { insights: [...], comparedProducts, samePriceProducts }
+  // insight = { productId, name, tileSize, manufacturer, productExists, unit, entries, lowest, highest, diff, pct, level, changes, history }
+  //   entries   one per supplier, cheapest first: { supplierId, supplierName, date, price, unit, bought: {unitPrice, unit} | null,
+  //             purchaseId, reference, isLowest, isHighest, count }
+  //   changes   a supplier that charged different prices at different times: { supplierId, supplierName, from, to, fromDate, toDate, diff, pct }
+  //   history   every confirmed purchase line of the product that could be compared, newest first
+  function priceInsights(d) {
+    const { purchases, suppliers, products } = dataOf(d);
+    const byProduct = new Map();
+    for (const purchase of purchases) {
+      if (purchase.status !== "confirmed" || !purchase.supplierId) continue;
+      for (const line of purchase.lines || []) {
+        if (!line.productId) continue;
+        const rows = byProduct.get(line.productId) || [];
+        rows.push({ purchase, line });
+        byProduct.set(line.productId, rows);
+      }
+    }
+
+    const insights = [];
+    let comparedProducts = 0;
+    let samePriceProducts = 0;
+    for (const [productId, found] of byProduct) {
+      if (new Set(found.map((r) => r.purchase.supplierId)).size < 2) continue;
+      const product = products.find((p) => p.id === productId) || null;
+
+      // Newest first: by invoice day, then by the internal reference, then the later line of the same purchase.
+      found.sort((a, b) => text(b.purchase.invoiceDate).localeCompare(text(a.purchase.invoiceDate)) || text(b.purchase.reference).localeCompare(text(a.purchase.reference)) || b.purchase.lines.indexOf(b.line) - a.purchase.lines.indexOf(a.line));
+
+      // One unit for the whole product: the unit every line was bought in, otherwise the unit the product is counted in.
+      const units = new Set(found.map((r) => r.line.unit));
+      const unit = units.size === 1 ? found[0].line.unit : (product && Calc.isUnit(product.stockUnit) ? product.stockUnit : (found.find((r) => Calc.isUnit(r.line.stockUnit)) || { line: {} }).line.stockUnit);
+      if (!Calc.isUnit(unit)) continue;
+
+      const rows = [];
+      for (const r of found) {
+        const price = linePriceIn(r.line, unit, product);
+        if (price === null) continue;
+        rows.push({ ...r, price });
+      }
+      if (new Set(rows.map((r) => r.purchase.supplierId)).size < 2) continue;
+      comparedProducts++;
+
+      const nameOfSupplier = (id) => { const s = suppliers.find((x) => x.id === id); return s ? s.name : ""; };
+      const perSupplier = new Map();
+      for (const r of rows) {
+        const g = perSupplier.get(r.purchase.supplierId) || [];
+        g.push(r);
+        perSupplier.set(r.purchase.supplierId, g);
+      }
+
+      const entries = [];
+      const changes = [];
+      for (const [supplierId, list] of perSupplier) {
+        const latest = list[0];
+        entries.push({
+          supplierId, supplierName: nameOfSupplier(supplierId), date: text(latest.purchase.invoiceDate), price: latest.price, unit,
+          bought: latest.line.unit === unit ? null : { unitPrice: toNumber(latest.line.unitPrice), unit: latest.line.unit },
+          purchaseId: latest.purchase.id, reference: text(latest.purchase.reference), count: list.length,
+          isLowest: false, isHighest: false,
+        });
+        // The same supplier at a different price earlier: the most recent price that is not today's price.
+        const before = list.find((x) => Math.abs(x.price - latest.price) > PRICE_SAME_TOLERANCE);
+        if (before) {
+          changes.push({
+            supplierId, supplierName: nameOfSupplier(supplierId), from: before.price, to: latest.price,
+            fromDate: text(before.purchase.invoiceDate), toDate: text(latest.purchase.invoiceDate),
+            diff: round2(latest.price - before.price), pct: before.price > 0 ? Math.round(((latest.price - before.price) / before.price) * 1000) / 10 : null,
+          });
+        }
+      }
+      entries.sort((a, b) => a.price - b.price || a.supplierName.localeCompare(b.supplierName));
+      const lowest = entries[0].price;
+      const highest = entries[entries.length - 1].price;
+      if (highest - lowest <= PRICE_SAME_TOLERANCE) { samePriceProducts++; continue; }   // several suppliers, one price: nothing to flag
+      for (const e of entries) {
+        e.isLowest = Math.abs(e.price - lowest) <= PRICE_SAME_TOLERANCE;
+        e.isHighest = Math.abs(e.price - highest) <= PRICE_SAME_TOLERANCE;
+      }
+      const diff = round2(highest - lowest);
+      const pct = lowest > 0 ? Math.round((diff / lowest) * 1000) / 10 : null;      // against the cheaper price
+      const sample = found[0].line;
+      insights.push({
+        productId, name: product ? product.name : text(sample.productName), tileSize: product ? text(product.tileSize) : text(sample.tileSize),
+        manufacturer: product ? text(product.manufacturer) : "", productExists: Boolean(product), unit, entries, lowest, highest, diff, pct,
+        level: priceLevel(pct), changes: changes.sort((a, b) => a.supplierName.localeCompare(b.supplierName)),
+        history: rows.map((r) => ({
+          purchaseId: r.purchase.id, reference: text(r.purchase.reference), supplierId: r.purchase.supplierId, supplierName: nameOfSupplier(r.purchase.supplierId),
+          date: text(r.purchase.invoiceDate), price: r.price, unit, bought: r.line.unit === unit ? null : { unitPrice: toNumber(r.line.unitPrice), unit: r.line.unit },
+          qty: toNumber(r.line.qty), qtyUnit: r.line.unit,
+        })),
+        latestDate: text(found[0].purchase.invoiceDate),
+      });
+    }
+
+    // Most relevant first: the biggest relative difference, then the biggest amount, then the most recent purchase.
+    insights.sort((a, b) => (b.pct === null ? -1 : b.pct) - (a.pct === null ? -1 : a.pct) || b.diff - a.diff || b.latestDate.localeCompare(a.latestDate) || a.name.localeCompare(b.name));
+    return { insights, comparedProducts, samePriceProducts };
+  }
+
   // Payments made in a period (by payment date). Voided payments are not counted.
   function paymentsReport(d, from, to) {
     const { purchases, suppliers, payments } = dataOf(d);
@@ -1619,7 +1755,7 @@
     saveDraft, deleteDraft, confirmPurchase, creditCheck, receiveDelivery, reverseReceipt, cancelPurchase, deletePurchase, deletionPreview, updatePurchaseDetails, setAttachmentMeta,
     recordPayment, updatePayment, voidPayment,
     linkProblems,
-    purchasesInPeriod, periodReport, outstandingReport, purchasesBySupplier, productHistory, supplierProducts, matchProducts, paymentsReport, overview,
+    purchasesInPeriod, periodReport, outstandingReport, purchasesBySupplier, productHistory, supplierProducts, priceInsights, PRICE_MODERATE_PCT, PRICE_HIGH_PCT, matchProducts, paymentsReport, overview,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = globalThis.Purchases;
 })();

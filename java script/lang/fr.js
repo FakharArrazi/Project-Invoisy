@@ -1368,7 +1368,39 @@
     "problem.badRefund": "enregistrement de remboursement non valide",
     "problem.refundTooMuch": "rembourse plus que ce qui a été payé",
     "problem.badCancellation": "enregistrement d’annulation non valide",
-    "problem.cancelledLocked": "modifierait une vente annulée, qui est conservée comme archive"
+    "problem.cancelledLocked": "modifierait une vente annulée, qui est conservée comme archive",
+
+    // ----- Dashboard: supplier price insights -----
+    "nav.dashboard": "Tableau de bord",
+    "pi.title": "Écarts de prix entre fournisseurs",
+    "pi.subtitle": "Un même produit acheté chez des fournisseurs différents à des prix différents. Le dernier prix d'achat enregistré de chaque fournisseur est comparé.",
+    "pi.count.one": "{n} produit avec un écart de prix",
+    "pi.count.other": "{n} produits avec un écart de prix",
+    "pi.lowest": "Le moins cher",
+    "pi.highest": "Le plus cher",
+    "pi.bought": "Acheté à {price}",
+    "pi.latestOf": "Dernier de {n} achats",
+    "pi.explain": "{high} coûte {amount} de plus par {unit} que {low}, soit {pct} % de plus.",
+    "pi.explainNoPct": "{high} coûte {amount} de plus par {unit} que {low}.",
+    "pi.moreSuppliers": "+{n} autres dans l'historique des achats",
+    "pi.openHistory": "Historique des achats",
+    "pi.closeHistory": "Masquer l'historique",
+    "pi.historyAria": "Historique des achats de {name}",
+    "pi.openStock": "Ouvrir dans Stock",
+    "pi.openStockAria": "Ouvrir {name} dans Stock",
+    "pi.viewPurchaseAria": "Voir l'achat {reference}",
+    "pi.changesTitle": "Changements de prix chez un même fournisseur",
+    "pi.change": "{supplier} est passé de {from} à {to} ({change}) entre le {fromDate} et le {toDate}.",
+    "pi.historyCapped": "Les {n} achats les plus récents sont affichés. Tous sont dans Achats.",
+    "pi.convertedNote": "Les prix sont comparés par {unit}. Un achat fait dans une autre unité est converti avec les informations enregistrées du produit.",
+    "pi.showAll": "Afficher les {n}",
+    "pi.showLess": "En afficher moins",
+    "pi.empty": "Aucun écart de prix entre fournisseurs à vérifier. Quand un même produit est acheté chez des fournisseurs différents à des prix différents, il apparaîtra ici.",
+    "pi.emptySame": "Tout ce qui est acheté chez plusieurs fournisseurs est au même prix. Rien à vérifier.",
+    "pi.unknownSupplier": "Fournisseur inconnu",
+    "pi.level.small": "Petit écart",
+    "pi.level.moderate": "Écart notable",
+    "pi.level.high": "Écart important"
   };
 
   for (const key of Object.keys(messages)) messages[key] = typo(messages[key]);

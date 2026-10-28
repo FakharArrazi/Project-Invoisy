@@ -353,6 +353,7 @@ function clicker(app) {
   const root = app.field("purchasesRoot");
   root.addEventListener = (type, fn) => { listeners[type] = fn; };
   app.field("suppliersRoot").addEventListener = () => {};
+  app.field("dashboardRoot").addEventListener = () => {};
   app.api.PurchasesUI.bind();
   return async (act, id) => {
     const el = { dataset: { act, id }, tagName: "BUTTON" };

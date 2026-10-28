@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="css/stock.css">
   <link rel="stylesheet" href="css/invoices.css">
   <link rel="stylesheet" href="css/sell.css">
+  <link rel="stylesheet" href="css/dashboard.css">
   <link rel="stylesheet" href="css/rtl.css">
   <style id="paperStyle"></style>
   <script id="noNativeSubmit">
@@ -40,10 +41,14 @@
   <span id="bannerText"></span>
   <button type="button" class="btn small" id="bannerAction" hidden></button>
 </div>
-<div class="app" id="app" data-view="sell">
+<div class="app" id="app" data-view="dashboard">
 
   <!-- SIDEBAR -->
   <nav class="sidebar" aria-label="Main">
+    <button type="button" class="nav-btn" data-view="dashboard">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7.5" height="9" rx="1.2"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="1.2"/><rect x="13.5" y="12" width="7.5" height="9" rx="1.2"/><rect x="3" y="15.5" width="7.5" height="5.5" rx="1.2"/></svg>
+      <span data-i18n="nav.dashboard">Dashboard</span>
+    </button>
     <button type="button" class="nav-btn" data-view="sell">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a1 1 0 0 0 1 .8h8.9a1 1 0 0 0 1-.8L20 7H6"/></svg>
       <span data-i18n="nav.sell">Sell</span>
@@ -72,8 +77,16 @@
 
   <main>
 
+    <!-- DASHBOARD (the page Invoisy opens on: business insights, drawn from the saved data) -->
+    <section class="view" id="view-dashboard">
+      <header class="stock-header">
+        <h1 class="stock-title" data-i18n="nav.dashboard">Dashboard</h1>
+      </header>
+      <div id="dashboardRoot"></div>
+    </section>
+
     <!-- SELL -->
-    <section class="view" id="view-sell">
+    <section class="view" id="view-sell" hidden>
       <header class="sell-header">
         <h1 class="sell-title" data-i18n="nav.sell">Sell</h1>
         <!-- The seller is kept between sales (it is a setting) and printed in the footer of each new invoice. Nothing happens while

@@ -299,7 +299,7 @@ const state = {
   purchaseCounter: 0,     // numbers the internal purchase references (PUR-000001), never goes backwards
   lastSaved: "",          // when the data in the database was last changed
   revision: 0,            // the database revision this page has loaded; every save has to start from it
-  view: "sell",
+  view: "dashboard",
   sale: newSale(),
   results: [],            // products currently listed in the picker
   selectedId: null,       // product selected in the picker
@@ -307,6 +307,7 @@ const state = {
   editingId: null,        // product being edited in the Stock form
   productFormOpen: false, // the Stock page's product form is open above the table (screen-only)
   stockSort: "name-asc",  // how the Stock table is ordered (screen-only; the stored product order never changes)
+  stockFocusId: null,     // a product opened from the Dashboard: its Stock row is marked until the search changes (screen-only)
   priceRows: [],          // the selling price rows of the Stock form, as typed: { rowId, unit, price } (kept by stockForm)
   addUnitFor: null,       // product the Sell page unit list was last set up for
   debtUi: { armed: false, dismissedKey: null, suggestions: [], suggestIndex: -1 },   // screen-only: never saved
@@ -3772,7 +3773,7 @@ function stockRowHtml(p, number) {
   const none = '<span class="muted">-</span>';
   const size = tileSizeLabel(p);
   const stock = stockParts(p);
-  return `<tr data-id="${esc(p.id)}">` +
+  return `<tr data-id="${esc(p.id)}"${p.id === state.stockFocusId ? ' class="is-focus"' : ""}>` +
     `<td class="col-index muted">${number}</td>` +
     `<td class="stock-name">${esc(p.name)}</td>` +
     `<td class="stock-size">${size ? esc(size) : none}</td>` +
@@ -4783,7 +4784,7 @@ function rememberedView() {
     const name = sessionStorage.getItem(VIEW_KEY);
     if (name && document.querySelector('.nav-btn[data-view="' + name + '"]')) return name;
   } catch { /* storage blocked */ }
-  return "sell";
+  return "dashboard";
 }
 
 /* ---------- When something outside Invoisy reloads the page ----------
@@ -4882,6 +4883,7 @@ function showView(name, options) {
   const keepPreview = options && options.keepPreview;
   const previous = state.view;
   state.view = name;
+  if (previous === "stock" && name !== "stock") state.stockFocusId = null;   // the mark from "Open in Stock" is gone once Stock is left
 
   document.querySelectorAll(".view").forEach((v) => { v.hidden = v.id !== "view-" + name; });
   document.querySelectorAll(".nav-btn").forEach((b) => {
@@ -4901,6 +4903,19 @@ function showView(name, options) {
   renderAll();
   if (notes.length) notify(notes.join(" "), "error");
   return true;
+}
+
+// "Open in Stock" on a Dashboard card: the Stock page, narrowed to that product (name and size), with its row marked.
+function openProductInStock(id) {
+  const product = state.products.find((p) => p.id === id);
+  if (!product) return;
+  if (!showView("stock")) return;
+  state.stockFocusId = id;
+  $("stockFilter").value = [product.name, product.tileSize].filter(Boolean).join(" ");
+  renderStock();
+  const rows = $("stockBody").children;
+  const row = rows ? Array.from(rows).find((r) => r.dataset && r.dataset.id === id) : null;
+  if (row && row.scrollIntoView) row.scrollIntoView({ block: "center" });
 }
 
 function goToAddProduct() {
@@ -4934,7 +4949,7 @@ function bindEvents() {
     if (b.dataset.view === state.view) PurchasesUI.home(b.dataset.view);   // the menu button of the open page returns to its list
     showView(b.dataset.view);
   }));
-  $("brand").addEventListener("click", () => showView("sell"));
+  $("brand").addEventListener("click", () => showView("dashboard"));
   document.addEventListener("click", (e) => {
     const action = e.target.closest("[data-action='goto-add'], [data-action='demo']");
     if (!action) return;
@@ -5224,7 +5239,7 @@ function bindEvents() {
   productForm.addEventListener("change", () => { productFormTouched = true; });
 
   // Stock: search, sort and the table
-  $("stockFilter").addEventListener("input", renderStock);
+  $("stockFilter").addEventListener("input", () => { state.stockFocusId = null; renderStock(); });
   $("stockSort").addEventListener("change", () => {
     state.stockSort = STOCK_SORTS.includes($("stockSort").value) ? $("stockSort").value : "name-asc";
     renderStock();
@@ -5462,7 +5477,7 @@ function bindEvents() {
 // The Suppliers and Purchases screens (purchases-ui.js) work on this page's data and save through the same commit().
 PurchasesUI.init({
   state, db, commit, guard, $, t, tn, esc, money, numberFormat, notify, formatDateTime, productLabel, priceLabel, stockText, formatTileSize, ltr,
-  downloadText, showView,
+  downloadText, showView, openProductInStock,
 });
 
 if (globalThis.__INVOISY_TEST_EXPORTS__) {
@@ -5483,6 +5498,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     getStorage: () => storage,
     renderAll,
     showView,
+    openProductInStock,
     draftFromState,
     productProblem,
     productLabel,

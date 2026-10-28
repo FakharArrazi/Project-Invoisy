@@ -34,6 +34,7 @@
       detailId: null, open: "", form: null, formLang: "",
       report: { from: "", to: "", productId: "" },
     },
+    dash: { all: false, open: [] },   // Dashboard: all price insights shown, and the products whose purchase history is open (screen only)
     lastLanguage: "",
   };
 
@@ -1878,6 +1879,12 @@
   /* ---------- Click, input and submit handling ---------- */
 
   const actions = {
+    // dashboard: supplier price insights
+    "dash-toggle"(el) { toggleInsight(el.dataset.id); },
+    "dash-all"() { ui.dash.all = !ui.dash.all; renderDashboard(); focusId("pi-all"); },
+    "dash-stock"(el) { if (h.openProductInStock) h.openProductInStock(el.dataset.id); },
+    "dash-purchase"(el) { openPurchase(el.dataset.id); },
+    "dash-purchases"() { h.showView("purchases"); },
     // suppliers
     "sup-add"() { ui.sup.editingId = null; ui.sup.screen = "form"; ui.sup.formReady = false; renderSuppliers(); },
     "sup-edit"(el) { ui.sup.editingId = el.dataset.id; ui.sup.screen = "form"; ui.sup.formReady = false; if (S().view !== "suppliers") h.showView("suppliers"); else renderSuppliers(); },
@@ -2112,6 +2119,118 @@
     }
   }
 
+  /* ---------- Dashboard: Supplier Price Insights ----------
+     The same product bought from different suppliers at different prices (Purchases.priceInsights does the work: this only
+     draws it). Cards show the latest recorded purchase price of each supplier; a card opens to the purchase history of the
+     product. Nothing here changes saved data. */
+
+  const PI_VISIBLE = 6;        // cards shown before "Show all"
+  const PI_HISTORY_ROWS = 10;  // purchase lines listed in an open card
+  const PI_ROWS_IN_CARD = 4;   // suppliers listed in a card; the rest are in the history
+
+  function focusId(id) {
+    const el = $(id);
+    if (el && el.focus) el.focus();
+  }
+
+  const supplierLabel = (name) => name || t("pi.unknownSupplier");
+  const priceText = (price, unit) => money(price) + " / " + unitName(unit, 1);
+  const signedMoney = (n) => h.ltr((n > 0 ? "+" : n < 0 ? "\u2212" : "") + num(Math.abs(n)) + " " + S().settings.currency);
+  const signedPct = (pct) => (pct === null ? "" : h.ltr((pct > 0 ? "+" : pct < 0 ? "\u2212" : "") + num(Math.abs(pct)) + "%"));
+
+  function toggleInsight(productId) {
+    const open = ui.dash.open;
+    const at = open.indexOf(productId);
+    if (at >= 0) open.splice(at, 1); else open.push(productId);
+    renderDashboard();
+    focusId("pi-head-" + productId);
+  }
+
+  function insightRowHtml(e) {
+    const tag = e.isLowest ? `<span class="pi-tag pi-tag-low">${esc(t("pi.lowest"))}</span>` : e.isHighest ? `<span class="pi-tag pi-tag-high">${esc(t("pi.highest"))}</span>` : "";
+    const notes = [];
+    if (e.bought) notes.push(t("pi.bought", { price: priceText(e.bought.unitPrice, e.bought.unit) }));
+    if (e.count > 1) notes.push(t("pi.latestOf", { n: e.count }));
+    return `<li class="pi-row${e.isLowest ? " is-lowest" : e.isHighest ? " is-highest" : ""}">` +
+      `<div class="pi-who"><span class="pi-supplier">${esc(supplierLabel(e.supplierName))}</span><span class="pi-date muted">${esc(fmtDay(e.date))}</span></div>` +
+      `<div class="pi-cost"><span class="pi-price">${esc(priceText(e.price, e.unit))}</span>${tag}</div>` +
+      (notes.length ? `<div class="pi-note muted">${esc(notes.join(" · "))}</div>` : "") +
+      `</li>`;
+  }
+
+  function insightDetailHtml(i) {
+    const parts = [];
+    if (i.changes.length) {
+      parts.push(`<div class="pi-changes"><h4>${esc(t("pi.changesTitle"))}</h4><ul>` + i.changes.map((c) => `<li>${esc(t("pi.change", {
+        supplier: supplierLabel(c.supplierName), from: priceText(c.from, i.unit), to: priceText(c.to, i.unit),
+        change: [signedMoney(c.diff), signedPct(c.pct)].filter(Boolean).join(" · "), fromDate: fmtDay(c.fromDate), toDate: fmtDay(c.toDate),
+      }))}</li>`).join("") + `</ul></div>`);
+    }
+    const rows = i.history.slice(0, PI_HISTORY_ROWS).map((r) => `<tr>` +
+      `<td>${esc(fmtDay(r.date))}</td>` +
+      `<td>${esc(supplierLabel(r.supplierName))}</td>` +
+      `<td class="num">${esc(priceText(r.price, r.unit))}${r.bought ? `<div class="muted small">${esc(t("pi.bought", { price: priceText(r.bought.unitPrice, r.bought.unit) }))}</div>` : ""}</td>` +
+      `<td class="num">${esc(qtyText(r.qty, r.qtyUnit))}</td>` +
+      `<td class="num"><button type="button" class="btn small" data-act="dash-purchase" data-id="${esc(r.purchaseId)}" aria-label="${esc(t("pi.viewPurchaseAria", { reference: r.reference }))}">${esc(r.reference || t("common.view"))}</button></td>` +
+      `</tr>`).join("");
+    parts.push(`<div class="table-wrap"><table class="table pi-table"><thead><tr>` +
+      `<th scope="col">${esc(t("pur.col.date"))}</th><th scope="col">${esc(t("pur.col.supplier"))}</th><th class="num" scope="col">${esc(t("col.price"))}</th>` +
+      `<th class="num" scope="col">${esc(t("col.quantity"))}</th><th class="num" scope="col">${esc(t("pur.col.reference"))}</th>` +
+      `</tr></thead><tbody>${rows}</tbody></table></div>`);
+    if (i.history.length > PI_HISTORY_ROWS) parts.push(`<p class="muted small">${esc(t("pi.historyCapped", { n: PI_HISTORY_ROWS }))}</p>`);
+    if (i.entries.some((e) => e.bought) || i.history.some((r) => r.bought)) parts.push(`<p class="muted small">${esc(t("pi.convertedNote", { unit: unitName(i.unit, 1).toLowerCase() }))}</p>`);
+    return `<div class="pi-detail" id="pi-detail-${esc(i.productId)}">${parts.join("")}</div>`;
+  }
+
+  function insightCardHtml(i) {
+    const open = ui.dash.open.includes(i.productId);
+    const low = i.entries[0];
+    const high = i.entries[i.entries.length - 1];
+    const size = i.tileSize ? h.formatTileSize(i.tileSize) : "";
+    const diffText = [signedMoney(i.diff) + " / " + unitName(i.unit, 1), signedPct(i.pct)].filter(Boolean).join(" · ");
+    const explain = i.pct === null
+      ? t("pi.explainNoPct", { high: supplierLabel(high.supplierName), low: supplierLabel(low.supplierName), amount: money(i.diff), unit: unitName(i.unit, 1).toLowerCase() })
+      : t("pi.explain", { high: supplierLabel(high.supplierName), low: supplierLabel(low.supplierName), amount: money(i.diff), unit: unitName(i.unit, 1).toLowerCase(), pct: num(i.pct) });
+    // With many suppliers the card lists the cheapest and the dearest; the rest are in the history.
+    const shown = i.entries.length > PI_ROWS_IN_CARD ? [...i.entries.slice(0, PI_ROWS_IN_CARD - 1), high] : i.entries;
+    return `<article class="pi-card pi-${i.level}${open ? " is-open" : ""}" data-product="${esc(i.productId)}">` +
+      `<div class="pi-card-head">` +
+        `<button type="button" class="pi-head" id="pi-head-${esc(i.productId)}" data-act="dash-toggle" data-id="${esc(i.productId)}" aria-expanded="${open}" aria-controls="pi-detail-${esc(i.productId)}" aria-label="${esc(t("pi.historyAria", { name: i.name }))}">` +
+          `<span class="pi-name">${esc(i.name)}</span>${size ? `<span class="pi-size muted">${size}</span>` : ""}` +
+        `</button>` +
+        `<span class="pi-diff" title="${esc(t("pi.level." + i.level))}">${esc(diffText)}</span>` +
+      `</div>` +
+      `<ul class="pi-rows">${shown.map(insightRowHtml).join("")}</ul>` +
+      (i.entries.length > shown.length ? `<p class="muted small pi-more">${esc(t("pi.moreSuppliers", { n: i.entries.length - shown.length }))}</p>` : "") +
+      `<p class="pi-explain">${esc(explain)}</p>` +
+      `<div class="pi-actions">` +
+        `<button type="button" class="btn small" data-act="dash-toggle" data-id="${esc(i.productId)}" aria-expanded="${open}" aria-controls="pi-detail-${esc(i.productId)}">${esc(open ? t("pi.closeHistory") : t("pi.openHistory"))}</button>` +
+        (i.productExists ? `<button type="button" class="btn small" data-act="dash-stock" data-id="${esc(i.productId)}" aria-label="${esc(t("pi.openStockAria", { name: i.name }))}">${esc(t("pi.openStock"))}</button>` : "") +
+      `</div>` +
+      (open ? insightDetailHtml(i) : "") +
+      `</article>`;
+  }
+
+  function renderDashboard() {
+    const root = $("dashboardRoot");
+    if (!root) return;
+    const result = P.priceInsights(S());
+    const list = result.insights;
+    const shown = ui.dash.all ? list : list.slice(0, PI_VISIBLE);
+    const check = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+    const body = list.length
+      ? `<div class="pi-grid">${shown.map(insightCardHtml).join("")}</div>` +
+        (list.length > PI_VISIBLE ? `<div class="pi-footer"><button type="button" class="btn" id="pi-all" data-act="dash-all" aria-expanded="${ui.dash.all}">${esc(ui.dash.all ? t("pi.showLess") : t("pi.showAll", { n: list.length }))}</button></div>` : "")
+      : `<div class="pi-empty"><span class="pi-empty-icon">${check}</span><p>${esc(result.samePriceProducts > 0 ? t("pi.emptySame") : t("pi.empty"))}</p>` +
+        `<button type="button" class="btn small" data-act="dash-purchases">${esc(t("nav.purchases"))}</button></div>`;
+    root.innerHTML =
+      `<section class="panel pi-section" aria-labelledby="pi-title">` +
+        `<div class="pi-section-head"><div><h2 id="pi-title">${esc(t("pi.title"))}</h2><p class="muted">${esc(t("pi.subtitle"))}</p></div>` +
+        (list.length ? `<span class="pi-count">${esc(tn("pi.count", list.length))}</span>` : "") + `</div>` +
+        body +
+      `</section>`;
+  }
+
   /* ---------- Hooks from the page ---------- */
 
   function init(hooks) {
@@ -2119,7 +2238,7 @@
   }
 
   function bind() {
-    for (const rootId of ["suppliersRoot", "purchasesRoot"]) {
+    for (const rootId of ["suppliersRoot", "purchasesRoot", "dashboardRoot"]) {
       const root = $(rootId);
       root.addEventListener("click", onClick);
       root.addEventListener("submit", onSubmit);
@@ -2133,11 +2252,12 @@
     }
   }
 
-  // Called by the page whenever it redraws. Only the Suppliers and Purchases views draw anything here.
+  // Called by the page whenever it redraws. Only the Dashboard, Suppliers and Purchases views draw anything here.
   function render() {
     if (!h) return;
     const view = S().view;
-    if (view === "suppliers") renderSuppliers();
+    if (view === "dashboard") renderDashboard();
+    else if (view === "suppliers") renderSuppliers();
     else if (view === "purchases") renderPurchases();
   }
 
@@ -2155,7 +2275,7 @@
 
   globalThis.PurchasesUI = {
     init, bind, render, reset, home,
-    openSupplier, openPurchase, newPurchase,
+    openSupplier, openPurchase, newPurchase, renderDashboard,
     // for tests
     supplierCsv, supplierRows, filteredPurchases, state: ui,
     supplierFormHtml, readSupplierForm, addContactRow, removeContactRow, contactRowsHtml, supplierTableRows, supplierProfileHtml,
