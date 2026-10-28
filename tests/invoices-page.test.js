@@ -4,7 +4,8 @@
 //   A  the table lists every invoice once, with its figures and the same action buttons as before
 //   B  search by number, customer (both names) and phone; clearing it; the empty state
 //   C  sorting by number, date, customer, total, paid, remaining and status with the correct data types; sorting + searching together
-//   D  deleting: asked first (Cancel leaves everything), saved for good, numbering and stock untouched, refusals explained, failures reported
+//   D  deleting: asked first (Cancel leaves everything), saved for good, numbering kept, stock given back, the one refusal explained, failures reported
+//      (the full rollback rules - refunds, cancelled invoices, edits, idempotence - are in tests/invoice-rollback.test.js)
 // Everything runs through the application's own functions against a disposable in-memory IndexedDB (no real data).
 // The real-browser side (layout, dialog, keyboard, reload) is in tests/e2e/invoices_page_check.py.
 
@@ -383,21 +384,23 @@ test("D: numbering stays consistent: a deleted number is never given out again, 
   assert.equal(new Set(numbers).size, numbers.length);
 });
 
-test("D: deleting an invoice does not touch the products or their stock (the goods stay sold)", async () => {
+test("D: deleting an invoice gives its stock back to its own products and touches nothing else", async () => {
   const ctx = await boot();
   const tile = await addTile(ctx, { stock: 40 });
   const other = await addTile(ctx, { name: "Other tile", sku: "OT-1", stock: 7 });
   await sellLines(ctx, [{ product: tile, qty: "5" }, { product: other, qty: "2" }]);
   const gone = await sellLines(ctx, [{ product: tile, qty: "4" }]);
-  const productsBefore = (await snapshot(ctx)).products;
+  const before = await snapshot(ctx);
   assert.equal(stockOf(ctx.api, tile.id), 31);
 
   await ctx.api.deleteInvoice(gone.id);
 
-  assert.equal(stockOf(ctx.api, tile.id), 31, "stock is not given back");
-  assert.equal(stockOf(ctx.api, other.id), 5);
-  assert.deepEqual((await snapshot(ctx)).products, productsBefore, "the saved products are identical");
-  assert.equal((await snapshot(ctx)).invoices.length, 1, "and the other invoice is untouched");
+  assert.equal(stockOf(ctx.api, tile.id), 35, "the 4 boxes of the deleted invoice are back");
+  assert.equal(stockOf(ctx.api, other.id), 5, "a product the invoice never touched is unchanged");
+  const after = await snapshot(ctx);
+  assert.deepEqual(after.products.filter((p) => p.id === other.id), before.products.filter((p) => p.id === other.id), "the other product is identical");
+  assert.equal(after.products.length, before.products.length, "no product was created or removed");
+  assert.equal(after.invoices.length, 1, "and the other invoice is untouched");
 });
 
 test("D: if the deletion can not be saved the invoice stays everywhere and the failure is shown", async () => {
@@ -480,23 +483,33 @@ test("D: Cancel (or Esc) in the page's own dialog changes nothing", async () => 
   await again;
 });
 
-test("D: an invoice that is kept on purpose explains why in the dialog (only Close is offered) and is not deleted", async () => {
+// An old invoice whose unpaid balance was carried onto a newer invoice. Deleting it would make that debt disappear from the invoice
+// that asks for it, so it is the one invoice Delete refuses. Returns { tile, old, carrier }.
+async function carriedPair(ctx) {
+  const tile = await addTile(ctx);
+  const old = await sellLines(ctx, [{ product: tile, qty: "2" }], { name: "Karim Benali", phone: "0555 11 22 33", paid: "1000" });
+  const owed = ctx.api.paymentInfo(old).remaining;
+  ctx.api.addToSale(tile.id, "1", "box");
+  ctx.api.getSale().customer.name = "Karim Benali";
+  ctx.api.getSale().customer.phone = "0555 11 22 33";
+  ctx.api.onCustomerSettled();
+  assert.equal(ctx.api.addDebtToSale([{ sourceInvoiceId: old.id, amount: owed }]).error, undefined);
+  await ctx.api.completeSale();
+  return { tile, old, carrier: ctx.api.getInvoices()[1] };
+}
+
+test("D: an invoice whose balance was carried to a newer one explains why in the dialog (only Close is offered) and is not deleted", async () => {
   const ctx = await boot();
   const dialog = dialogStandIn(ctx);
-  const tile = await addTile(ctx);
-  const inv = await sellLines(ctx, [{ product: tile, qty: "5" }], { name: "Karim", paid: "6000" });
-  openEdit(ctx, inv);
-  while (ctx.api.getSale().items.length) removeLine(ctx.api, 0);
-  await ctx.api.saveInvoiceEdit();   // removing every product cancels the sale (the stand-in confirms)
-  assert.equal(ctx.api.getInvoices()[0].cancellation !== undefined, true, "the sale is cancelled");
+  const { old } = await carriedPair(ctx);
   const before = await snapshot(ctx);
 
-  const asked = ctx.api.deleteInvoice(inv.id);
+  const asked = ctx.api.deleteInvoice(old.id);
   await flush();
   assert.equal(dialog.open, true);
   assert.equal(ctx.app.field("invoiceDeleteTitle").textContent, "This invoice can not be deleted");
   assert.equal(ctx.app.field("invoiceDeleteSubject").textContent, "INV-000001");
-  assert.match(ctx.app.field("invoiceDeleteBody").textContent, /cancelled/);
+  assert.match(ctx.app.field("invoiceDeleteBody").textContent, /carried forward to INV-000002/);
   assert.equal(ctx.app.field("invoiceDeleteConfirm").hidden, true, "there is no Delete button to press");
   assert.equal(ctx.app.field("invoiceDeleteCancel").textContent, "Close");
 
@@ -507,15 +520,39 @@ test("D: an invoice that is kept on purpose explains why in the dialog (only Clo
 
 test("D: without <dialog> support a refusal is still explained (message) and the invoice stays", async () => {
   const ctx = await boot();
-  const tile = await addTile(ctx);
-  const inv = await sellLines(ctx, [{ product: tile, qty: "5" }], { paid: "6000" });
-  openEdit(ctx, inv);
-  while (ctx.api.getSale().items.length) removeLine(ctx.api, 0);
-  await ctx.api.saveInvoiceEdit();
+  const { old } = await carriedPair(ctx);
+  const before = await snapshot(ctx);
 
-  await ctx.api.deleteInvoice(inv.id);
-  assert.match(ctx.app.toast(), /INV-000001 was cancelled\. It is kept as a record and can not be deleted\./);
-  assert.equal(ctx.api.getInvoices().length, 1);
+  await ctx.api.deleteInvoice(old.id);
+  assert.match(ctx.app.toast(), /carried forward to INV-000002/);
+  assert.deepEqual(await snapshot(ctx), before);
+});
+
+test("D: a cancelled invoice (made by an earlier version) is no longer refused: the dialog asks and Delete removes it", async () => {
+  const ctx = await boot();
+  const dialog = dialogStandIn(ctx);
+  const tile = await addTile(ctx);
+  const inv = await sellLines(ctx, [{ product: tile, qty: "5" }], { name: "Karim", paid: "6000" });
+  const before = plain(ctx.api.getInvoices()[0]);
+  // Make the shape an earlier version saved: lines kept, payments kept, one refund of the 6,000, stock already given back.
+  const at = new Date().toISOString();
+  await ctx.api.commit((d) => {
+    const i = d.invoices[0];
+    i.cancellation = { at, total: before.total, paid: 6000, refund: 6000 };
+    i.refunds = [{ id: "r1", amount: 6000, timestamp: at, reason: "cancellation" }];
+    d.products.find((p) => p.id === tile.id).stock += 5;
+  });
+  assert.equal(stockOf(ctx.api, tile.id), 20);
+
+  const asked = ctx.api.deleteInvoice(inv.id);
+  await flush();
+  assert.equal(ctx.app.field("invoiceDeleteTitle").textContent, "Delete this invoice?");
+  assert.equal(ctx.app.field("invoiceDeleteConfirm").hidden, false, "Delete is offered");
+  assert.doesNotMatch(ctx.app.field("invoiceDeleteBody").textContent, /kept as a record|can not be deleted/);
+  ctx.api.answerInvoiceDelete(true);
+  await asked;
+  assert.equal(ctx.api.getInvoices().length, 0, "it is deleted for good");
+  assert.equal(stockOf(ctx.api, tile.id), 20, "its stock was already back: not returned a second time");
 });
 
 test("D: an invoice that carries debt forward says so before it is deleted, and gives the debt back", async () => {

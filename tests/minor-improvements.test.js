@@ -509,10 +509,14 @@ test("edit: invoices that track deliveries keep their quantities and lines (deli
   sale.customer.phone = "0550 1";   // the customer and the price can still be corrected
   typePrice(api, 0, "1000");
   assert.equal(api.editPlan().error, undefined);
-  // Removing every line would cancel the sale: not for an invoice with a delivery record.
+  // Removing every line deletes the invoice (the rollback), delivery record or not: it is planned, not refused, and gives back only the
+  // goods that were handed over (1 of the 4 boxes).
   const keep = sale.items.slice();
   sale.items = [];
-  assert.match(api.editPlan().error || "", /./, "a sale with deliveries is not cancelled here");
+  const rollback = api.editPlan();
+  assert.equal(rollback.error, undefined, rollback.error);
+  assert.equal(rollback.deleted, true);
+  assert.deepEqual(plain(rollback.stock.map((s) => s.qty)), [1], "only the delivered box goes back");
   sale.items = keep;
   await api.saveInvoiceEdit();
   const saved = invoiceById(api, inv.id);

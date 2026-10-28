@@ -5,10 +5,11 @@
 //   B  remove one product: its stock comes back
 //   C  10 boxes -> 6: exactly 4 return to stock
 //   D  add a product: it gets today's catalogue price in the unit the catalogue prices it in
-//   E  remove every product: complete cancellation + refund (stock, payments kept, cancelled, excluded, no double refund)
+//   E  remove every product: the invoice is DELETED and its sale reversed (stock back, refund logged, gone from every list, no double refund)
 //   F  refund = what was actually collected (30,000 total / 20,000 paid -> 20,000)
 //   G  per-piece, per-box and per-m² pricing units stay the same in Sell, edit, preview, saved invoice, print and details
-//   H  failures: nothing half-saved; no double cancellation (also not through the database); everything survives a reload
+//   H  failures: nothing half-saved; no double rollback (screen, two windows, database); everything survives a reload
+//      (the complete rollback rules for Delete itself are in tests/invoice-rollback.test.js)
 //   I  a catalogue price change never rewrites a saved line
 // Everything runs through the application's own functions against a disposable in-memory IndexedDB (no real data).
 
@@ -19,10 +20,12 @@ const {
   V, plain, boot, addTile, sellLines, stockOf, invoiceById, snapshot, openEdit, typeQty, typePrice, removeLine,
 } = require("./helpers/edit");
 
-const CONFIRM_SENTENCE = "You are about to cancel this sale. All original sold quantities will be returned to stock, and the amount actually collected will be recorded as a refund. Continue?";
+// Everything that must not change when a rollback is refused or fails: the data AND the settings (the refund log lives there).
+const fullSnapshot = async (ctx) => ({ ...(await snapshot(ctx)), settings: plain((await ctx.api.db.loadAll()).settings) });
+const logOf = (ctx) => plain(ctx.api.getState().settings.rollbackLog || []);
 
-// Opens the invoice, removes every product and confirms the dialog. Returns what the dialog said.
-async function cancelSale(ctx, inv) {
+// Opens the invoice, removes every product and confirms the dialog: the invoice is deleted. Returns what the dialog said.
+async function deleteByEdit(ctx, inv) {
   openEdit(ctx, inv);
   while (ctx.api.getSale().items.length) removeLine(ctx.api, 0);
   const before = ctx.app.confirms.length;
@@ -188,101 +191,95 @@ test("D: a product removed and added again is a new line at today's catalogue pr
 });
 
 /* ==========================================================================
-   E / F. Removing every product = complete cancellation and refund
+   E / F. Removing every product = the invoice is deleted and its sale reversed
    ========================================================================== */
 
-test("E+F: removing every product cancels the sale: 30,000 total / 20,000 paid refunds exactly 20,000", async () => {
+test("E+F: removing every product deletes the invoice: 30,000 total / 20,000 paid refunds exactly 20,000", async () => {
   const ctx = await boot();
   const tile = await addTile(ctx);
   const inv = await sellLines(ctx, [{ product: tile, qty: "15" }], { paid: "20000" });
   assert.equal(inv.total, 30000);
   assert.equal(stockOf(ctx.api, tile.id), 5);
   const original = plain(inv);
+  const counter = (await ctx.api.db.loadAll()).counter;
 
   openEdit(ctx, inv);
   removeLine(ctx.api, 0);
   const plan = ctx.api.editPlan();
-  assert.equal(plan.cancelled, true);
+  assert.equal(plan.deleted, true);
   assert.equal(plan.refund, 20000);
   assert.equal(stockOf(ctx.api, tile.id), 5, "nothing moves before Save");
 
   // Declining the confirmation changes nothing at all.
-  const before = await snapshot(ctx);
+  const before = await fullSnapshot(ctx);
   ctx.app.answer(false);
   await ctx.api.saveInvoiceEdit();
-  assert.deepEqual(await snapshot(ctx), before);
+  assert.deepEqual(await fullSnapshot(ctx), before);
   assert.equal(ctx.api.getInvoiceEdit() !== null, true);
 
-  // Confirming cancels it.
+  // Confirming deletes it.
   const asked = ctx.app.confirms.length;
   ctx.app.answer(true);
   await ctx.api.saveInvoiceEdit();
   const dialog = ctx.app.confirms[asked];
-  assert.ok(dialog.startsWith(CONFIRM_SENTENCE), "the exact confirmation sentence");
+  assert.match(dialog, /You are about to DELETE this invoice/);
   assert.match(dialog, new RegExp(inv.invoiceNumber));
   assert.match(dialog, /Original total: .*30,000/);
   assert.match(dialog, /Amount collected: .*20,000/);
-  assert.match(dialog, /Refund: .*20,000/);
+  assert.match(dialog, /Refund to hand back: .*20,000/);
+  assert.match(dialog, /Returned to stock: .*15/);
 
-  const saved = invoiceById(ctx.api, inv.id);
+  assert.equal(ctx.api.getInvoices().length, 0, "the invoice is gone, not kept with a zero total");
+  assert.equal(invoiceById(ctx.api, inv.id), undefined);
   assert.equal(stockOf(ctx.api, tile.id), 20, "all 15 boxes are back");
-  assert.equal(ctx.api.getInvoices().length, 1);
-  assert.equal(saved.invoiceNumber, original.invoiceNumber);
-  assert.equal(saved.date, original.date);
-  assert.deepEqual(plain(saved.items), original.items, "the original transaction is kept");
-  assert.equal(saved.total, 30000);
-  assert.deepEqual(plain(saved.payments), original.payments, "payment history untouched");
-  assert.equal(saved.refunds.length, 1);
-  assert.equal(saved.refunds[0].amount, 20000);
-  assert.equal(saved.refunds[0].reason, "cancellation");
-  assert.ok(saved.refunds[0].timestamp);
-  assert.equal(saved.cancellation.refund, 20000);
-  assert.equal(saved.cancellation.paid, 20000);
-  assert.equal(saved.cancellation.total, 30000);
-  assert.ok(!Number.isNaN(Date.parse(saved.cancellation.at)), "cancellation date and time");
-  assert.equal(V.invoiceProblem(V.stripDerived(plain(saved))), "", "still a valid invoice");
+  assert.equal(ctx.api.getInvoiceEdit(), null, "the edit is closed");
+  assert.equal(ctx.app.field("editBanner").hidden, true, "the Sell page is a normal Sell page again");
+  assert.equal((await ctx.api.db.loadAll()).invoices.length, 0, "and it is gone from the database");
+  assert.equal((await ctx.api.db.loadAll()).counter, counter, "the number is never given out again");
+  assert.match(ctx.app.toast(), new RegExp(`${inv.invoiceNumber} deleted\\..*Refund to hand back: .*20,000`));
 
-  // Status, balances: cancelled, nothing owed, nothing due back.
-  const info = ctx.api.paymentInfo(saved);
-  assert.equal(info.cls, "cancelled");
-  assert.match(info.status, /cancelled/i);
-  assert.equal(info.remaining, 0);
-  assert.equal(info.refundDue, 0);
-  assert.equal(info.refunded, 20000);
-  assert.equal(info.due, 0, "a cancelled sale asks for nothing");
+  // What is left to reconcile the cash: ONE record with the refund, the payments it came from and what was sold.
+  const log = logOf(ctx);
+  assert.equal(log.length, 1);
+  assert.equal(log[0].reason, "edit");
+  assert.equal(log[0].invoiceId, original.id);
+  assert.equal(log[0].invoiceNumber, original.invoiceNumber);
+  assert.equal(log[0].total, 30000);
+  assert.equal(log[0].paid, 20000);
+  assert.equal(log[0].alreadyRefunded, 0);
+  assert.equal(log[0].refund, 20000);
+  assert.deepEqual(log[0].payments, original.payments.map((x) => ({ amount: x.amount, timestamp: x.timestamp })));
+  assert.deepEqual(log[0].stock.map((x) => [x.productId, x.qty]), [[tile.id, 15]]);
+  assert.ok(!Number.isNaN(Date.parse(log[0].at)), "date and time of the rollback");
+  assert.equal(V.settingsProblem(ctx.api.getState().settings), "", "the settings, log included, are valid");
 });
 
-test("E: a cancelled invoice is labelled in the list and in the details, and is not collectible debt", async () => {
+test("E: the deleted invoice is gone from the list, the search, the filters and the customer's debt", async () => {
   const ctx = await boot();
   const tile = await addTile(ctx);
   const inv = await sellLines(ctx, [{ product: tile, qty: "10" }], { name: "Karim Benali", phone: "0555 1", paid: "4000" });
   const live = await sellLines(ctx, [{ product: tile, qty: "1" }], { name: "Karim Benali", phone: "0555 1" });   // 2,000 owed, still live
-  await cancelSale(ctx, inv);
+  const dirBefore = globalThis.Debt.directory(ctx.api.getState().invoices, ctx.api.getState().debtTransfers);
+  assert.equal(dirBefore.find((g) => /Karim/.test(g.name)).debt, 16000 + 2000, "before: 16,000 + 2,000 owed");
+  await deleteByEdit(ctx, inv);
 
   ctx.api.renderInvoices();
   const rows = ctx.app.field("invoiceBody").innerHTML;
-  assert.match(rows, /class="badge cancelled">Cancelled</);
-  assert.match(rows, /4,000 DA refunded/);
-  assert.match(rows, /Total of the cancelled sale: .*20,000/);
-  assert.match(rows, /data-action="edit" disabled/, "a cancelled invoice can not be edited");
+  assert.doesNotMatch(rows, new RegExp(inv.invoiceNumber));
+  assert.match(rows, new RegExp(live.invoiceNumber));
+  assert.doesNotMatch(rows, /Cancelled|refunded/i, "no cancelled record is left behind");
 
-  ctx.api.viewInvoice(inv.id);
-  const page = ctx.app.field("invoice").innerHTML;
-  assert.match(page, /SALE CANCELLED/);
-  assert.match(page, /REFUND HISTORY/);
-  assert.match(page, /4,000/);
-  assert.match(ctx.app.field("payCancelRow").textContent, /SALE CANCELLED/);
-  assert.equal(ctx.app.field("payCancelRow").hidden, false);
-  assert.equal(ctx.app.field("payRefundedRow").hidden, false);
-
-  // Customer debt counts only the live invoice (the cancelled one owed 16,000 before it was cancelled).
+  // Customer debt counts only the live invoice (the deleted one owed 16,000: it is not debt any more).
   const dir = globalThis.Debt.directory(ctx.api.getState().invoices, ctx.api.getState().debtTransfers);
   assert.equal(dir.find((g) => /Karim/.test(g.name)).debt, 2000);
-  void live;
-  // The filter "Cancelled" finds it.
-  ctx.api.invoiceView.pay = "cancelled";
-  assert.deepEqual(Array.from(ctx.api.searchInvoices("")).map((i) => i.id), [inv.id]);
+  // Search and the payment filters do not find it.
+  assert.deepEqual(Array.from(ctx.api.searchInvoices(inv.invoiceNumber)).map((i) => i.id), []);
+  for (const pay of ["unpaid", "partial", "paid", "cancelled"]) {
+    ctx.api.invoiceView.pay = pay;
+    assert.ok(!Array.from(ctx.api.searchInvoices("")).some((i) => i.id === inv.id), `not under the ${pay} filter`);
+  }
   ctx.api.invoiceView.pay = "all";
+  assert.deepEqual(Array.from(ctx.api.searchInvoices("")).map((i) => i.id), [live.id]);
 });
 
 test("F: refund = what was actually collected: fully paid, partly paid, nothing paid", async () => {
@@ -293,19 +290,18 @@ test("F: refund = what was actually collected: fully paid, partly paid, nothing 
   const none = await sellLines(ctx, [{ product: tile, qty: "5" }], { name: "None" });
   assert.equal(stockOf(ctx.api, tile.id), 85);
 
-  await cancelSale(ctx, paidFull);
-  await cancelSale(ctx, partial);
-  const askedNone = await cancelSale(ctx, none);
-  assert.match(askedNone[0], /Refund: .*\b0\b/, "nothing collected = nothing to refund");
+  await deleteByEdit(ctx, paidFull);
+  await deleteByEdit(ctx, partial);
+  const askedNone = await deleteByEdit(ctx, none);
+  assert.match(askedNone[0], /Refund to hand back: .*\b0\b/, "nothing collected = nothing to refund");
 
-  assert.equal(invoiceById(ctx.api, paidFull.id).cancellation.refund, 10000);
-  assert.equal(invoiceById(ctx.api, partial.id).cancellation.refund, 3500);
-  const n = invoiceById(ctx.api, none.id);
-  assert.equal(n.cancellation.refund, 0);
-  assert.equal(n.refunds, undefined, "no refund record for a refund of nothing");
-  assert.equal(n.payments.length, 0);
+  const byNumber = Object.fromEntries(logOf(ctx).map((e) => [e.invoiceNumber, e]));
+  assert.equal(byNumber[paidFull.invoiceNumber].refund, 10000);
+  assert.equal(byNumber[partial.invoiceNumber].refund, 3500);
+  assert.equal(byNumber[none.invoiceNumber].refund, 0);
+  assert.deepEqual(byNumber[none.invoiceNumber].payments, []);
   assert.equal(stockOf(ctx.api, tile.id), 100, "every box is back");
-  for (const i of [paidFull, partial, none]) assert.equal(ctx.api.paymentInfo(invoiceById(ctx.api, i.id)).cls, "cancelled");
+  assert.equal(ctx.api.getInvoices().length, 0, "none of the three is kept, whatever its payment status");
 });
 
 test("E: a sale sold in boxes, pieces and m² gives back each product's own stock", async () => {
@@ -315,26 +311,28 @@ test("E: a sale sold in boxes, pieces and m² gives back each product's own stoc
   const inv = await sellLines(ctx, [{ product: tile, qty: "10", unit: "piece" }, { product: roll, qty: "20", unit: "m2" }], { paid: "1000" });
   assert.equal(stockOf(ctx.api, tile.id), 17.5);
   assert.equal(stockOf(ctx.api, roll.id), 80);
-  await cancelSale(ctx, inv);
+  await deleteByEdit(ctx, inv);
   assert.equal(stockOf(ctx.api, tile.id), 20);
   assert.equal(stockOf(ctx.api, roll.id), 100);
+  assert.equal(ctx.api.getState().products.length, 2, "no product was created");
 });
 
-test("E: the edit history records the cancellation and the stock that went back", async () => {
+test("E: the rollback log records what was sold, what was paid and the stock that went back", async () => {
   const ctx = await boot();
   const tile = await addTile(ctx);
-  const inv = await sellLines(ctx, [{ product: tile, qty: "3" }], { paid: "1500" });
-  await cancelSale(ctx, inv);
-  const saved = invoiceById(ctx.api, inv.id);
-  const last = plain(saved.edits[saved.edits.length - 1]);
-  assert.equal(last.cancelled, true);
-  assert.equal(last.refund, 1500);
-  assert.equal(last.lines[0].qtyBefore, 3);
-  assert.equal(last.lines[0].qtyAfter, 0);
-  assert.deepEqual(last.stock.map((s) => s.change), [3]);
+  const inv = await sellLines(ctx, [{ product: tile, qty: "3" }], { name: "Karim", phone: "0555 9", paid: "1500" });
+  await deleteByEdit(ctx, inv);
+  const [entry] = logOf(ctx);
+  assert.equal(entry.refund, 1500);
+  assert.equal(entry.customer.name, "Karim");
+  assert.equal(entry.customer.phone, "0555 9");
+  assert.equal(entry.items[0].qty, 3);
+  assert.equal(entry.items[0].unit, "box");
+  assert.deepEqual(entry.stock.map((x) => x.qty), [3]);
+  assert.equal(entry.status, "partial");
 });
 
-test("E: a customer name typed in the edit before cancelling is kept on the cancelled invoice", async () => {
+test("E: a customer name typed in the edit before deleting is not saved anywhere: the log keeps the invoice as it was", async () => {
   const ctx = await boot();
   const tile = await addTile(ctx);
   const inv = await sellLines(ctx, [{ product: tile, qty: "3" }], { paid: "1500" });
@@ -343,68 +341,77 @@ test("E: a customer name typed in the edit before cancelling is kept on the canc
   removeLine(ctx.api, 0);
   ctx.app.answer(true);
   await ctx.api.saveInvoiceEdit();
-  assert.equal(invoiceById(ctx.api, inv.id).customer.name, "Alexandre");
+  assert.equal(ctx.api.getInvoices().length, 0);
+  assert.equal(logOf(ctx)[0].customer.name, "Alex", "what the invoice really said");
 });
 
 /* ==========================================================================
-   No double cancellation, no double refund
+   No double rollback, no double refund
    ========================================================================== */
 
-test("H: a cancelled sale can not be cancelled, edited, deleted or refunded again (screen and database)", async () => {
+test("H: a deleted invoice can not be deleted, edited, paid, refunded or rolled back again (screen and database)", async () => {
   const ctx = await boot();
   const tile = await addTile(ctx);
   const inv = await sellLines(ctx, [{ product: tile, qty: "5" }], { paid: "6000" });
-  await cancelSale(ctx, inv);
-  const done = await snapshot(ctx);
+  await deleteByEdit(ctx, inv);
+  const done = await fullSnapshot(ctx);
   assert.equal(stockOf(ctx.api, tile.id), 20);
 
-  // Screen: Edit is refused, the refund box has nothing to give, Delete is refused, a payment is refused.
-  const r = ctx.api.startEditInvoice(inv.id);
-  assert.match(r.error, /cancelled/i);
-  assert.equal(ctx.api.getInvoiceEdit(), null);
-  assert.match((await ctx.api.recordRefund(inv.id, "100")).error, /already recorded|Nothing is due/);
-  assert.match((await ctx.api.addPayment(inv.id, "100")).error || "", /./);
+  // Screen: every operation finds nothing and changes nothing.
   await ctx.api.deleteInvoice(inv.id);
-  assert.equal(ctx.api.getInvoices().length, 1, "a cancelled invoice is kept");
+  assert.match(ctx.api.startEditInvoice(inv.id).error, /no longer exists/i);
+  assert.equal(ctx.api.getInvoiceEdit(), null);
+  assert.match((await ctx.api.recordRefund(inv.id, "100")).error || "", /./);
+  assert.match((await ctx.api.addPayment(inv.id, "100")).error || "", /./);
+  assert.match(ctx.api.planInvoiceEdit(ctx.api.getState(), inv.id, { sale: { items: [], customer: { name: "x" } } }).error, /no longer exists/i);
 
-  // The planner itself (what the screen and the transaction share).
-  const state = ctx.api.getState();
-  const plan = ctx.api.planInvoiceEdit(state, inv.id, { sale: { items: [], customer: { name: "x" } } });
-  assert.match(plan.error, /cancelled/i);
-  // Database: whatever a stale window sends, the cancelled record can only get refunds appended; nothing else.
-  const tamper = async (mutate) => (await ctx.api.commit((d) => { mutate(d.invoices.find((i) => i.id === inv.id)); })).error;
-  assert.match(await tamper((i) => { i.cancellation.refund = 0; i.refunds = []; }) || "", /./, "the refund can not be erased");
-  assert.match(await tamper((i) => { i.refunds.push({ id: "r2", amount: 6000, timestamp: new Date().toISOString(), reason: "refund" }); }) || "", /./, "no second refund of the same money");
-  assert.match(await tamper((i) => { delete i.cancellation; }) || "", /./, "it can not be un-cancelled");
-  assert.match(await tamper((i) => { i.items[0].qty = 1; }) || "", /./, "the cancelled lines are locked");
-  assert.match(await tamper((i) => { i.payments = []; }) || "", /./, "the payment history is locked");
+  // The rollback itself (what the screen and the transaction share): a second one finds nothing to reverse.
+  assert.equal(ctx.api.planInvoiceRollback(ctx.api.getState(), inv.id, { reason: "delete" }).gone, true);
+  const again = await ctx.api.commit((d) => ctx.api.applyInvoiceRollback(d, inv.id, { reason: "delete" }));
+  assert.equal(again.skip, true);
+  assert.equal(again.gone, true);
+  const twice = await ctx.api.commit((d) => ctx.api.applyInvoiceEdit(d, inv.id, { sale: { items: [], customer: { name: "x" } } }));
+  assert.match(twice.error || "", /./);
+
   assert.equal(stockOf(ctx.api, tile.id), 20, "stock was given back once");
-  assert.deepEqual(await snapshot(ctx), done, "after all of that, nothing changed");
+  assert.equal(logOf(ctx).length, 1, "and the refund was logged once");
+  assert.deepEqual(await fullSnapshot(ctx), done, "after all of that, nothing changed");
 });
 
-test("H: cancelling twice from two windows gives the stock back once", async () => {
+test("H: deleting from a stale window gives the stock back once (another window deleted the invoice first)", async () => {
   const ctx = await boot();
   const tile = await addTile(ctx);
   const inv = await sellLines(ctx, [{ product: tile, qty: "5" }], { paid: "6000" });
-  openEdit(ctx, inv);
-  removeLine(ctx.api, 0);
-  // The other window cancels first.
-  const other = plain(invoiceById(ctx.api, inv.id));
+  const stale = await boot({ indexedDB: ctx.app.indexedDB });   // a second window on the same database, loaded now
+
+  // This window deletes it: stock 15 -> 20.
   ctx.app.answer(true);
-  const second = await (async () => {
-    await ctx.api.commit((d) => ctx.api.applyInvoiceEdit(d, inv.id, { sale: { items: [], customer: other.customer } }));
-    return invoiceById(ctx.api, inv.id);
-  })();
-  assert.ok(second.cancellation);
+  await ctx.api.deleteInvoice(inv.id);
+  assert.equal(ctx.api.getInvoices().length, 0);
   assert.equal(stockOf(ctx.api, tile.id), 20);
-  // This window's Save now meets a cancelled invoice.
-  ctx.app.answer(true);
-  await ctx.api.saveInvoiceEdit();
-  assert.equal(stockOf(ctx.api, tile.id), 20, "not 25: the stock was not returned a second time");
-  assert.equal(invoiceById(ctx.api, inv.id).refunds.length, 1);
+
+  // The stale window still lists the invoice. Its Delete meets a newer database: refused, reloaded, nothing applied twice.
+  assert.equal(stale.api.getInvoices().length, 1, "the stale window still shows it");
+  stale.app.answer(true);
+  await stale.api.deleteInvoice(inv.id);
+  assert.equal(stale.api.getInvoices().length, 0, "the stale window now agrees");
+  const stored = await ctx.api.db.loadAll();
+  assert.equal(stored.products.find((p) => p.id === tile.id).stock, 20, "not 25: the stock was not returned a second time");
+  assert.equal(stored.settings.rollbackLog.length, 1, "and the refund is logged once");
 });
 
-test("H: cancelling is refused when the payments changed after the dialog showed the refund", async () => {
+test("H: deleting twice in a row (a double click) gives the stock back once", async () => {
+  const ctx = await boot();
+  const tile = await addTile(ctx);
+  const inv = await sellLines(ctx, [{ product: tile, qty: "5" }], { paid: "6000" });
+  ctx.app.answer(true, true);
+  await Promise.all([ctx.api.deleteInvoice(inv.id), ctx.api.deleteInvoice(inv.id)]);
+  assert.equal(stockOf(ctx.api, tile.id), 20, "not 25");
+  assert.equal(logOf(ctx).length, 1);
+  assert.equal(ctx.api.getInvoices().length, 0);
+});
+
+test("H: deleting is refused when the payments changed after the question showed the refund", async () => {
   const ctx = await boot();
   const tile = await addTile(ctx);
   const inv = await sellLines(ctx, [{ product: tile, qty: "5" }], { paid: "6000" });
@@ -415,17 +422,19 @@ test("H: cancelling is refused when the payments changed after the dialog showed
   assert.equal(plan.refund, 6000);
   // A payment arrives (other window) after the dialog said 6,000.
   await ctx.api.commit((d) => { d.invoices.find((i) => i.id === inv.id).payments.push({ amount: 1000, timestamp: new Date().toISOString() }); });
+  const before = await fullSnapshot(ctx);
   const r = await ctx.api.commit((d) => ctx.api.applyInvoiceEdit(d, inv.id, { sale, confirmedRefund: 6000 }));
-  assert.match(r.error || "", /./);
-  assert.equal(invoiceById(ctx.api, inv.id).cancellation, undefined, "not cancelled with a refund nobody confirmed");
+  assert.match(r.error || "", /payments .* changed/i);
+  assert.ok(invoiceById(ctx.api, inv.id), "not deleted with a refund nobody confirmed");
   assert.equal(stockOf(ctx.api, tile.id), 15);
+  assert.deepEqual(await fullSnapshot(ctx), before);
 });
 
-test("H: a failed write while cancelling saves nothing: stock, invoice and refund stay as they were", async () => {
+test("H: a failed write while deleting saves nothing: stock, invoice, payments and the refund log stay as they were", async () => {
   const ctx = await boot();
   const tile = await addTile(ctx);
   const inv = await sellLines(ctx, [{ product: tile, qty: "5" }], { paid: "6000" });
-  const before = await snapshot(ctx);
+  const before = await fullSnapshot(ctx);
   let failures = 0;
   for (const onCall of [1, 2, 3]) {
     openEdit(ctx, inv);
@@ -433,45 +442,44 @@ test("H: a failed write while cancelling saves nothing: stock, invoice and refun
     ctx.app.answer(true);
     const restore = failPutWith("QuotaExceededError", onCall);
     try { await ctx.api.saveInvoiceEdit(); } finally { restore(); }
-    if (invoiceById(ctx.api, inv.id).cancellation) break;
+    if (!invoiceById(ctx.api, inv.id)) break;
     failures++;
-    assert.deepEqual(await snapshot(ctx), before, `nothing saved when write #${onCall} fails`);
+    assert.deepEqual(await fullSnapshot(ctx), before, `nothing saved when write #${onCall} fails`);
     assert.equal(stockOf(ctx.api, tile.id), 15, "memory still matches the database");
-    assert.equal(invoiceById(ctx.api, inv.id).refunds, undefined);
+    assert.equal(logOf(ctx).length, 0, "no refund was logged for a deletion that did not happen");
     assert.equal(ctx.api.getInvoiceEdit() !== null, true, "the screen stays open");
     ctx.api.cancelInvoiceEdit();
   }
   assert.ok(failures >= 2);
-  // Once the problem is gone the same cancellation works, exactly once.
-  await cancelSale(ctx, inv);
+  // Once the problem is gone the same deletion works, exactly once.
+  await deleteByEdit(ctx, inv);
   assert.equal(stockOf(ctx.api, tile.id), 20);
-  assert.equal(invoiceById(ctx.api, inv.id).refunds.length, 1);
+  assert.equal(logOf(ctx).length, 1);
 });
 
-test("H: a cancelled sale survives a reload and a full restart, and the backup file equals the database", async () => {
+test("H: a deletion survives a reload and a full restart, and the backup file equals the database", async () => {
   const ctx = await boot();
   const tile = await addTile(ctx);
   const inv = await sellLines(ctx, [{ product: tile, qty: "5" }], { paid: "6000" });
-  await cancelSale(ctx, inv);
+  const kept = await sellLines(ctx, [{ product: tile, qty: "1" }], { name: "Other" });
+  await deleteByEdit(ctx, inv);
   await ctx.api.loadFromDatabase();
-  const saved = invoiceById(ctx.api, inv.id);
-  assert.equal(ctx.api.paymentInfo(saved).cls, "cancelled");
-  assert.equal(stockOf(ctx.api, tile.id), 20);
+  assert.equal(invoiceById(ctx.api, inv.id), undefined);
+  assert.ok(invoiceById(ctx.api, kept.id), "the other invoice is untouched");
+  assert.equal(stockOf(ctx.api, tile.id), 19);
 
   const second = await boot({ indexedDB: ctx.app.indexedDB });
-  const again = second.api.getState().invoices.find((i) => i.id === inv.id);
-  assert.equal(again.cancellation.refund, 6000);
-  assert.equal(second.api.getState().products.find((p) => p.id === tile.id).stock, 20);
+  assert.deepEqual(plain(second.api.getState().invoices.map((i) => i.id)), [kept.id], "a restart does not bring it back");
+  assert.equal(second.api.getState().products.find((p) => p.id === tile.id).stock, 19, "and does not undo the stock");
+  assert.equal(second.api.getState().settings.rollbackLog[0].refund, 6000);
 
   await ctx.api.autoBackup.flushNow();
   const parsed = V.parseBackup(ctx.handle.content);
   assert.equal(parsed.error, undefined, parsed.error);
   assert.deepEqual(parsed.warnings, []);
   assert.deepEqual(plain(parsed.data.invoices.map(V.stripDerived)), plain((await ctx.api.db.loadAll()).invoices));
-  // Derived fields in the backup say cancelled and what was refunded; they are never trusted when the file is read back.
-  const raw = JSON.parse(ctx.handle.content).data.invoices[0];
-  assert.equal(raw.amountRefunded, 6000);
-  assert.equal(raw.status, "cancelled");
+  assert.equal(parsed.data.settings.rollbackLog.length, 1, "the refund record travels in the backup");
+  assert.equal(parsed.data.settings.rollbackLog[0].refund, 6000);
 });
 
 test("H: an invoice saved by an older version (no refunds, no cancellation) is read, shown and edited as before", async () => {
@@ -545,32 +553,13 @@ test("refund: after a refund was handed back, a further edit works from what is 
 });
 
 /* ==========================================================================
-   Cancellation limits (explicit, tested)
+   Rollback limits (explicit, tested)
    ========================================================================== */
 
-test("limits: an invoice with deliveries, or whose balance moved to a newer invoice, is not cancelled here and nothing changes", async () => {
+test("limits: an invoice whose balance moved to a newer invoice is not deleted here and nothing changes", async () => {
   const ctx = await boot();
   const { api } = ctx;
   const tile = await addTile(ctx, { stock: 50 });
-  // Tracked invoice.
-  api.addToSale(tile.id, "1", "box");
-  const line = api.getSale().items[0];
-  api.setSalePartial(line.lineId, true);
-  api.updateSaleQuantity(line.lineId, "4");
-  api.updateSaleDeliverNow(line.lineId, "1");
-  api.getSale().customer.name = "Alex";
-  await api.completeSale();
-  const tracked = api.getInvoices()[0];
-  let before = await snapshot(ctx);
-  openEdit(ctx, tracked);
-  removeLine(api, 0);
-  assert.match(api.editPlan().error, /deliver/i);
-  ctx.app.answer(true);
-  await api.saveInvoiceEdit();
-  assert.deepEqual(await snapshot(ctx), before);
-  api.cancelInvoiceEdit();
-
-  // Balance carried forward.
   const karim = { name: "Karim Benali", phone: "0555 11 22 33" };
   const first = await sellLines(ctx, [{ product: tile, qty: "5" }], { ...karim, paid: "4000" });
   api.addToSale(tile.id, "2", "box");
@@ -579,16 +568,16 @@ test("limits: an invoice with deliveries, or whose balance moved to a newer invo
   api.onCustomerSettled();
   assert.equal(api.addDebtToSale([{ sourceInvoiceId: first.id, amount: 6000 }]).error, undefined);
   await api.completeSale();
-  before = await snapshot(ctx);
+  const before = await fullSnapshot(ctx);
   openEdit(ctx, first);
   removeLine(api, 0);
   assert.match(api.editPlan().error, /carried|moved|INV-/i);
   ctx.app.answer(true);
   await api.saveInvoiceEdit();
-  assert.deepEqual(await snapshot(ctx), before);
+  assert.deepEqual(await fullSnapshot(ctx), before);
 });
 
-test("limits: cancelling the invoice that CARRIED an old debt refunds only its own purchase, not the old debt that was paid with it", async () => {
+test("limits: deleting the invoice that CARRIED an old debt refunds everything collected and gives the old debt back to the old invoice", async () => {
   const ctx = await boot();
   const { api } = ctx;
   const tile = await addTile(ctx, { stock: 50 });
@@ -602,15 +591,21 @@ test("limits: cancelling the invoice that CARRIED an old debt refunds only its o
   api.getSale().paidValue = "10000";                                                                   // pays purchase + old debt
   await api.completeSale();
   const second = api.getInvoices()[1];
+  assert.equal(api.paymentInfo(invoiceById(api, first.id)).remaining, 0, "the old balance lives on the second invoice");
+
   openEdit(ctx, second);
   removeLine(api, 0);
   const plan = api.editPlan();
   assert.equal(plan.error, undefined, plan.error);
-  assert.equal(plan.refund, 4000, "10,000 collected - 6,000 that settles the old invoice = 4,000 for this purchase");
+  // As though it never happened: the whole 10,000 is handed back AND the 6,000 owed on the old invoice is owed there again.
+  assert.equal(plan.refund, 10000, "everything collected on the deleted invoice is refunded");
   ctx.app.answer(true);
   await api.saveInvoiceEdit();
-  assert.equal(invoiceById(api, second.id).cancellation.refund, 4000);
+  assert.equal(invoiceById(api, second.id), undefined);
+  assert.equal(api.getState().debtTransfers.length, 0, "the record that moved the debt is gone");
+  assert.equal(api.paymentInfo(invoiceById(api, first.id)).remaining, 6000, "the old debt is collectible on the old invoice again");
   assert.equal(stockOf(api, tile.id), 50 - 5, "only the second invoice's 2 boxes came back");
+  assert.equal(logOf(ctx)[0].refund, 10000);
 });
 
 /* ==========================================================================
@@ -693,7 +688,7 @@ test("G: changing a line's unit and changing it back restores the price it was s
    I. Historical prices
    ========================================================================== */
 
-test("I: a catalogue price change never rewrites a saved line: not on opening, not after editing a quantity, not on cancelling", async () => {
+test("I: a catalogue price change never rewrites a saved line: not on opening, not after editing a quantity, and deleting gives back the stock the line took", async () => {
   const ctx = await boot();
   const { api } = ctx;
   const tile = await addTile(ctx, { sellingPrice: 800, priceUnit: "m2", stock: 100 });
@@ -716,10 +711,12 @@ test("I: a catalogue price change never rewrites a saved line: not on opening, n
   assert.equal(saved.items[0].total, sold[0][0] * 6);
   assert.deepEqual(plain([saved.items[1].unitPrice, saved.items[1].priceUnit, saved.items[1].total]), sold[1], "the other line is exactly as sold");
 
-  // Cancelling keeps the historical lines exactly as they were last saved.
-  const lines = plain(saved.items);
-  await cancelSale(ctx, saved);
-  assert.deepEqual(plain(invoiceById(api, inv.id).items), lines);
+  // Deleting gives back exactly what the saved lines took (6 boxes of the m² tile, 3 of the mosaic), whatever today's catalogue says.
+  assert.equal(stockOf(api, tile.id), 100 - 6 * 1);
+  await deleteByEdit(ctx, saved);
+  assert.equal(invoiceById(api, inv.id), undefined);
+  assert.equal(stockOf(api, tile.id), 100);
+  assert.equal(stockOf(api, piece.id), 100);
 });
 
 test("I: the invoice list and the details show the saved prices after the catalogue changed", async () => {

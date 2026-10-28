@@ -1,4 +1,4 @@
-"""Real-browser check: editing a saved invoice on the Sell page, and cancelling a sale with a refund.
+"""Real-browser check: editing a saved invoice on the Sell page, and removing every line (deletes the invoice, returns the stock, logs the refund).
 
 Optional and manual, like the other checks here (not part of `npm test`):
     python3 tests/e2e/sell_page_edit_check.py
@@ -164,52 +164,48 @@ with sync_playwright() as p:
     check("m²" in text(page, "#saleBody") or "m2" in text(page, "#saleBody").lower(), "per-m² product shows its price per m² in the edit: " + text(page, "#saleBody").replace("\n", " ")[:120])
     page.click("#editCancel")
 
-    # --- complete cancellation of INV-000001: remove the only line
+    # --- removing the only line of INV-000001 deletes the invoice and reverses the sale
     go(page, "invoices")
+    others = page.locator("#invoiceBody tr").count() - 1
     page.locator("#invoiceBody tr", has_text="INV-000001").locator('button[data-action="edit"]').click()
     page.wait_for_selector("#editBanner:not([hidden])")
     page.locator("#saleBody button[data-action='remove']").first.click() if page.locator("#saleBody button[data-action='remove']").count() else page.locator("#saleBody button").last.click()
     page.wait_for_timeout(200)
     check(page.locator("#saleBody tr[data-id]").count() == 0, "the line was removed from the edit")
-    check("cancel" in text(page, "#editSave").lower(), "Save changes becomes the cancel-and-refund button: " + text(page, "#editSave"))
-    check("Refund to record now" in text(page, "#tEditRows"), "the summary shows the refund to be recorded")
-    shot(page, "3-cancel-ready")
+    check("delete" in text(page, "#editSave").lower(), "Save changes becomes the delete-and-refund button: " + text(page, "#editSave"))
+    check("Refund to hand back" in text(page, "#tEditRows"), "the summary shows the refund to hand back")
+    check("deletes this invoice" in text(page, "#tEditRows"), "and says saving deletes the invoice")
+    shot(page, "3-delete-ready")
     if SHOTS:
-        page.locator("#view-sell .totals").screenshot(path=str(Path(SHOTS) / "3b-cancel-totals.png"))
+        page.locator("#view-sell .totals").screenshot(path=str(Path(SHOTS) / "3b-delete-totals.png"))
     dialogs["accept"] = False
     before = len(dialogs["seen"])
     page.click("#editSave")
     page.wait_for_timeout(300)
     asked = dialogs["seen"][before:]
-    check(len(asked) == 1 and asked[0].startswith("You are about to cancel this sale. All original sold quantities will be returned to stock, and the amount actually collected will be recorded as a refund. Continue?"), "the confirmation text is exact")
-    check("INV-000001" in asked[0] and "20,000" in asked[0], "and names the invoice, the total and the refund: " + asked[0].replace("\n", " | ")[-120:])
+    check(len(asked) == 1 and asked[0].startswith("You are about to DELETE this invoice. It is removed permanently, the stock it took is returned, and the money collected is recorded as refunded. Continue?"), "the confirmation text is exact")
+    check("INV-000001" in asked[0] and "20,000" in asked[0], "and names the invoice, the total and the refund: " + asked[0].replace("\n", " | ")[-160:])
+    check("Returned to stock" in asked[0], "and what goes back to stock")
     check(page.is_visible("#editBanner"), "declining leaves the edit open")
-    go_stock_text = None
+    page.evaluate("window.__marker = 'same page'")
     dialogs["accept"] = True
     page.click("#editSave")
     page.wait_for_selector("#editBanner", state="hidden")
-    shot(page, "4-cancelled-details")
-    check("SALE CANCELLED" in text(page, "#invoice"), "the saved invoice shows SALE CANCELLED")
-    check(page.is_visible("#payCancelRow"), "the pay box says it is cancelled")
-    check(page.is_hidden("#refundForm"), "no refund form: the refund is already recorded")
-    go(page, "invoices")
-    row = text(page, '#invoiceBody tr:has-text("INV-000001")')
-    check("Cancelled" in row and "refunded" in row.lower(), "the list labels it cancelled and refunded: " + row.replace("\n", " ")[:140])
-    check(page.locator('#invoiceBody tr:has-text("INV-000001") button[data-action="edit"]').is_disabled(), "Edit is disabled on a cancelled invoice")
-    shot(page, "5-list")
+    shot(page, "4-deleted-list")
+    check(page.evaluate("window.__marker") == "same page", "the page was not reloaded")
+    check(page.get_attribute("#app", "data-view") == "invoices", "back on the Invoices list the edit came from")
+    check("INV-000001 deleted" in text(page, "#toast") and "Refund to hand back" in text(page, "#toast"), "the message names the invoice and the refund: " + text(page, "#toast"))
+    check(page.locator('#invoiceBody tr:has-text("INV-000001")').count() == 0, "INV-000001 is gone from the list")
+    check(page.locator("#invoiceBody tr").count() == others, "the other invoices are still there")
     check("20" in stock_text(page, "Everton Grey").replace("\n", " "), "all stock came back: " + stock_text(page, "Everton Grey").replace("\n", " ")[:60])
 
     # --- survives a reload
     page.reload()
     go(page, "invoices")
-    page.wait_for_function("document.getElementById('dataState') === null || true")
     page.wait_for_selector("#invoiceBody tr")
-    check("Cancelled" in text(page, '#invoiceBody tr:has-text("INV-000001")'), "still cancelled after a reload")
-
-    # --- print markup of the cancelled invoice carries the banner
-    page.locator('#invoiceBody tr:has-text("INV-000001") button[data-action="view"]').click()
-    page.wait_for_selector("#invoice")
-    check("SALE CANCELLED" in text(page, "#invoice") and "REFUND HISTORY" in text(page, "#invoice"), "details/print document shows banner and refund history")
+    check(page.locator('#invoiceBody tr:has-text("INV-000001")').count() == 0, "still deleted after a reload")
+    check(page.locator("#invoiceBody tr").count() == others, "with the same other invoices")
+    check("20" in stock_text(page, "Everton Grey").replace("\n", " "), "and the stock is still back after the reload")
 
     check(not [e for e in errors if "favicon" not in e], "no console errors: " + "; ".join(errors)[:300])
     browser.close()

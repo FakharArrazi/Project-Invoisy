@@ -614,12 +614,12 @@
   </div>
 </dialog>
 
-<!-- Asks before an invoice is deleted for good (and explains why one can not be deleted). Opened from Invoices only. -->
+<!-- Asks before an invoice is deleted for good, saying what happens to its stock and payments (and explains why one can not be deleted). Opened from Invoices only. -->
 <dialog class="confirm-dialog no-print" id="invoiceDeleteDialog" aria-labelledby="invoiceDeleteTitle" aria-describedby="invoiceDeleteBody">
   <h2 id="invoiceDeleteTitle">Delete this invoice?</h2>
   <p class="confirm-dialog-subject" id="invoiceDeleteSubject"></p>
   <p class="confirm-dialog-detail" id="invoiceDeleteDetail"></p>
-  <p class="muted" id="invoiceDeleteBody">It is removed permanently. Products and stock are not changed.</p>
+  <p class="muted" id="invoiceDeleteBody">It is deleted permanently, as if it had never been made.</p>
   <div class="actions">
     <button type="button" class="btn" id="invoiceDeleteCancel" autofocus>Cancel</button>
     <button type="button" class="btn danger-solid" id="invoiceDeleteConfirm" data-i18n="common.delete">Delete</button>

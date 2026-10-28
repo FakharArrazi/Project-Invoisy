@@ -8,9 +8,9 @@ Brand new browser profile and disposable IndexedDB: no real business data is tou
 
 What it checks in a real page: the page looks like Stock (same heading, search box, table header and button sizes), the actions
 stay reachable at narrow widths, search and sorting (numbers, dates, amounts) work together, View / Print / Edit still work,
-and Delete: it asks first (Cancel and Esc change nothing), deletes for good without a reload, the list and count update, the
-deletion survives leaving the page and a reload, stock and numbering are untouched, and an invoice that is kept on purpose
-is explained instead of deleted.
+and Delete: it asks first (Cancel and Esc change nothing), says what happens to stock and money, deletes for good without a
+reload, the list and count update, the deletion survives leaving the page and a reload, the stock comes back, numbering is
+kept, and a cancelled invoice of an earlier version can be deleted too (without restoring its stock a second time).
 """
 import os, subprocess, sys, tempfile
 from pathlib import Path
@@ -26,7 +26,7 @@ def check(cond, label):
     if not cond:
         problems.append(label)
 
-# A made-up shop (one product, 13 invoices, the newest cancelled) is restored through Settings, exactly as a person would.
+# A made-up shop (one product, 13 invoices, the newest an earlier-version cancelled sale) is restored through Settings, exactly as a person would.
 BACKUP = subprocess.run(["node", str(Path(__file__).with_name("make_invoices_backup.js"))], check=True, capture_output=True, text=True).stdout
 BACKUP_FILE = Path(tempfile.mkdtemp(prefix="invoisy-e2e-")) / "invoisy-data.json"
 BACKUP_FILE.write_text(BACKUP, encoding="utf-8")
@@ -42,6 +42,11 @@ def style(page, sel, props):
 
 def go(page, view):
     page.click(f'.nav-btn[data-view="{view}"]')
+
+def stock_number(text):
+    """The first number of a stock cell ("493 Boxes" -> 493.0)."""
+    import re
+    return float(re.search(r"[\d.,]+", text).group(0).replace(",", ""))
 
 def stock_of(page):
     """The stock cell of the (only) product on the Stock page."""
@@ -198,6 +203,9 @@ with sync_playwright() as p:
     page.evaluate("document.getElementById('toast').textContent = ''")
     target.locator("[data-action='delete']").click()
     page.wait_for_selector("#invoiceDeleteDialog[open]")
+    body = page.inner_text("#invoiceDeleteBody")
+    check("deleted permanently" in body and "Returned to stock" in body and "7 Boxes" in body, "the question says the stock that goes back: " + body)
+    check("recorded as refunded" in body, "and the money that will be recorded as refunded")
     if SHOTS:
         page.screenshot(path=f"{SHOTS}/invoices-delete-dialog.png")
     page.click("#invoiceDeleteConfirm")
@@ -205,9 +213,10 @@ with sync_playwright() as p:
     page.wait_for_function("document.querySelectorAll('#invoiceBody tr').length === 12")
     check("INV-000012" not in numbers(page), "Delete removes the row at once")
     check(page.inner_text("#invoiceCount").strip() == "12 of 12 invoices", "and the count follows")
-    check(page.inner_text("#toast").strip() == "INV-000012 deleted.", "a short message names the invoice")
+    check(page.inner_text("#toast").strip().startswith("INV-000012 deleted."), "a short message names the invoice: " + page.inner_text("#toast").strip())
+    check("Refund to hand back" in page.inner_text("#toast"), "and says how much to hand back (it was paid in full)")
     check(page.evaluate("window.__marker") == "same page", "the page was not reloaded")
-    check(stock_of(page) == stock_before, f"product stock is unchanged ({stock_before})")
+    check(stock_number(stock_of(page)) == stock_number(stock_before) + 7, f"its 7 boxes are back in stock ({stock_before} -> {stock_of(page)})")
     check(saved(page) == "1 product, 12 invoices", "12 invoices are saved")
 
     go(page, "stock"); go(page, "invoices")
@@ -232,16 +241,26 @@ with sync_playwright() as p:
     go(page, "invoices")
     check(len(set(numbers(page))) == len(numbers(page)) == 13, "no duplicate numbers")
 
-    # an invoice that is kept on purpose: explained, not deleted
+    # a cancelled invoice (earlier version) is no longer kept: it can be deleted, and its stock is not restored a second time
     cancelled = page.locator("#invoiceBody tr.invoice-cancelled")
     check(cancelled.count() == 1 and "INV-000013" in cancelled.inner_text(), "a cancelled invoice is marked in the list")
+    stock_cancelled = stock_of(page)
     cancelled.locator("[data-action='delete']").click()
     page.wait_for_selector("#invoiceDeleteDialog[open]")
-    check("can not be deleted" in page.inner_text("#invoiceDeleteTitle"), "its dialog says it can not be deleted")
-    check("cancelled" in page.inner_text("#invoiceDeleteBody"), "and why: " + page.inner_text("#invoiceDeleteBody"))
-    check(page.is_hidden("#invoiceDeleteConfirm") and page.inner_text("#invoiceDeleteCancel").strip() == "Close", "and only offers Close")
-    page.click("#invoiceDeleteCancel")
-    check(len(numbers(page)) == 13, "it stays")
+    check("Delete this invoice?" in page.inner_text("#invoiceDeleteTitle"), "its dialog asks to delete, it does not refuse")
+    check(page.is_visible("#invoiceDeleteConfirm"), "and offers Delete")
+    check("kept as a record" not in page.inner_text("#invoiceDeleteBody"), "the old 'kept as a record' restriction is gone")
+    page.click("#invoiceDeleteConfirm")
+    page.wait_for_selector("#invoiceDeleteDialog:not([open])", state="attached")
+    page.wait_for_function("document.querySelectorAll('#invoiceBody tr.invoice-cancelled').length === 0")
+    check(len(numbers(page)) == 12 and "INV-000013" not in numbers(page), "the cancelled invoice is deleted for good")
+    check(stock_of(page) == stock_cancelled, f"its stock was already back: not restored again ({stock_cancelled})")
+    page.reload()
+    go(page, "settings")
+    page.wait_for_function("document.getElementById('dataState').textContent === 'Ready'", timeout=10000)
+    go(page, "invoices")
+    page.wait_for_selector("#invoiceBody tr")
+    check("INV-000013" not in numbers(page) and len(numbers(page)) == 12, "and it does not come back after a reload")
 
     # ---------- narrow windows: the actions stay reachable ----------
     for width, height in ((900, 700), (390, 800)):

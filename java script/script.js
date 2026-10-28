@@ -2129,38 +2129,57 @@ function answerInvoiceDelete(yes) {
   ask.resolve(yes);
 }
 
+// The stock a rollback gives back, as text: "Tile 60x60 20 Boxes, Screed 100 m²".
+function rollbackStockList(plan) {
+  return plan.stock.map((s) => `${s.name} ${stockText({ stockUnit: s.unit }, s.qty)}`).join(", ");
+}
+
+// What a rollback does, in plain sentences with the real figures: shown in the question before it and in the order of the books.
+function rollbackSentences(plan, currency) {
+  return [
+    plan.stock.length ? t("rollback.stockBack", { list: rollbackStockList(plan) }) : t("rollback.noStock"),
+    plan.notRestored.length ? t("rollback.notRestored", { names: plan.notRestored.join(", ") }) : "",
+    plan.refund > 0 ? t("rollback.refund", { amount: money(plan.refund, currency) }) : t("rollback.noRefund"),
+  ].filter(Boolean);
+}
+
+// The short message after a rollback: the invoice is gone and, when money was collected, how much is to be handed back.
+function rollbackMessage(r) {
+  const entry = r.entry;
+  return [
+    t("invoice.deleted", { number: entry.invoiceNumber }),
+    r.refund > 0 ? t("rollback.toastRefund", { amount: money(r.refund, entry.currency) }) : "",
+    r.notRestored && r.notRestored.length ? t("rollback.notRestored", { names: r.notRestored.join(", ") }) : "",
+  ].filter(Boolean).join(" ");
+}
+
+// Delete = roll the invoice back (see "Rolling an invoice back"): the invoice is removed, its stock returns, the money collected is
+// recorded as refunded. It works for every invoice, whatever its status. The question says what will happen with the real figures;
+// Cancel / Esc touches nothing. The only invoice that is refused is one whose unpaid balance was carried to a newer invoice: the person
+// is told why. The invoice counter is not touched, so the number of a deleted invoice is never given out again.
 async function deleteInvoice(id) {
   const inv = state.invoices.find((i) => i.id === id);
   if (!inv) return;
-  // Three kinds of invoice are kept on purpose (the database refuses them too); the person is told why, never left guessing.
-  //  - an invoice sold in several deliveries keeps its delivery log as an audit trail,
-  //  - a cancelled sale is a kept record (what was sold, paid and refunded),
-  //  - an invoice whose unpaid balance was carried to a newer invoice stays: deleting it would lose that debt.
-  let why = "";
-  if (Validation.isTracked(inv)) why = t("invoice.cannotDeleteDelivered", { number: inv.invoiceNumber });
-  else if (Validation.isCancelled(inv)) why = t("invoice.cannotDeleteCancelled", { number: inv.invoiceNumber });
-  else if (Debt.carriedTo(inv, state.debtTransfers).length) why = t("invoice.cannotDeleteCarried", { number: inv.invoiceNumber, numbers: carriedToNumbers(inv) });
-  if (why) {
-    await askAboutInvoice(inv, { blocked: true, body: why });
+  const plan = planInvoiceRollback(state, id, { reason: "delete" });
+  if (plan.gone) return;
+  if (plan.error) {
+    await askAboutInvoice(inv, { blocked: true, body: plan.error });
     return;
   }
   const carriedFrom = Validation.carriedLines(inv).map((l) => l.sourceInvoiceNumber).join(", ");
   const restores = carriedFrom ? t("invoice.confirmDeleteRestores", { number: inv.invoiceNumber, from: carriedFrom }) : "";
-  const body = [t("invoice.deleteBody"), restores].filter(Boolean).join(" ");
-  const question = t("invoice.confirmDelete", { number: inv.invoiceNumber }) + (restores ? "\n\n" + restores : "");
+  const sentences = [...rollbackSentences(plan, inv.currency), restores].filter(Boolean);
+  const body = [t("invoice.deleteBody"), ...sentences].join(" ");
+  const question = t("invoice.confirmDelete", { number: inv.invoiceNumber }) + "\n\n" + sentences.join("\n");
   if (!(await askAboutInvoice(inv, { body, question }))) return;   // Cancel / Esc: nothing was touched
-  // Deleting a new invoice also removes the ledger records that carried debt into it, so that balance is
-  // collectible on the older invoice again (the database does the same, see commitInTx).
-  // Only the invoice (and those ledger records) go: the products, their stock and the invoice counter are not touched, so the
-  // number of a deleted invoice is never given out again.
-  const r = await commit((d) => {
-    d.invoices = d.invoices.filter((i) => i.id !== id);
-    d.debtTransfers = (d.debtTransfers || []).filter((tr) => tr.targetInvoiceId !== id);
-  });
-  if (r.error) { notify(r.error, "error"); return; }   // not saved: the invoice stays in the list
+  // ONE transaction: the invoice, the ledger records that carried debt into it, the stock and the refund record. The plan is made again
+  // from the latest data inside it, so a second delete (a double click, another window) finds nothing and changes nothing.
+  const r = await commit((d) => applyInvoiceRollback(d, id, { reason: "delete", confirmedRefund: plan.refund }));
+  if (r.error) { notify(r.error, "error"); return; }   // not saved: the invoice stays in the list, stock and payments as they were
   renderAll();
   onDebtDataChanged();
-  notify(t("invoice.deleted", { number: inv.invoiceNumber }));
+  if (r.gone) { notify(t("invoice.alreadyDeleted", { number: inv.invoiceNumber })); return; }
+  notify(rollbackMessage(r));
 }
 
 // Adds a cash payment (current date/time) to a saved invoice. Items and stock are never touched.
@@ -2245,7 +2264,7 @@ async function recordCollection(id, entries, note) {
    customer link, the payments, the carried-forward debt and the delivery log all stay. The invoice is edited on the Sell
    page itself: it is loaded into state.sale (saleFromInvoice) and everything the Sell page does (search, add, remove,
    quantity, unit, price, discount, tax, the live preview) works on it. What can change is the customer's details, the lines
-   (products, quantities, units, prices) and the discount and tax; removing EVERY line cancels the whole sale.
+   (products, quantities, units, prices) and the discount and tax; removing EVERY line deletes the invoice and refunds the sale.
 
    The rules, all in planInvoiceEdit() so the screen, the tests and the database transaction share them:
      - Stock: what the invoice originally took out of stock (the `stockDeducted` saved on each line, never recalculated from
@@ -2258,9 +2277,9 @@ async function recordCollection(id, entries, note) {
        edited or removed. When the new amount due is lower than what is already held (a box returned on a paid invoice), the
        edit is allowed and the difference is a REFUND OR CREDIT DUE to the customer: shown on the screen and the printed
        invoice. It becomes a refund record (separate from the payments) only when it is handed back (recordRefund).
-     - Cancellation: with no line left the sale is cancelled (planCancellation): all the stock the invoice took goes back, the
-       money actually collected (never more) is recorded as ONE refund, and the invoice keeps what it sold, what it was paid
-       and a `cancellation` record. It can not be cancelled, refunded or edited again (Validation.cancellationHistoryProblem).
+     - Rollback: with no line left the whole sale is reversed (planInvoiceRollback): the invoice is DELETED, all the stock it took
+       goes back, and the money collected and not yet handed back is recorded as refunded in the rollback log, exactly as Delete
+       does. An invoice with no line is never kept. (Cancelled sales saved by earlier versions stay readable and can be deleted.)
      - History: each saved edit adds one entry to invoice.edits (when, totals before and after, what was paid, the quantity and
        price of every line that changed, and the stock moved), so the original values stay available for troubleshooting.
      - An invoice sold in several deliveries keeps its products and quantities (its delivery log is a record) and can not be
@@ -2433,51 +2452,111 @@ function editedCustomer(inv, sale) {
   return customer;
 }
 
-// Cancelling the whole sale (every product removed): the plan, WITHOUT changing anything.
-//   Stock: everything the invoice took goes back. Money: what was really collected for THIS sale is refunded, never more:
-//   the money held (payments less earlier refunds) minus the old debt carried onto the invoice, which stays owed and settled as it was.
-function planCancellation(d, inv, edit) {
-  const number = inv.invoiceNumber;
-  if (Validation.isTracked(inv)) return { error: t("edit.trackedCancel", { number }) };
-  if (Validation.transferredOut(inv, d.debtTransfers || []) > 0) return { error: t("edit.cancelCarried", { number, numbers: carriedToNumbers(inv, d.debtTransfers || []) }) };
-  const now = new Date().toISOString();
-  const refund = Math.max(0, round2(Validation.netPaid(inv) - Validation.carriedTotal(inv)));
-  // The amount shown in the confirmation must be what is refunded: when payments changed since, nothing is cancelled.
-  if (edit.confirmedRefund !== undefined && Math.abs(edit.confirmedRefund - refund) > 0.005) return { error: t("edit.cancelChanged", { number }) };
-  const restore = new Map();
-  const notRestored = [];
-  for (const orig of inv.items) {
-    const product = findProduct(orig.productId, d);
-    if (product) restore.set(product.id, Calc.cleanNumber((restore.get(product.id) || 0) + lineStockTaken(orig)));
-    else notRestored.push(invoiceItemLabel(orig));
-  }
-  const stockChanges = new Map();
-  const stockLog = [];
-  for (const [productId, back] of restore) {
-    const product = findProduct(productId, d);
-    const next = Calc.cleanNumber(product.stock + back);
-    if (next !== product.stock) {
-      stockChanges.set(productId, next);
-      stockLog.push({ productId, name: product.name, unit: product.stockUnit || null, change: Calc.cleanNumber(next - product.stock) });
+// What an invoice holds out of stock RIGHT NOW, from the invoice's own record of what it took (never from today's product data):
+// Map(productId -> { qty (in the product's stock unit), unit (the stock unit it was saved with), name }).
+//   - a cancelled sale saved by an earlier version already gave everything back: it holds nothing;
+//   - an invoice sold in several deliveries took stock only for what was handed over: the sum of its delivery log;
+//   - any other invoice took the `stockDeducted` of each line (the same figure the edit and the old cancellation used).
+// Several lines of the same product add up. Goods never taken out of stock (nothing delivered yet) are never given back.
+function stockHeld(inv) {
+  const held = new Map();
+  const add = (item, qty) => {
+    if (!item || !(qty > 0)) return;
+    const entry = held.get(item.productId) || { qty: 0, unit: Calc.isUnit(item.stockUnit) ? item.stockUnit : null, name: invoiceItemLabel(item) };
+    entry.qty = Calc.cleanNumber(entry.qty + qty);
+    held.set(item.productId, entry);
+  };
+  if (Validation.isCancelled(inv)) return held;
+  if (Validation.isTracked(inv)) {
+    const byLine = new Map(inv.items.map((item) => [item.lineId, item]));
+    for (const delivery of inv.deliveries) {
+      for (const line of Array.isArray(delivery && delivery.lines) ? delivery.lines : []) add(byLine.get(line.lineId), toNumber(line.stockDeducted));
     }
+    return held;
   }
-  const paid = Validation.paidTotal(inv);
-  const updated = { ...inv, customer: editedCustomer(inv, edit.sale), updatedAt: now };
-  const second = secondCustomerName(edit.sale);
-  if (second) updated.secondCustomer = { name: second }; else delete updated.secondCustomer;
-  updated.cancellation = { at: now, total: inv.total, paid, refund, ...(notRestored.length ? { notRestored } : {}) };
-  if (refund > 0) updated.refunds = [...Validation.refundsOf(inv), { id: uid(), amount: refund, timestamp: now, reason: "cancellation" }];
-  updated.edits = [...(Array.isArray(inv.edits) ? inv.edits : []), {
-    at: now, cancelled: true, totalBefore: inv.total, totalAfter: 0, paid, refund,
-    lines: inv.items.map((orig) => ({ name: invoiceItemLabel(orig), unit: orig.sellingUnit, qtyBefore: orig.qty, qtyAfter: 0, priceBefore: orig.unitPrice })),
-    ...(stockLog.length ? { stock: stockLog } : {}),
-  }];
-  const why = Validation.invoiceProblem(updated);
-  const result = { invoice: updated, stockChanges, refundDue: 0, cancelled: true, refund, notRestored };
-  if (why) return { ...result, error: t("edit.invalid", { number, problem: why }) };
-  const ledger = Validation.ledgerProblems(d.invoices.map((i) => (i.id === inv.id ? updated : i)), d.debtTransfers || []);
-  if (ledger.length) return { ...result, error: ledger[0] };
-  return result;
+  for (const item of inv.items) add(item, lineStockTaken(item));
+  return held;
+}
+
+/* ---------- Rolling an invoice back (Delete, and removing every product while editing) ----------
+   The invoice is removed as if the sale never happened:
+     - STOCK: everything the invoice still holds out of stock (stockHeld) goes back to the right product, by its id, in the product's
+       own stock unit; several lines of one product add up; a product that no longer exists is reported, never re-created.
+     - MONEY: everything collected and not yet handed back (payments less earlier refunds) is recorded as REFUNDED, in the rollback log
+       (see "The rollback log" in validation.js): the amount to hand back in cash, the payments it came from and the invoice's figures.
+       Nothing moves money; the record is what lets the shop reconcile the cash.
+     - BOOKS: the invoice, its payments, delivery log and edit history go, and so do the ledger records that carried debt INTO it (that
+       balance is collectible on the older invoice again). The invoice counter is never moved back: a deleted number is not reused.
+   All of it is ONE change to a data draft, saved by commit() in ONE database transaction: all or nothing. It is idempotent: the
+   invoice is the record of what to reverse and it disappears in the same transaction, so a second delete (double click, second
+   window, a retry after a failed save) finds nothing and changes nothing. The only invoice refused is one whose unpaid balance was
+   carried forward to a newer invoice (deleting it would make that debt vanish from the invoice that asks for it). */
+
+// The plan for rolling `invoiceId` back, WITHOUT changing anything.
+//   options: { reason: "delete" | "edit", confirmedRefund? } (confirmedRefund = the refund the person saw in the question: refused when it changed since)
+// Returns { gone: true } (no such invoice: already deleted, nothing to reverse), { error }, or
+//   { stockChanges: Map(productId -> new stock), stock: [{ productId, name, unit, qty }], notRestored: [name], refund, entry }.
+function planInvoiceRollback(d, invoiceId, options = {}) {
+  const inv = d.invoices.find((i) => i.id === invoiceId);
+  if (!inv) return { gone: true };
+  const number = inv.invoiceNumber;
+  const transfers = d.debtTransfers || [];
+  if (Validation.transferredOut(inv, transfers) > 0) {
+    return { error: t(options.reason === "edit" ? "edit.cancelCarried" : "invoice.cannotDeleteCarried", { number, numbers: carriedToNumbers(inv, transfers) }) };
+  }
+  const refund = Math.max(0, round2(Validation.netPaid(inv)));
+  if (options.confirmedRefund !== undefined && Math.abs(options.confirmedRefund - refund) > 0.005) return { error: t("rollback.changed", { number }) };
+
+  const stockChanges = new Map();
+  const stock = [];
+  const notRestored = [];
+  for (const [productId, held] of stockHeld(inv)) {
+    const product = findProduct(productId, d);
+    if (!product) { notRestored.push(held.name); continue; }
+    // A quantity counted in another unit than the product is counted in now can not be added to its stock.
+    if (held.unit && Calc.isUnit(product.stockUnit) && held.unit !== product.stockUnit) return { error: t("rollback.stockUnitChanged", { number, name: product.name }) };
+    stockChanges.set(productId, Calc.cleanNumber(product.stock + held.qty));
+    stock.push({ productId, name: product.name, unit: product.stockUnit || null, qty: held.qty });
+  }
+  // The books must stay consistent without this invoice (what the database checks again inside the transaction).
+  const rest = d.invoices.filter((i) => i.id !== invoiceId);
+  const ledger = Validation.ledgerProblems(rest, transfers.filter((tr) => tr.targetInvoiceId !== invoiceId));
+  if (ledger.length) return { error: ledger[0] };
+
+  const customer = inv.customer || {};
+  const entry = {
+    id: uid(), at: new Date().toISOString(), reason: options.reason === "edit" ? "edit" : "delete",
+    invoiceId: inv.id, invoiceNumber: number, invoiceDate: inv.date,
+    customer: { name: customer.name || "", phone: customer.phone || "" },
+    currency: inv.currency || (d.settings || state.settings).currency,
+    status: Validation.paymentDetail(inv, transfers).cls,
+    total: toNumber(inv.total), paid: Validation.paidTotal(inv), alreadyRefunded: Validation.refundedTotal(inv), refund,
+    payments: (Array.isArray(inv.payments) ? inv.payments : []).map((p) => ({ amount: p.amount, timestamp: p.timestamp })),
+    items: inv.items.map((item) => ({ name: invoiceItemLabel(item), qty: item.qty, unit: item.sellingUnit || null })),
+    stock,
+    ...(notRestored.length ? { notRestored } : {}),
+    ...(Validation.isCancelled(inv) ? { wasCancelled: true } : {}),
+  };
+  return { stockChanges, stock, notRestored, refund, entry };
+}
+
+// Writes a plan on the data draft `d`: the invoice and the debt records that carried debt into it are removed, the stock goes back and
+// the rollback is logged. Nothing here can fail half way: the plan was checked, and commit() saves the draft whole or not at all.
+function writeRollback(d, plan) {
+  const id = plan.entry.invoiceId;
+  d.invoices = d.invoices.filter((i) => i.id !== id);
+  d.debtTransfers = (d.debtTransfers || []).filter((tr) => tr.targetInvoiceId !== id);
+  for (const [productId, stock] of plan.stockChanges) findProduct(productId, d).stock = stock;
+  d.settings.rollbackLog = [...Validation.rollbackLogOf(d.settings), plan.entry];
+  return { deleted: true, refund: plan.refund, stock: plan.stock, notRestored: plan.notRestored, entry: plan.entry };
+}
+
+// Rolls an invoice back on the data draft `d` (for commit). { deleted, refund, ... }, { skip, gone } when it is already gone, or { error }.
+function applyInvoiceRollback(d, invoiceId, options) {
+  const plan = planInvoiceRollback(d, invoiceId, options);
+  if (plan.gone) return { skip: true, gone: true };
+  if (plan.error) return { error: plan.error };
+  return writeRollback(d, plan);
 }
 
 // Plans the corrected invoice WITHOUT changing anything.
@@ -2486,7 +2565,8 @@ function planCancellation(d, inv, edit) {
 //            of the invoice carries origIndex (its position on the saved invoice); a line added now has none.
 //     baseItems = the lines the person started from: when the invoice changed meanwhile (another window), the edit is refused.
 //     confirmedRefund = the refund the person confirmed when cancelling: cancelling refuses when payments changed since.
-// Returns { skip: true } (nothing to change) or { invoice, stockChanges: Map(productId -> new stock), refundDue, cancelled?, refund? },
+// Returns { skip: true } (nothing to change) or { invoice, stockChanges: Map(productId -> new stock), refundDue }, or - with every line removed -
+// the rollback plan { deleted: true, stockChanges, stock, notRestored, refund, entry } (no `invoice`: it will not exist),
 // or { error }. A problem found after the corrected invoice could be worked out still carries it as `invoice` (the live preview uses it).
 function planInvoiceEdit(d, invoiceId, edit) {
   const inv = d.invoices.find((i) => i.id === invoiceId);
@@ -2495,7 +2575,12 @@ function planInvoiceEdit(d, invoiceId, edit) {
   if (edit.baseItems && !Validation.sameValue(edit.baseItems, inv.items)) return { error: t("edit.changedElsewhere") };
   const sale = edit.sale;
   const lines = Array.isArray(sale.items) ? sale.items : [];
-  if (!lines.length) return planCancellation(d, inv, edit);
+  // Every product removed = the whole sale is reversed: the invoice is deleted (see "Rolling an invoice back"). An invoice with no
+  // line is never kept as a valid invoice with a zero total.
+  if (!lines.length) {
+    const plan = planInvoiceRollback(d, invoiceId, { reason: "edit", confirmedRefund: edit.confirmedRefund });
+    return plan.error ? plan : { ...plan, deleted: true };
+  }
   const tracked = Validation.isTracked(inv);
   const used = new Set();
   const restore = new Map();   // productId -> stock the invoice holds now, to give back
@@ -2674,14 +2759,16 @@ function planInvoiceEdit(d, invoiceId, edit) {
 }
 
 // Saves a planned edit on the data draft `d`. All or nothing: any problem returns { error } and the draft is thrown away.
+// With every product removed the invoice is rolled back instead (result { deleted: true, refund, entry, ... }).
 function applyInvoiceEdit(d, invoiceId, edit) {
   const plan = planInvoiceEdit(d, invoiceId, edit);
   if (plan.error) return { error: plan.error };
   if (plan.skip) return { skip: true, invoice: plan.invoice };
+  if (plan.deleted) return writeRollback(d, plan);
   const index = d.invoices.findIndex((i) => i.id === invoiceId);
   d.invoices[index] = plan.invoice;
   for (const [productId, stock] of plan.stockChanges) findProduct(productId, d).stock = stock;
-  return { invoice: plan.invoice, cancelled: Boolean(plan.cancelled), refund: plan.refund || 0 };
+  return { invoice: plan.invoice };
 }
 
 // Records money handed back to the customer for an invoice that holds more than it asks for (made cheaper after it was paid).
@@ -2744,7 +2831,9 @@ function endEdit() {
   if (!edit) return;
   state.invoiceEdit = null;
   state.sale = edit.stash.sale;
-  state.previewInvoice = edit.stash.previewInvoice;
+  // The invoice that was on show before the edit, as it is now (null when it no longer exists, for example after this edit deleted it).
+  const shown = edit.stash.previewInvoice;
+  state.previewInvoice = shown ? state.invoices.find((i) => i.id === shown.id) || null : null;
   state.debtUi = edit.stash.debtUi;
   loadSaleIntoForm(state.sale);
 }
@@ -2809,7 +2898,7 @@ function renderEditTotals() {
   $("tSubtotal").textContent = money(toNumber(shown.subtotal), cur);
   $("tDiscount").textContent = money(toNumber(shown.discount), cur);
   $("tTax").textContent = money(toNumber(shown.tax), cur);
-  $("tTotalLabel").textContent = I18n.t(pay.carried > 0 ? "sell.totalPurchase" : plan.cancelled ? "edit.originalTotal" : "edit.newDue");
+  $("tTotalLabel").textContent = I18n.t(pay.carried > 0 ? "sell.totalPurchase" : plan.deleted ? "edit.originalTotal" : "edit.newDue");
   $("tTotalRow").classList.toggle("grand", pay.carried <= 0);
   $("tTotal").textContent = money(toNumber(shown.total), cur);
   $("tCarriedRow").hidden = pay.carried <= 0;
@@ -2820,18 +2909,18 @@ function renderEditTotals() {
   $("tRemaining").textContent = money(pay.remaining, cur);
   // Paid MORE than the new amount due: the customer is owed the difference. It is shown, and only recorded when handed back.
   $("tEditRows").innerHTML =
-    (plan.cancelled ? row(t("edit.cancelNotice"), "", "edit-warn") : "") +
+    (plan.deleted ? row(t("edit.cancelNotice"), "", "edit-warn") : "") +
     row(t("edit.paid"), money(pay.paid, cur)) +
-    (pay.refunded > 0 && !plan.cancelled ? row(t("inv.refunded"), money(pay.refunded, cur)) : "") +
-    (plan.cancelled ? row(t("edit.refundNow"), money(plan.refund, cur), "due edit-warn") : pay.refundDue > 0 ? row(t("edit.refundDue"), money(pay.refundDue, cur), "due edit-warn") : "") +
-    row(t("edit.statusAfter"), pay.status) +
+    (pay.refunded > 0 && !plan.deleted ? row(t("inv.refunded"), money(pay.refunded, cur)) : "") +
+    (plan.deleted ? row(t("edit.refundNow"), money(plan.refund, cur), "due edit-warn") : pay.refundDue > 0 ? row(t("edit.refundDue"), money(pay.refundDue, cur), "due edit-warn") : "") +
+    (plan.deleted ? "" : row(t("edit.statusAfter"), pay.status)) +
     editStockRows(plan, row);
   const bad = Boolean(plan.error);
   showError("saleError", plan.error || "");
   $("editSave").disabled = bad;
-  $("editSavePrint").disabled = bad || Boolean(plan.cancelled);
-  $("editSave").textContent = t(plan.cancelled ? "edit.cancelSaleBtn" : "edit.save");
-  $("editSave").classList.toggle("danger", Boolean(plan.cancelled));
+  $("editSavePrint").disabled = bad || Boolean(plan.deleted);
+  $("editSave").textContent = t(plan.deleted ? "edit.cancelSaleBtn" : "edit.save");
+  $("editSave").classList.toggle("danger", Boolean(plan.deleted));
 }
 
 // Where the person goes when the edit ends: back to the saved invoice (after a save), or to where they came from.
@@ -2853,8 +2942,8 @@ function cancelInvoiceEdit() {
 }
 
 // Save changes: ONE transaction for the invoice and the stock (see applyInvoiceEdit). On any problem nothing is changed and
-// the screen stays open with what was typed. With every product removed it cancels the sale, after a confirmation that says
-// what comes back to stock and what is refunded; declining it changes nothing.
+// the screen stays open with what was typed. With every product removed it DELETES the invoice (the rollback), after a confirmation
+// that says what comes back to stock and what is refunded; declining it changes nothing.
 function saveInvoiceEdit(options = {}) {
   return guard(async () => {
     const edit = state.invoiceEdit;
@@ -2866,11 +2955,12 @@ function saveInvoiceEdit(options = {}) {
       return;
     }
     const input = { sale: structuredClone(state.sale), baseItems: edit.baseItems };
-    if (plan.cancelled) {
+    if (plan.deleted) {
       const inv = state.invoices.find((i) => i.id === edit.id);
       const question = t("edit.cancelConfirm", {
         number: inv.invoiceNumber, total: money(toNumber(inv.total), inv.currency),
         paid: money(Validation.netPaid(inv), inv.currency), refund: money(plan.refund, inv.currency),
+        stock: plan.stock.length ? rollbackStockList(plan) : t("rollback.noStockShort"),
       });
       if (!confirm(question)) return;   // nothing was changed
       input.confirmedRefund = plan.refund;
@@ -2881,10 +2971,16 @@ function saveInvoiceEdit(options = {}) {
       notify(r.error, "error");
       return;
     }
+    if (r.deleted) {
+      // The invoice is gone: back to where the edit came from (not to its preview), with the lists, totals and stock drawn again.
+      leaveEdit(edit.id, false);
+      onDebtDataChanged();
+      notify(rollbackMessage(r));
+      return;
+    }
     const number = (state.invoices.find((i) => i.id === edit.id) || {}).invoiceNumber || "";
     leaveEdit(edit.id, true);
-    if (r.cancelled) notify(t("edit.cancelled", { number, refund: money(r.refund, (state.invoices.find((i) => i.id === edit.id) || {}).currency) }));
-    else if (r.skip) notify(t("edit.nothingChanged", { number }));
+    if (r.skip) notify(t("edit.nothingChanged", { number }));
     onDebtDataChanged();
     // Save and print: the invoice is already saved above, and the print is of that saved invoice (never of the screen's typed values).
     if (options.print) {
@@ -5449,7 +5545,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     deleteProduct,
     addStock,
     completeSale,
-    deleteInvoice, answerInvoiceDelete,
+    deleteInvoice, answerInvoiceDelete, planInvoiceRollback, applyInvoiceRollback, stockHeld,
     exportBackup,
     importBackup,
     DEFAULT_SETTINGS,

@@ -30,7 +30,8 @@ means Later. Nothing navigates away on its own.
 
 ## 4. Edit Invoice
 
-> Now done on the Sell page, with cancellation and refunds: see `sell-page-edit-and-refunds.md`.
+> Now done on the Sell page: see `sell-page-edit-and-refunds.md`. Removing every product now deletes the invoice and
+> reverses the sale: see `invoice-rollback.md`.
 
 **Edit** is on the Invoices list and next to a saved invoice (beside View, Add Payment, Print and Delete).
 

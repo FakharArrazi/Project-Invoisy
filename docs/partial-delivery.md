@@ -25,7 +25,8 @@ left to collect is tracked apart from the money.
   Each recorded pick-up has its own receipt number (COL-000030-1, COL-000030-2, ...) in the delivery history.
 - **Audit trail.** The original invoice (items, prices, total, payments) is never edited by a delivery. The delivery log is
   append-only: the database refuses to edit or remove a saved delivery, to change the lines of such an invoice, to make an
-  already saved invoice partly delivered, or to delete an invoice that has a delivery log (the app says so before it gets that far).
+  already saved invoice partly delivered. An invoice that has a delivery log CAN be deleted by the administrator: see
+  `invoice-rollback.md` (only the goods really handed over go back to stock).
 
 ## Delivery in the data
 
@@ -55,7 +56,8 @@ left to collect is tracked apart from the money.
 - It is decided when the sale is made: a saved invoice can not be turned into a partly delivered one, because its stock was
   taken out in full when it was sold.
 - A collection is recorded in the unit the line was sold in. A recorded collection can not be undone or edited (it is an
-  audit record), and an invoice that has a delivery log can not be deleted.
+  audit record). An invoice that has a delivery log can be deleted (the rollback): only what was really handed over returns to
+  stock, never the part still waiting to be collected.
 - A product counted in boxes is sold in whole boxes (an area typed in m² is turned into boxes when it is added), so a partial
   line of such a product is counted in boxes. Partial lines in m² exist for products whose stock is counted in m².
 - On paper-width screens the empty page container can add a blank first page to the purchase documents' print; the collection

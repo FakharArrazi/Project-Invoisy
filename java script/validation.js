@@ -126,7 +126,10 @@
          "refund" = a refund recorded later for an overpayment (an invoice made cheaper after it was paid).
        - a cancelled sale is worth nothing: the invoice asks only for the old debt carried onto it (if any), so it adds
          nothing to what customers owe and is not an active sale. Money kept for the invoice is   payments - refunds.
-     A cancelled invoice is locked (see cancellationHistoryProblem): it can not be cancelled again, edited or refunded twice. */
+     A cancelled invoice is locked (see cancellationHistoryProblem): it can not be cancelled again, edited or refunded twice.
+     NOTE: the app no longer MAKES cancelled sales. Removing every product while editing now deletes the invoice (see "The rollback
+     log" below and rollbackInvoice in script.js). Cancelled invoices saved by earlier versions are still read, shown and kept
+     locked against edits, and the administrator can delete them like any other invoice. */
 
   const isCancelled = (inv) => isObj(inv) && isObj(inv.cancellation);
   const refundsOf = (inv) => (inv && Array.isArray(inv.refunds) ? inv.refunds : []);
@@ -581,6 +584,28 @@
     return { ...clean, id: String(inv.id || uid()), payments };
   }
 
+  /* ---------- The rollback log: what a deleted invoice left behind ----------
+     Deleting an invoice (or removing every product while editing it) really removes it, gives back the stock it held and takes
+     its payments out of the books. Invisible to the invoices, the one thing that must not vanish with it is the money to hand back
+     to the customer, so ONE small record per rollback is kept in the settings as `rollbackLog` (a list, only present once a rollback
+     happened, so settings saved before keep exactly their old shape). The settings are saved in the same transaction as the invoice
+     removal and the stock change, so the record exists if and only if the rollback happened, and it travels in every backup.
+       { id, at, reason: "delete" | "edit", invoiceId, invoiceNumber, invoiceDate, customer: { name, phone }, currency, status,
+         total, paid, alreadyRefunded, refund, payments: [{ amount, timestamp }], items: [{ name, qty, unit }],
+         stock: [{ productId, name, unit, qty }], notRestored?: [name], wasCancelled?: true }
+     `refund` is the money still to hand back in cash (paid - already refunded). It is a record, not a payment processor: nothing here
+     moves money. Never edited or deleted by the app. */
+
+  const ROLLBACK_REASONS = ["delete", "edit"];
+  const rollbackLogOf = (settings) => (settings && Array.isArray(settings.rollbackLog) ? settings.rollbackLog : []);
+
+  function rollbackEntryProblem(e) {
+    if (!isObj(e)) return t("problem.notObject");
+    if (!isStr(e.id) || !e.id || !isStr(e.invoiceId) || !e.invoiceId || !isStr(e.invoiceNumber) || !isDate(e.at)) return t("problem.badRollback");
+    if (!ROLLBACK_REASONS.includes(e.reason) || !isNum(e.refund) || e.refund < 0) return t("problem.badRollback");
+    return "";
+  }
+
   /* ---------- The business phone numbers ----------
      A business can have several phone numbers. They are saved as `phones` (a list of text) in the settings. The older single
      `phone` is kept equal to the first number, so nothing that reads it breaks, and a business saved before the list existed
@@ -675,6 +700,8 @@
       if (Array.isArray(stored.phones)) settings.phones = cleanPhoneList(stored.phones.filter(isStr)).slice(0, MAX_BUSINESS_PHONES);
       // The staff contacts (a list of people), likewise only present when saved.
       if (Array.isArray(stored.staff)) settings.staff = cleanStaff(stored.staff);
+      // The rollback log (money to hand back after a deleted invoice). Kept as it is: nothing in it is ever "cleaned" away.
+      if (Array.isArray(stored.rollbackLog)) settings.rollbackLog = stored.rollbackLog.filter(isObj);
     }
     if (!settings.currency.trim()) settings.currency = CURRENCY;
     if (!settings.logo.startsWith("data:image/")) settings.logo = "";
@@ -977,6 +1004,16 @@
       const badPerson = (c) => !isObj(c) || (c.name !== undefined && (!isStr(c.name) || c.name.length > MAX_STAFF_NAME_LENGTH))
         || !Array.isArray(c.phones) || c.phones.length > MAX_BUSINESS_PHONES || c.phones.some((p) => !isStr(p) || p.length > MAX_PHONE_LENGTH);
       if (!Array.isArray(s.staff) || s.staff.length > MAX_STAFF || s.staff.some(badPerson)) return t("problem.staff", { max: MAX_STAFF });
+    }
+    if (s.rollbackLog !== undefined) {
+      if (!Array.isArray(s.rollbackLog)) return t("problem.badRollback");
+      const seen = new Set();
+      for (const entry of s.rollbackLog) {
+        const why = rollbackEntryProblem(entry);
+        if (why) return why;
+        if (seen.has(entry.id)) return t("problem.badRollback");
+        seen.add(entry.id);
+      }
     }
     return "";
   }
@@ -1473,6 +1510,7 @@
     formatInvoiceNumber, invoiceSequence, highestInvoiceNumber,
     carriedLines, paidTotal, carriedTotal, amountDue, refundDue, transferredOut, carriedBreakdown,
     isCancelled, refundsOf, refundedTotal, netPaid, REFUND_REASONS, cancellationHistoryProblem,
+    ROLLBACK_REASONS, rollbackLogOf, rollbackEntryProblem,
     isTracked, deliveryDetail, collectionNumber, receiptNumber, collectionReceipts, deliveryProblem, deliveryHistoryProblem, DELIVERY_EPSILON, DELIVERY_NOTE_MAX,
     normalizeName, phoneDigits, isWalkInName, customerKeys, customerGroups, findGroup, sameCustomer,
     transferProblem, ledgerProblems,

@@ -197,9 +197,10 @@ test("quiet: product, restock, sale, payment and settings finish without a messa
   await app.api.savePaper("A5");
   assert.equal(toast(), "", "paper size changed");
 
-  // Deleting an invoice is the one routine action that confirms itself, with a short message naming the invoice.
+  // Deleting an invoice is the one routine action that confirms itself, with a short message naming the invoice (and, when money was
+  // collected, the refund to hand back).
   await app.api.deleteInvoice(invoice.id);
-  assert.equal(toast(), `${invoice.invoiceNumber} deleted.`, "invoice deleted");
+  assert.match(toast(), new RegExp(`^${invoice.invoiceNumber} deleted\\.`), "invoice deleted");
   assert.equal(counters.reloads, 0, "and the page never reloaded");
 });
 

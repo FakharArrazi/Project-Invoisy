@@ -1,4 +1,8 @@
-# Editing an invoice on the Sell page, and cancelling a sale with a refund
+# Editing an invoice on the Sell page, and refunds
+
+> **Changed:** removing every product no longer *cancels* the sale and keeps the invoice. It now **deletes the invoice and
+> reverses the sale**, exactly like the Delete button: see `invoice-rollback.md`. The "Complete cancellation and refund" section
+> below describes what earlier versions did; invoices they cancelled are still read, shown and can now be deleted.
 
 This replaces the separate "Edit invoice" screen described in `minor-improvements.md` §4. Everything else in that
 section (what is editable, history entries, refund due after a cheaper edit) still applies.
@@ -27,7 +31,7 @@ While editing, the Sell page counts the invoice's own quantity as available (`st
 
 ## Complete cancellation and refund
 
-Removing **every** product turns Save into **Cancel sale and refund**, behind a confirmation that names the invoice,
+(Earlier versions:) removing **every** product turned Save into **Cancel sale and refund**, behind a confirmation that names the invoice,
 the original total, the amount collected and the refund. Declining changes nothing. Confirming:
 
 - gives all the invoice's stock back;

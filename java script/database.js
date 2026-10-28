@@ -31,6 +31,9 @@
    Rules this file enforces
      - A change touching several records is ONE transaction: it is saved completely or not at all.
        A purchase, the stock it adds and its payments are such a change.
+     - An invoice can be removed whatever its status (paid, partial, unpaid, cancelled, delivered in steps). The caller's
+       transaction also restores its stock and records the refund to hand back (settings.rollbackLog); the ledger check
+       below still refuses removing an invoice whose unpaid balance was carried to a newer one.
      - History is never deleted here by accident: a DRAFT purchase can be removed; a confirmed or cancelled purchase
        only together with ALL its payments and attached files (an explicit "delete purchase", one transaction); a payment
        never on its own (it is voided instead); a supplier with purchases or payments can not be removed.
@@ -580,18 +583,14 @@
 
       await guardSupplierSide(tx, { supplierChanges, purchaseChanges, paymentChanges });
 
-      // The delivery log of an invoice (goods handed over in several steps) is an audit trail: it only ever grows, an
-      // invoice can not become "partly delivered" after it was sold, and an invoice that has one is never removed.
-      // A cancelled sale is a locked record too: it can not be changed back, cancelled or refunded a second time, or deleted.
+      // While an invoice STAYS, its delivery log (goods handed over in several steps) only ever grows, an invoice can not
+      // become "partly delivered" after it was sold, and a cancelled sale saved by an earlier version can not be changed back,
+      // cancelled or refunded a second time. Removing an invoice is the administrator's rollback (script.js, rollbackInvoice):
+      // the invoice, its stock and its refund record are one change, so the database accepts it for every invoice.
       for (const inv of invoiceChanges.put || []) {
         const stored = await req(invoices.get(inv.id));
         const why = stored && (V.deliveryHistoryProblem(stored, inv) || V.cancellationHistoryProblem(stored, inv));
         if (why) throw invalid([`Invoice "${inv.invoiceNumber}" ${why}.`]);
-      }
-      for (const id of invoiceChanges.remove || []) {
-        const stored = await req(invoices.get(id));
-        if (stored && V.isTracked(stored)) throw invalid([t("db.cannotDeleteDelivered", { number: stored.invoiceNumber })]);
-        if (stored && V.isCancelled(stored)) throw invalid([t("db.cannotDeleteCancelled", { number: stored.invoiceNumber })]);
       }
 
       for (const id of productChanges.remove || []) products.delete(id);

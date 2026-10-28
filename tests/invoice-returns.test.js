@@ -129,7 +129,7 @@ test("removing a whole line puts back what it took; the other line and its stock
   assert.equal(inv.total, 4 * 2000 + 3 * 3000);
   const sale = openEdit(ctx, inv);
   removeLine(ctx.api, sale.items.findIndex((l) => l.productId === b.id));
-  assert.equal(ctx.api.editPlan().cancelled, undefined, "one line is left: this is an edit, not a cancellation");
+  assert.equal(ctx.api.editPlan().deleted, undefined, "one line is left: this is an edit, not a rollback");
   await ctx.api.saveInvoiceEdit();
   assert.equal(stockOf(ctx.api, b.id), 20, "all 3 boxes back");
   assert.equal(stockOf(ctx.api, a.id), 16, "unchanged");
@@ -139,7 +139,7 @@ test("removing a whole line puts back what it took; the other line and its stock
   assert.equal(ctx.api.paymentInfo(saved).remaining, 3000);
 });
 
-test("removing the last line is a complete cancellation: refused answer changes nothing, the confirmation cancels it", async () => {
+test("removing the last line is a complete rollback: a refused answer changes nothing, the confirmation deletes the invoice", async () => {
   const ctx = await boot();
   const tile = await addTile(ctx);
   const inv = await sellLines(ctx, [{ product: tile, qty: "2" }], { paid: "1000" });
@@ -148,7 +148,7 @@ test("removing the last line is a complete cancellation: refused answer changes 
   removeLine(ctx.api, 0);
   const plan = ctx.api.editPlan();
   assert.equal(plan.error, undefined);
-  assert.equal(plan.cancelled, true);
+  assert.equal(plan.deleted, true);
   assert.equal(plan.refund, 1000, "what was collected");
   ctx.app.answer(false);                                     // the person says "no" in the dialog
   await ctx.api.saveInvoiceEdit();
@@ -441,7 +441,7 @@ test("Save and print does not print when the edit is refused", async () => {
   assert.equal(invoiceById(ctx.api, inv.id).items[0].qty, 2);
 });
 
-test("Save and print is not offered for a cancellation", async () => {
+test("Save and print is not offered when saving deletes the invoice", async () => {
   const ctx = await boot();
   const tile = await addTile(ctx);
   const inv = await sellLines(ctx, [{ product: tile, qty: "2" }], { paid: "1000" });

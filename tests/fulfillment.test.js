@@ -487,12 +487,24 @@ test("an invoice saved without a delivery log can not be turned into a partly de
   await assert.rejects(api.db.commitChanges({ invoices: { put: [forged], remove: [] } }), (e) => e.code === "INVALID");
 });
 
-test("an invoice with delivery records can not be deleted, from the app or from the database", async () => {
+test("an invoice with delivery records can be deleted: only the goods that were really handed over go back to stock", async () => {
+  // 15 boxes sold and paid (15,000 DA), 10 delivered, 5 still to collect. Stock went 10 -> 0.
   const { api, invoice } = await paidPartialInvoice();
-  await api.deleteInvoice(invoice.id);
-  assert.equal(api.getInvoices().length, 1, "kept as an audit trail");
-  await assert.rejects(api.db.commitChanges({ invoices: { put: [], remove: [invoice.id] } }), (e) => e.code === "INVALID" && /audit trail/.test(e.message));
-  assert.equal((await api.db.loadAll()).invoices.length, 1);
+  assert.equal(product(api).stock, 0);
+  const plan = api.planInvoiceRollback(api.getState(), invoice.id, { reason: "delete" });
+  assert.equal(plan.error, undefined, plan.error);
+  assert.equal(plan.refund, 15000, "everything collected is refunded");
+  assert.deepEqual(plain(plan.stock.map((s) => [s.productId, s.qty])), [["t1", 10]], "10 delivered boxes go back, not the 5 never taken");
+
+  const r = await api.commit((d) => api.applyInvoiceRollback(d, invoice.id, { reason: "delete" }));
+  assert.equal(r.error, undefined, r.error);
+  assert.equal(api.getInvoices().length, 0);
+  assert.equal(product(api).stock, 10, "back to what the shop had before the sale, not 15");
+  const stored = await api.db.loadAll();
+  assert.equal(stored.invoices.length, 0, "removed from the database too");
+  assert.equal(stored.products[0].stock, 10);
+  assert.equal(stored.settings.rollbackLog.length, 1);
+  assert.equal(stored.settings.rollbackLog[0].refund, 15000);
 });
 
 /* ---------- Two windows at once ---------- */
