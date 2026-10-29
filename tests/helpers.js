@@ -17,7 +17,7 @@ const SCRIPT_DIR = path.join(__dirname, "..", "java script");
 // Loaded first, in the same order as index.html. Add a new language's file here (and in index.html).
 const LANGUAGE_FILES = ["i18n.js", "lang/en.js", "lang/fr.js", "lang/ar.js"];
 // Everything the page loads, in the order index.html loads it.
-const APP_FILES = LANGUAGE_FILES.concat(["calc.js", "purchases.js", "validation.js", "product-form.js", "debt.js", "database.js", "autobackup.js", "purchases-ui.js", "script.js"]);
+const APP_FILES = LANGUAGE_FILES.concat(["calc.js", "purchases.js", "validation.js", "product-form.js", "debt.js", "analytics.js", "database.js", "autobackup.js", "purchases-ui.js", "dashboard.js", "script.js"]);
 
 function loadProductApi() {
   const fields = new Map();

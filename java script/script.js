@@ -4454,6 +4454,7 @@ function renderEverything() {
   renderInvoices();
   renderInvoice();
   PurchasesUI.render();
+  Dashboard.render();
   renderDebtUi();
 }
 
@@ -4918,6 +4919,13 @@ function openProductInStock(id) {
   if (row && row.scrollIntoView) row.scrollIntoView({ block: "center" });
 }
 
+// "View invoices" on a Dashboard customer: the Invoices page, searched for that customer.
+function showInvoicesFor(text) {
+  if (!showView("invoices")) return;
+  $("invoiceFilter").value = String(text || "");
+  renderInvoices();
+}
+
 function goToAddProduct() {
   if (showView("stock")) openProductForm();
 }
@@ -4958,6 +4966,7 @@ function bindEvents() {
   });
 
   PurchasesUI.bind();
+  Dashboard.bind();
 
   // Product picker
   const search = $("search");
@@ -5480,6 +5489,16 @@ PurchasesUI.init({
   downloadText, showView, openProductInStock,
 });
 
+// The Dashboard (dashboard.js) draws figures calculated by analytics.js from this page's data. It never saves anything.
+Dashboard.init({
+  state, $, t, tn, esc, money, numberFormat, formatTileSize, ltr, formatDateTime, showView, openProductInStock, viewInvoice, showInvoicesFor,
+  productName: (name) => (name === DELETED_PRODUCT ? t("sell.deletedProduct") : name),
+  isWalkIn: (name) => Validation.isWalkInName(name),
+  locale: () => I18n.locale(),
+  now: () => new Date(),
+  lowStock: LOW_STOCK,
+});
+
 if (globalThis.__INVOISY_TEST_EXPORTS__) {
   Object.assign(globalThis.__INVOISY_TEST_EXPORTS__, {
     normalizeProduct,
@@ -5571,6 +5590,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     customerLabel,
     describeData,
     PurchasesUI,
+    Dashboard,
     Purchases,
     normalizeSettings: Validation.normalizeSettings,
     settingsProblem: Validation.settingsProblem,

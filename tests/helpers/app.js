@@ -90,7 +90,7 @@ function loadApp(options) {
     ...(opts.globals || {}),   // extra browser features a test wants to provide, such as showSaveFilePicker
   };
   vm.createContext(context);
-  for (const file of ["i18n.js", "lang/en.js", "lang/fr.js", "lang/ar.js", "calc.js", "purchases.js", "validation.js", "product-form.js", "debt.js", "database.js", "autobackup.js", "purchases-ui.js", "script.js"]) {
+  for (const file of ["i18n.js", "lang/en.js", "lang/fr.js", "lang/ar.js", "calc.js", "purchases.js", "validation.js", "product-form.js", "debt.js", "analytics.js", "database.js", "autobackup.js", "purchases-ui.js", "dashboard.js", "script.js"]) {
     const source = fs.readFileSync(path.join(__dirname, "..", "..", "java script", file), "utf8");
     vm.runInContext(source, context, { filename: file });
   }
