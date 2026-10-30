@@ -28,9 +28,9 @@
   const PAY_FILTERS = ["all", "unpaid", "partial", "paid", "overdue"];
 
   const ui = {
-    sup: { screen: "list", q: "", status: "active", sortKey: "name", sortDir: 1, editingId: null, profileId: null, tab: "overview", formReady: false, formLang: "", contactRows: [] },
+    sup: { screen: "list", q: "", status: "active", sortKey: "name", sortDir: 1, editingId: null, profileId: null, tab: "overview", formReady: false, formLang: "", contactRows: [], depositNonce: "", editDepositId: "", voidDepositId: "" },
     pur: {
-      screen: "list", tab: "list", q: "", status: "all", pay: "all", supplierId: "", sortKey: "date", sortDir: -1,
+      screen: "list", tab: "list", q: "", status: "all", pay: "all", supplierId: "", from: "", to: "", sortKey: "date", sortDir: -1,
       detailId: null, open: "", form: null, formLang: "",
       report: { from: "", to: "", productId: "" },
     },
@@ -89,7 +89,7 @@
 
   const supplierById = (id) => S().suppliers.find((s) => s.id === id) || null;
   const purchaseById = (id) => S().purchases.find((p) => p.id === id) || null;
-  const summaryOf = (purchase) => P.purchaseSummary(purchase, S().supplierPayments, today());
+  const summaryOf = (purchase) => P.purchaseSummary(purchase, S().supplierPayments, today(), S().advanceAllocations);
 
   function productOptions(selectedId) {
     const products = [...S().products].sort((a, b) => a.name.localeCompare(b.name));
@@ -124,6 +124,18 @@
     return `<div class="stat${extra ? " " + extra : ""}"><span class="stat-label">${esc(label)}</span><strong>${value}</strong></div>`;
   }
 
+  // The page title row every list and detail screen starts with: the same header Stock and Invoices use.
+  function pageHeader(title, actions) {
+    return `<header class="stock-header"><h1 class="stock-title">${esc(title)}</h1>${actions ? `<div class="page-actions">${actions}</div>` : ""}</header>`;
+  }
+  const SEARCH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>';
+
+  // Net balance in words: positive = we owe the supplier, negative = we prepaid, zero = square. Never colour alone.
+  const balanceState = (net) => (net > 0 ? "owes" : net < 0 ? "prepaid" : "square");
+  const balanceBadge = (net) => badge(balanceState(net), t("fin.state." + balanceState(net)));
+  const methodName = (m) => t("dep.method." + (m === "other" ? "misc" : m));
+  const balanceClass = (net) => (net > 0 ? "owed" : net < 0 ? "credit" : "");
+
   function sortArrow(state, key) {
     return state.sortKey === key ? (state.sortDir > 0 ? " ▲" : " ▼") : "";
   }
@@ -134,7 +146,8 @@
     return h.guard(async () => {
       const result = await h.commit(mutate);
       if (result.error) {
-        if (opts.errorId && $(opts.errorId)) showErr(opts.errorId, result.error, result.field && opts.fieldPrefix ? opts.fieldPrefix + result.field : "");
+        const fieldId = result.field && opts.fieldMap ? opts.fieldMap[result.field] || "" : (result.field && opts.fieldPrefix ? opts.fieldPrefix + result.field : "");
+        if (opts.errorId && $(opts.errorId)) showErr(opts.errorId, result.error, fieldId);
         else h.notify(result.error, "error");
         if (opts.onError) opts.onError(result);
         return;
@@ -239,8 +252,8 @@
       .filter((sp) => ui.sup.status === "all" || (ui.sup.status === "archived") === Boolean(sp.archived))
       .filter((sp) => !q || [sp.name, sp.contactName, sp.phone, ...P.supplierContactNames(sp), ...P.supplierPhones(sp), sp.email, sp.city, sp.taxId].some((v) => P.normText(v).includes(q)))
       .map((sp) => {
-        const sum = P.supplierSummary(sp, s.purchases, s.supplierPayments, day);
-        return { sp, sum, name: sp.name, total: sum.total, paid: sum.paid, outstanding: sum.outstanding, last: sum.lastPurchase };
+        const sum = P.supplierSummary(sp, s.purchases, s.supplierPayments, day, s.supplierDeposits, s.advanceAllocations);
+        return { sp, sum, name: sp.name, total: sum.total, paid: sum.paid, outstanding: sum.outstanding, last: sum.lastPurchase, net: sum.net, advance: sum.advance, open: sum.openInvoices };
       });
     return rows.sort(compareBy(ui.sup.sortKey, ui.sup.sortDir));
   }
@@ -248,34 +261,35 @@
   function supplierSummaryStrip() {
     const o = P.overview(S(), today());
     return stat(t("sup.stat.suppliers"), `${num(o.active)}<small> / ${num(o.suppliers)}</small>`)
-      + stat(t("sup.stat.purchases"), esc(money(o.total)))
-      + stat(t("sup.stat.paid"), esc(money(o.paid)))
-      + stat(t("sup.stat.outstanding"), esc(money(o.outstanding)), o.outstanding > 0 ? "warn" : "")
-      + stat(t("sup.stat.overdue"), num(o.overdueCount), o.overdueCount > 0 ? "bad" : "");
+      + stat(t("fin.totalPurchases"), esc(money(o.total)))
+      + stat(t("fin.paidToSupplier"), esc(money(o.paid)))
+      + stat(t("fin.owedToSuppliers"), esc(money(o.owed)), o.owed > 0 ? "warn" : "")
+      + stat(t("fin.availableAdvances"), esc(money(o.advance)), o.advance > 0 ? "credit" : "");
   }
 
   function supplierTableRows() {
     const rows = supplierRows();
     if (!rows.length) {
       const none = S().suppliers.length === 0;
-      return `<tr class="empty-row"><td colspan="9">${esc(t(none ? "sup.empty" : "sup.noMatch"))}</td></tr>`;
+      return `<tr class="empty-row"><td colspan="8">${esc(t(none ? "sup.empty" : "sup.noMatch"))}</td></tr>`;
     }
     return rows.map(({ sp, sum }) => {
-      const status = sp.archived ? badge("st-cancelled", t("sup.status.archived")) : badge("st-confirmed", t("sup.status.active"));
-      const overdue = sum.overdueCount ? " " + badge("overdue", t("sup.overdueCount", { n: sum.overdueCount })) : "";
+      const archived = sp.archived ? " " + badge("st-cancelled", t("sup.status.archived")) : "";
+      const overdue = sum.overdueCount ? `<div>${badge("overdue", t("sup.overdueCount", { n: sum.overdueCount }))}</div>` : "";
+      const contacts = [...P.supplierContactNames(sp), sp.email].filter(Boolean);
       return `<tr data-id="${esc(sp.id)}">
-        <td><button type="button" class="link" data-act="sup-open" data-id="${esc(sp.id)}">${esc(sp.name)}</button>${P.supplierContactNames(sp).length ? `<div class="muted small">${esc(P.supplierContactNames(sp).join(", "))}</div>` : ""}</td>
-        <td>${P.supplierPhones(sp).map((phone) => `<div>${esc(h.ltr(phone))}</div>`).join("")}</td>
-        <td>${esc(sp.email)}</td>
+        <td class="name-cell"><button type="button" class="link" data-act="sup-open" data-id="${esc(sp.id)}">${esc(sp.name)}</button>${archived}${contacts.length ? `<div class="muted small">${esc(contacts.join(", "))}</div>` : ""}</td>
+        <td class="phone-cell">${P.supplierPhones(sp).map((phone) => `<div>${esc(h.ltr(phone))}</div>`).join("")}</td>
         <td class="num">${esc(money(sum.total))}</td>
         <td class="num">${esc(money(sum.paid))}</td>
-        <td class="num ${sum.outstanding > 0 ? "owed" : ""}">${esc(money(sum.outstanding))}</td>
-        <td>${esc(fmtDay(sum.lastPurchase))}</td>
-        <td>${status}${overdue}</td>
+        <td class="num ${balanceClass(sum.net)}">${esc(money(sum.net))}<div>${balanceBadge(sum.net)}</div></td>
+        <td class="num">${num(sum.openInvoices)}${overdue}</td>
+        <td class="num ${sum.advance > 0 ? "credit" : ""}">${esc(money(sum.advance))}</td>
         <td class="num"><div class="row-actions">
           <button type="button" class="btn small" data-act="sup-open" data-id="${esc(sp.id)}">${esc(t("common.view"))}</button>
+          ${sp.archived ? "" : `<button type="button" class="btn small" data-act="sup-deposit" data-id="${esc(sp.id)}">${esc(t("dep.short"))}</button>
+          <button type="button" class="btn small" data-act="pur-new" data-id="${esc(sp.id)}">${esc(t("sup.newPurchase"))}</button>`}
           <button type="button" class="btn small" data-act="sup-edit" data-id="${esc(sp.id)}">${esc(t("common.edit"))}</button>
-          ${sp.archived ? "" : `<button type="button" class="btn small" data-act="pur-new" data-id="${esc(sp.id)}">${esc(t("sup.newPurchase"))}</button>`}
         </div></td></tr>`;
     }).join("");
   }
@@ -287,26 +301,28 @@
 
   function supplierListHtml() {
     const th = (key, label, cls) => `<th class="${cls || ""}"><button type="button" class="th-sort" data-act="sup-sort" data-key="${key}">${esc(label)}${sortArrow(ui.sup, key)}</button></th>`;
-    return `<div class="stat-strip" id="supStrip">${supplierSummaryStrip()}</div>
-      <div class="panel">
-        <div class="panel-head wrap">
-          <h2>${esc(t("sup.title"))}</h2>
-          <div class="toolbar">
+    return `${pageHeader(t("nav.suppliers"), `<button type="button" class="btn primary" data-act="sup-add">${esc(t("sup.add"))}</button>`)}
+      <div class="stat-strip" id="supStrip">${supplierSummaryStrip()}</div>
+      <div class="panel stock-list">
+        <div class="stock-toolbar">
+          <div class="stock-search">
+            ${SEARCH_ICON}
             <label class="sr-only" for="supSearch">${esc(t("sup.searchLabel"))}</label>
             <input type="search" id="supSearch" value="${esc(ui.sup.q)}" placeholder="${esc(t("sup.searchPlaceholder"))}" autocomplete="off">
+          </div>
+          <div class="list-filters">
             <label class="sr-only" for="supStatus">${esc(t("sup.statusFilter"))}</label>
             <select id="supStatus">${["active", "archived", "all"].map((v) => option(v, t("sup.filter." + v), ui.sup.status === v)).join("")}</select>
-            <button type="button" class="btn primary" data-act="sup-add">${esc(t("sup.add"))}</button>
           </div>
         </div>
-        <div class="table-wrap">
-          <table class="table">
+        <div class="table-wrap stock-table-wrap">
+          <table class="table stock-table sup-table">
             <thead><tr>
               ${th("name", t("sup.col.name"))}
-              <th>${esc(t("sup.col.phone"))}</th><th>${esc(t("sup.col.email"))}</th>
-              ${th("total", t("sup.col.total"), "num")}${th("paid", t("sup.col.paid"), "num")}${th("outstanding", t("sup.col.outstanding"), "num")}
-              ${th("last", t("sup.col.last"))}
-              <th>${esc(t("col.status"))}</th><th class="num">${esc(t("col.actions"))}</th>
+              <th>${esc(t("sup.col.phone"))}</th>
+              ${th("total", t("fin.totalPurchases"), "num")}${th("paid", t("fin.paidToSupplier"), "num")}${th("net", t("fin.netBalance"), "num")}
+              ${th("open", t("fin.openInvoices"), "num")}${th("advance", t("fin.availableAdvance"), "num")}
+              <th class="num">${esc(t("col.actions"))}</th>
             </tr></thead>
             <tbody id="supRows">${supplierTableRows()}</tbody>
           </table>
@@ -453,12 +469,12 @@
 
   /* ---------- Supplier profile ---------- */
 
-  const PROFILE_TABS = ["overview", "purchases", "payments", "products", "documents"];
+  const PROFILE_TABS = ["overview", "purchases", "payments", "deposits", "statement", "products", "documents"];
 
   function purchaseRowsHtml(purchases, options) {
     const opts = options || {};
-    const sorted = [...purchases].sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate) || b.reference.localeCompare(a.reference));
-    if (!sorted.length) return `<tr class="empty-row"><td colspan="${opts.withSupplier ? 11 : 10}">${esc(t("pur.noneFound"))}</td></tr>`;
+    const sorted = opts.keepOrder ? [...purchases] : [...purchases].sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate) || b.reference.localeCompare(a.reference));
+    if (!sorted.length) return `<tr class="empty-row"><td colspan="${opts.withSupplier ? 10 : 9}">${esc(t("pur.noneFound"))}</td></tr>`;
     return sorted.map((p) => {
       const sum = summaryOf(p);
       const sp = supplierById(p.supplierId);
@@ -468,22 +484,24 @@
         <td>${esc(p.noSupplierInvoice ? t("pur.noInvoiceShort") : p.supplierInvoiceNumber)}</td>
         ${opts.withSupplier ? `<td>${esc(sp ? sp.name : "")}</td>` : ""}
         <td>${esc(fmtDay(p.invoiceDate))}</td>
-        <td>${esc(fmtDay(p.dueDate))}</td>
+        <td class="num">${num(p.lines.length)}</td>
         <td class="num ${p.status === "cancelled" ? "struck" : ""}">${esc(money(p.total))}</td>
         <td class="num">${confirmed ? esc(money(sum.paid)) : ""}</td>
         <td class="num ${confirmed && sum.outstanding > 0 ? "owed" : ""}">${confirmed ? esc(money(sum.outstanding)) : ""}</td>
-        <td>${statusBadge(p)}</td>
-        <td>${payBadge(p, sum)} ${deliveryBadge(p, sum)}</td>
+        <td>${statusBadge(p)} ${payBadge(p, sum)} ${deliveryBadge(p, sum)}${confirmed && sum.advanceApplied > 0 ? `<div class="muted small">${esc(t("adv.appliedShort", { amount: money(sum.advanceApplied) }))}</div>` : ""}</td>
         <td class="num"><div class="row-actions"><button type="button" class="btn small" data-act="pur-open" data-id="${esc(p.id)}">${esc(p.status === "draft" ? t("common.edit") : t("common.view"))}</button><button type="button" class="btn small danger" data-act="pur-delete" data-id="${esc(p.id)}">${esc(t("common.delete"))}</button></div></td>
       </tr>`;
     }).join("");
   }
 
-  function purchaseTableHead(withSupplier) {
-    return `<thead><tr><th>${esc(t("pur.col.reference"))}</th><th>${esc(t("pur.col.invoiceNo"))}</th>${withSupplier ? `<th>${esc(t("pur.col.supplier"))}</th>` : ""}
-      <th>${esc(t("pur.col.date"))}</th><th>${esc(t("pur.col.due"))}</th><th class="num">${esc(t("col.total"))}</th>
-      <th class="num">${esc(t("col.paid"))}</th><th class="num">${esc(t("pur.col.outstanding"))}</th>
-      <th>${esc(t("col.status"))}</th><th>${esc(t("pur.col.paymentDelivery"))}</th><th class="num">${esc(t("col.actions"))}</th></tr></thead>`;
+  function purchaseTableHead(withSupplier, sortable) {
+    const th = (key, label, cls) => (sortable
+      ? `<th class="${cls || ""}"><button type="button" class="th-sort" data-act="pur-sort" data-key="${key}">${esc(label)}${sortArrow(ui.pur, key)}</button></th>`
+      : `<th class="${cls || ""}">${esc(label)}</th>`);
+    return `<thead><tr>${th("reference", t("pur.col.reference"))}<th>${esc(t("pur.col.invoiceNo"))}</th>${withSupplier ? th("supplier", t("pur.col.supplier")) : ""}
+      ${th("date", t("pur.col.date"))}<th class="num">${esc(t("pur.col.items"))}</th>${th("total", t("col.total"), "num")}
+      ${th("paid", t("col.paid"), "num")}${th("outstanding", t("pur.col.outstanding"), "num")}
+      <th>${esc(t("col.status"))}</th><th class="num">${esc(t("col.actions"))}</th></tr></thead>`;
   }
 
   function paymentRowsHtml(rows, options) {
@@ -513,12 +531,15 @@
     const place = [sp.city, sp.country].filter(Boolean).join(", ");
     const site = sp.website ? `<dt>${esc(t("sup.f.website"))}</dt><dd>${esc(sp.website)}</dd>` : "";
     return `<div class="stat-strip">
-        ${stat(t("sup.stat.purchases"), esc(money(sum.total)))}${stat(t("sup.stat.paid"), esc(money(sum.paid)))}
-        ${stat(t("sup.stat.outstanding"), esc(money(sum.outstanding)), sum.outstanding > 0 ? "warn" : "")}
-        ${stat(t("sup.stat.overdueAmount"), esc(money(sum.overdueTotal)), sum.overdueTotal > 0 ? "bad" : "")}
-        ${stat(t("sup.col.last"), esc(fmtDay(sum.lastPurchase) || "—"))}
+        ${stat(t("fin.totalPurchases"), esc(money(sum.total)))}${stat(t("fin.paidToSupplier"), esc(money(sum.paid)))}
+        ${stat(t("fin.outstandingInvoices"), esc(money(sum.outstanding)) + `<span class="state">${esc(t("fin.openCount", { n: sum.openInvoices }))}</span>`, sum.outstanding > 0 ? "warn" : "")}
+        ${stat(t("fin.netBalance"), esc(money(sum.net)) + `<span class="state">${esc(t("fin.state." + balanceState(sum.net)))}</span>`, sum.net > 0 ? "warn" : sum.net < 0 ? "credit" : "")}
+        ${stat(t("fin.availableAdvance"), esc(money(sum.advance)), sum.advance > 0 ? "credit" : "")}
+        ${sum.overdueTotal > 0 ? stat(t("sup.stat.overdueAmount"), esc(money(sum.overdueTotal)), "bad") : ""}
       </div>
-      ${sum.overLimit ? `<p class="warn-box">${esc(t("sup.overLimit", { owed: money(sum.outstanding), limit: money(sum.creditLimit) }))}</p>` : ""}
+      <p class="muted balance-note">${esc(t("fin.formulaNote"))}</p>
+      ${sum.unapplied > 0 ? `<p class="notice">${esc(t(sum.openInvoices > 0 ? "fin.unappliedOpen" : "fin.unappliedFree", { amount: money(sum.unapplied) }))}</p>` : ""}
+      ${sum.overLimit ? `<p class="warn-box">${esc(t("sup.overLimit", { owed: money(sum.owed), limit: money(sum.creditLimit) }))}</p>` : ""}
       <div class="panel">
         <h2>${esc(t("sup.details"))}</h2>
         <dl class="data-info">
@@ -586,8 +607,109 @@
         : `<p class="muted">${esc(t("sup.documentsNone"))}</p>`}</div>`;
   }
 
+  /* ---------- Supplier deposits and the statement ---------- */
+
+  function depositFormHtml(x) {
+    const editing = Boolean(x);
+    const v = x || { kind: "deposit", amount: "", date: today(), method: "", reference: "", note: "" };
+    return `<form id="supDepForm" class="deposit-form" data-form="sup-deposit" novalidate>
+        <h3>${esc(t(editing ? "dep.editTitle" : "dep.title"))}</h3>
+        <p class="muted small">${esc(t("dep.help"))}</p>
+        <div class="grid-4">
+          ${editing ? "" : field("dpType", esc(t("dep.type")), `<select id="dpType">${["deposit", "refund"].map((k) => option(k, t("dep.kind." + k), v.kind === k)).join("")}</select>`)}
+          ${field("dpAmount", esc(t("spay.amount")), `<input type="number" id="dpAmount" min="0" step="any" value="${editing ? esc(v.amount) : ""}" placeholder="0">`)}
+          ${field("dpDate", esc(t("spay.date")), `<input type="date" id="dpDate" value="${esc(v.date)}" max="${today()}">`)}
+          ${field("dpMethod", esc(t("dep.method")), `<select id="dpMethod">${option("", t("dep.method.none"), !v.method)}${P.PAYMENT_METHODS.map((m) => option(m, methodName(m), v.method === m)).join("")}</select>`)}
+        </div>
+        <div class="grid-2">
+          ${field("dpRef", esc(t("spay.reference")), `<input type="text" id="dpRef" value="${esc(v.reference || "")}" autocomplete="off">`)}
+          ${field("dpNote", esc(t("spay.note")), `<input type="text" id="dpNote" value="${esc(v.note || "")}" autocomplete="off">`)}
+        </div>
+        <p class="error" id="dpError" role="alert"></p>
+        <div class="actions left"><button type="submit" class="btn primary">${esc(t(editing ? "spay.saveChange" : "dep.save"))}</button>
+          ${editing ? `<button type="button" class="btn" data-act="sup-dep-cancel">${esc(t("common.cancel"))}</button>` : ""}</div>
+      </form>`;
+  }
+
+  function supplierDepositRows(supplierId) {
+    return S().supplierDeposits
+      .filter((x) => x.supplierId === supplierId)
+      .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+  }
+
+  function profileDeposits(sp, sum) {
+    const rows = supplierDepositRows(sp.id);
+    const editing = ui.sup.editDepositId ? rows.find((x) => x.id === ui.sup.editDepositId && x.status === "recorded") : null;
+    const left = P.depositRemaining(sp.id, S().supplierDeposits, S().advanceAllocations);
+    const body = rows.map((x) => {
+      if (ui.sup.voidDepositId === x.id) {
+        return `<tr><td colspan="7"><form data-form="sup-dep-void" novalidate>
+          <p>${esc(t("dep.voidAsk", { amount: money(x.amount), date: fmtDay(x.date) }))}</p>
+          ${field("dvReason", esc(t("spay.voidReason")), `<input type="text" id="dvReason" autocomplete="off">`)}
+          <p class="error" id="dvError" role="alert"></p>
+          <div class="actions left"><button type="submit" class="btn danger">${esc(t("dep.voidBtn"))}</button><button type="button" class="btn" data-act="sup-dep-cancel">${esc(t("common.cancel"))}</button></div></form></td></tr>`;
+      }
+      const applied = x.kind === "refund" || x.status === "voided" ? "" : `${esc(money(round(x.amount - (left.get(x.id) || 0))))}<div class="muted small">${esc(t("dep.stillUnapplied", { amount: money(left.get(x.id) || 0) }))}</div>`;
+      const was = (x.history || []).map((hh) => `<div class="muted small">${esc(t("spay.was", { amount: money(hh.amount), date: fmtDay(hh.date) }))}</div>`).join("");
+      return `<tr${x.status === "voided" ? ' class="voided"' : ""}>
+        <td>${esc(fmtDay(x.date))}</td>
+        <td>${badge("dep-" + x.kind, t("dep.kind." + x.kind))}</td>
+        <td class="num">${esc(money(x.amount))}</td>
+        <td>${esc(x.method ? methodName(x.method) : "")}</td>
+        <td>${esc(x.reference)}${x.note ? `<div class="muted small">${esc(x.note)}</div>` : ""}${was}${x.status === "voided" ? `<div class="small">${esc(t("spay.voidedBecause", { reason: x.voidReason }))}</div>` : ""}</td>
+        <td class="num">${applied}</td>
+        <td class="num">${x.status === "voided" ? badge("st-cancelled", t("spay.voided")) : `<div class="row-actions"><button type="button" class="btn small" data-act="sup-dep-edit" data-id="${esc(x.id)}">${esc(t("common.edit"))}</button>
+          <button type="button" class="btn small danger" data-act="sup-dep-void" data-id="${esc(x.id)}">${esc(t("spay.void"))}</button></div>`}</td>
+      </tr>`;
+    }).join("");
+    const allocs = S().advanceAllocations.filter((a) => a.supplierId === sp.id)
+      .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+    const allocBody = allocs.map((a) => {
+      const purchase = purchaseById(a.purchaseId);
+      const from = S().supplierDeposits.find((x) => x.id === a.depositId);
+      return `<tr${a.status === "reversed" ? ' class="voided"' : ""}><td>${esc(fmtDay(a.date))}</td>
+        <td>${purchase ? `<button type="button" class="link" data-act="pur-open" data-id="${esc(purchase.id)}">${esc(purchase.reference)}</button>` : ""}</td>
+        <td class="num">${esc(money(a.amount))}</td><td>${from ? esc(t("dep.fromDeposit", { date: fmtDay(from.date), amount: money(from.amount) })) : ""}</td>
+        <td>${a.status === "reversed" ? badge("st-cancelled", t("adv.reversed")) + `<div class="small">${esc(t("spay.voidedBecause", { reason: a.reverseReason }))}</div>` : ""}</td></tr>`;
+    }).join("");
+    return `<div class="stat-strip small">${stat(t("dep.stat.deposited"), esc(money(sum.deposited)))}${stat(t("dep.stat.refunded"), esc(money(sum.refunded)))}
+        ${stat(t("dep.stat.applied"), esc(money(sum.applied)))}${stat(t("fin.unapplied"), esc(money(sum.unapplied)), sum.unapplied > 0 ? "credit" : "")}</div>
+      <div class="panel">${depositFormHtml(editing)}</div>
+      <div class="panel"><h2>${esc(t("dep.history"))}</h2>
+        <div class="table-wrap stock-table-wrap"><table class="table stock-table"><thead><tr><th>${esc(t("spay.date"))}</th><th>${esc(t("dep.type"))}</th><th class="num">${esc(t("spay.amount"))}</th><th>${esc(t("dep.method"))}</th><th>${esc(t("spay.reference"))}</th><th class="num">${esc(t("dep.appliedCol"))}</th><th></th></tr></thead>
+        <tbody>${body || `<tr class="empty-row"><td colspan="7">${esc(t("dep.none"))}</td></tr>`}</tbody></table></div></div>
+      ${allocs.length ? `<div class="panel"><h2>${esc(t("adv.history"))}</h2><p class="muted small">${esc(t("adv.historyNote"))}</p>
+        <div class="table-wrap stock-table-wrap"><table class="table stock-table"><thead><tr><th>${esc(t("spay.date"))}</th><th>${esc(t("pur.col.reference"))}</th><th class="num">${esc(t("spay.amount"))}</th><th>${esc(t("adv.from"))}</th><th></th></tr></thead><tbody>${allocBody}</tbody></table></div></div>` : ""}`;
+  }
+
+  // Everything that moved money with this supplier, oldest first, with the net balance after each line.
+  function ledgerRowsHtml(rows) {
+    if (!rows.length) return `<tr class="empty-row"><td colspan="5">${esc(t("led.none"))}</td></tr>`;
+    return rows.map((r) => {
+      const what = [];
+      if (r.purchaseId && r.ref) what.push(`<button type="button" class="link" data-act="pur-open" data-id="${esc(r.purchaseId)}">${esc(r.ref)}</button>`);
+      if (r.type === "purchase" && r.reference) what.push(esc(r.reference));
+      else if (r.type !== "purchase" && r.reference) what.push(esc(r.reference));
+      if (r.method) what.push(esc(methodName(r.method)));
+      const note = r.note ? `<div class="muted small">${esc(r.note)}</div>` : "";
+      const amount = r.type === "allocation" ? `<span class="muted">${esc(money(r.amount))}</span>` : esc((r.effect > 0 ? "+" : r.effect < 0 ? "−" : "") + money(Math.abs(r.status === "voided" ? r.amount : r.effect)));
+      return `<tr${r.status === "voided" ? ' class="voided"' : ""}><td>${esc(fmtDay(r.date))}</td>
+        <td>${badge("dep-" + r.type, t("led.type." + r.type))}${r.status === "voided" ? " " + badge("st-cancelled", t("led.voided")) : ""}${r.type === "allocation" ? `<div class="muted small">${esc(t("led.noChange"))}</div>` : ""}</td>
+        <td>${what.join(" · ")}${note}</td><td class="num">${amount}</td><td class="num ${balanceClass(r.balance)}">${r.status === "voided" ? "" : esc(money(r.balance))}</td></tr>`;
+    }).join("");
+  }
+
+  function profileStatement(sp) {
+    const rows = P.supplierLedger(S(), sp.id);
+    return `<div class="panel"><h2>${esc(t("led.title"))}</h2><p class="muted small">${esc(t("led.note"))}</p>
+      <div class="table-wrap stock-table-wrap"><table class="table stock-table"><thead><tr><th>${esc(t("spay.date"))}</th><th>${esc(t("led.col.type"))}</th><th>${esc(t("led.col.details"))}</th><th class="num">${esc(t("spay.amount"))}</th><th class="num">${esc(t("fin.netBalance"))}</th></tr></thead>
+      <tbody>${ledgerRowsHtml(rows)}</tbody></table></div></div>`;
+  }
+
+  const round = (n) => Calc.roundMoney(n);
+
   function supplierProfileHtml(sp) {
-    const sum = P.supplierSummary(sp, S().purchases, S().supplierPayments, today());
+    const sum = P.supplierSummary(sp, S().purchases, S().supplierPayments, today(), S().supplierDeposits, S().advanceAllocations);
     const mine = S().purchases.filter((p) => p.supplierId === sp.id);
     const hasHistory = P.supplierHasHistory(S(), sp.id);
     const tabs = PROFILE_TABS.map((k) => `<button type="button" class="tab" role="tab" aria-selected="${ui.sup.tab === k}" data-act="sup-tab" data-tab="${k}">${esc(t("sup.tab." + k))}</button>`).join("");
@@ -595,13 +717,16 @@
     if (ui.sup.tab === "overview") body = profileOverview(sp, sum);
     else if (ui.sup.tab === "purchases") body = `<div class="panel"><div class="table-wrap"><table class="table">${purchaseTableHead(false)}<tbody>${purchaseRowsHtml(mine)}</tbody></table></div></div>`;
     else if (ui.sup.tab === "payments") body = profilePayments(sp);
+    else if (ui.sup.tab === "deposits") body = profileDeposits(sp, sum);
+    else if (ui.sup.tab === "statement") body = profileStatement(sp);
     else if (ui.sup.tab === "products") body = profileProducts(sp);
     else body = profileDocuments(sp);
-    return `<div class="panel profile-head">
+    return `${pageHeader(t("nav.suppliers"))}<div class="panel profile-head">
         <div><button type="button" class="link back" data-act="sup-back"><span class="dir-arrow">←</span> ${esc(t("sup.title"))}</button>
           <h2>${esc(sp.name)} ${sp.archived ? badge("st-cancelled", t("sup.status.archived")) : ""}</h2></div>
         <div class="actions wrap">
           ${sp.archived ? "" : `<button type="button" class="btn primary" data-act="pur-new" data-id="${esc(sp.id)}">${esc(t("sup.newPurchase"))}</button>`}
+          ${sp.archived ? "" : `<button type="button" class="btn" data-act="sup-tab" data-tab="deposits">${esc(t("dep.short"))}</button>`}
           <button type="button" class="btn" data-act="sup-tab" data-tab="payments">${esc(t("spay.recordShort"))}</button>
           <button type="button" class="btn" data-act="sup-edit" data-id="${esc(sp.id)}">${esc(t("common.edit"))}</button>
           <button type="button" class="btn" data-act="sup-csv" data-id="${esc(sp.id)}">${esc(t("sup.exportCsv"))}</button>
@@ -618,10 +743,10 @@
 
   function supplierStatement(sp) {
     const s = S();
-    const sum = P.supplierSummary(sp, s.purchases, s.supplierPayments, today());
+    const sum = P.supplierSummary(sp, s.purchases, s.supplierPayments, today(), s.supplierDeposits, s.advanceAllocations);
     const purchases = s.purchases.filter((p) => p.supplierId === sp.id && p.status === "confirmed")
       .sort((a, b) => a.invoiceDate.localeCompare(b.invoiceDate) || a.reference.localeCompare(b.reference));
-    return { sum, purchases, payments: supplierPaymentRows(sp.id).filter((r) => r.payment.status !== "voided") };
+    return { sum, purchases, payments: supplierPaymentRows(sp.id).filter((r) => r.payment.status !== "voided"), deposits: supplierDepositRows(sp.id).filter((x) => x.status !== "voided") };
   }
 
   function supplierCsv(sp) {
@@ -629,7 +754,8 @@
     const rows = [
       csvRow([t("sup.csv.supplier"), sp.name]),
       csvRow([t("sup.csv.date"), fmtDay(today())]),
-      csvRow([t("sup.stat.purchases"), sum.total, t("sup.stat.paid"), sum.paid, t("sup.stat.outstanding"), sum.outstanding]),
+      csvRow([t("fin.totalPurchases"), sum.total, t("fin.paidToSupplier"), sum.paid, t("fin.outstandingInvoices"), sum.outstanding]),
+      csvRow([t("fin.netBalance"), sum.net, t("fin.availableAdvance"), sum.advance, t("fin.unapplied"), sum.unapplied]),
       "",
       csvRow([t("pur.col.reference"), t("pur.col.invoiceNo"), t("pur.col.date"), t("pur.col.due"), t("col.total"), t("col.paid"), t("pur.col.outstanding"), t("col.status")]),
     ];
@@ -637,8 +763,10 @@
       const x = summaryOf(p);
       rows.push(csvRow([p.reference, p.supplierInvoiceNumber, p.invoiceDate, p.dueDate, p.total, x.paid, x.outstanding, t("pur.pay." + x.paymentStatus)]));
     }
-    rows.push("", csvRow([t("spay.date"), t("pur.col.reference"), t("spay.amount"), t("spay.reference"), t("spay.note")]));
-    for (const { payment, purchase } of payments) rows.push(csvRow([payment.date, purchase ? purchase.reference : "", payment.amount, payment.reference, payment.note]));
+    rows.push("", csvRow([t("spay.date"), t("led.col.type"), t("pur.col.reference"), t("dep.method"), t("spay.reference"), t("spay.amount"), t("fin.netBalance"), t("spay.note")]));
+    for (const r of P.supplierLedger(S(), sp.id)) {
+      rows.push(csvRow([r.date, t("led.type." + r.type) + (r.status === "voided" ? " (" + t("led.voided") + ")" : ""), r.ref || "", r.method ? methodName(r.method) : "", r.reference || "", r.type === "allocation" ? r.amount : r.effect, r.status === "voided" ? "" : r.balance, r.note || ""]));
+    }
     return "﻿" + rows.join("\r\n") + "\r\n";
   }
 
@@ -654,15 +782,18 @@
   }
 
   function supplierStatementHtml(sp) {
-    const { sum, purchases, payments } = supplierStatement(sp);
+    const { sum, purchases, payments, deposits } = supplierStatement(sp);
     return `<header class="inv-head">${businessHeader()}<div class="inv-title">${esc(t("sup.statement"))}</div></header>
       <div class="inv-meta"><div><div class="label">${esc(t("pur.col.supplier"))}</div><div class="inv-customer">${esc(sp.name)}${P.supplierPhones(sp).length ? "\n" + esc(P.supplierPhones(sp).map(h.ltr).join(" · ")) : ""}${sp.address ? "\n" + esc(sp.address) : ""}</div></div>
       <div class="right"><div><span class="label">${esc(t("sup.csv.date"))}</span> ${esc(fmtDay(today()))}</div></div></div>
       <table class="inv-table"><thead><tr><th>${esc(t("pur.col.reference"))}</th><th>${esc(t("pur.col.invoiceNo"))}</th><th>${esc(t("pur.col.date"))}</th><th class="num">${esc(t("col.total"))}</th><th class="num">${esc(t("col.paid"))}</th><th class="num">${esc(t("pur.col.outstanding"))}</th></tr></thead>
       <tbody>${purchases.map((p) => { const x = summaryOf(p); return `<tr><td>${esc(p.reference)}</td><td>${esc(p.supplierInvoiceNumber)}</td><td>${esc(fmtDay(p.invoiceDate))}</td><td class="num">${esc(num(p.total))}</td><td class="num">${esc(num(x.paid))}</td><td class="num">${esc(num(x.outstanding))}</td></tr>`; }).join("") || `<tr><td colspan="6" class="none">${esc(t("pur.noneFound"))}</td></tr>`}</tbody></table>
-      <table class="inv-totals"><tr><td>${esc(t("sup.stat.purchases"))}</td><td>${esc(money(sum.total))}</td></tr><tr><td>${esc(t("sup.stat.paid"))}</td><td>${esc(money(sum.paid))}</td></tr>
-      <tr class="grand"><td>${esc(t("sup.stat.outstanding"))}</td><td>${esc(money(sum.outstanding))}</td></tr></table>
-      <section class="inv-payments"><h3>${esc(t("spay.history"))}</h3>${payments.length ? payments.map(({ payment: p, purchase }) => `<div class="inv-pay"><span class="when">${esc(fmtDay(p.date))} · ${esc(purchase ? purchase.reference : "")}</span><span>${esc(money(p.amount))}</span></div>`).join("") : `<div class="inv-pay"><span class="when">${esc(t("spay.none"))}</span></div>`}</section>`;
+      <table class="inv-totals"><tr><td>${esc(t("fin.totalPurchases"))}</td><td>${esc(money(sum.total))}</td></tr><tr><td>${esc(t("fin.paidToSupplier"))}</td><td>${esc(money(sum.paid))}</td></tr>
+      <tr><td>${esc(t("fin.outstandingInvoices"))}</td><td>${esc(money(sum.outstanding))}</td></tr>
+      <tr class="grand"><td>${esc(t("fin.netBalance"))} (${esc(t("fin.state." + balanceState(sum.net)))})</td><td>${esc(money(sum.net))}</td></tr>
+      ${sum.advance > 0 ? `<tr><td>${esc(t("fin.availableAdvance"))}</td><td>${esc(money(sum.advance))}</td></tr>` : ""}</table>
+      <section class="inv-payments"><h3>${esc(t("spay.history"))}</h3>${payments.length ? payments.map(({ payment: p, purchase }) => `<div class="inv-pay"><span class="when">${esc(fmtDay(p.date))} · ${esc(purchase ? purchase.reference : "")}</span><span>${esc(money(p.amount))}</span></div>`).join("") : `<div class="inv-pay"><span class="when">${esc(t("spay.none"))}</span></div>`}</section>
+      <section class="inv-payments"><h3>${esc(t("dep.history"))}</h3>${deposits.length ? deposits.map((x) => `<div class="inv-pay"><span class="when">${esc(fmtDay(x.date))} · ${esc(t("dep.kind." + x.kind))}</span><span>${esc(money(x.amount))}</span></div>`).join("") : `<div class="inv-pay"><span class="when">${esc(t("dep.none"))}</span></div>`}</section>`;
   }
 
   /* ---------- Supplier screens: rendering and actions ---------- */
@@ -679,7 +810,7 @@
         const language = I18n.language();
         if (s.formReady && s.formLang === language && $("supplierForm")) return;   // keep what is typed
         const values = s.formReady && $("sf-name") ? readSupplierForm() : (existing || {});
-        root.innerHTML = supplierFormHtml(values);
+        root.innerHTML = pageHeader(t("nav.suppliers")) + supplierFormHtml(values);
         s.formReady = true;
         s.formLang = language;
         return;
@@ -704,6 +835,38 @@
     return act((d) => P.recordPayment(d, purchaseId, input), {
       errorId: "spError", fieldPrefix: "sp",
       done: () => { h.notify(t("spay.recorded")); renderSuppliers(); },
+    });
+  }
+
+  function submitDeposit() {
+    const sp = supplierById(ui.sup.profileId);
+    if (!sp) return;
+    const editId = ui.sup.editDepositId;
+    const input = { supplierId: sp.id, amount: $("dpAmount").value, date: $("dpDate").value, method: $("dpMethod").value, reference: $("dpRef").value, note: $("dpNote").value };
+    const fieldMap = { amount: "dpAmount", date: "dpDate", method: "dpMethod", reference: "dpRef", note: "dpNote" };
+    showErr("dpError", "");
+    if (editId) {
+      return act((d) => P.updateDeposit(d, editId, input), {
+        errorId: "dpError", fieldMap,
+        done: () => { h.notify(t("dep.changed")); ui.sup.editDepositId = ""; renderSuppliers(); },
+      });
+    }
+    input.kind = $("dpType").value;
+    // One id per form: pressing the button twice, or retrying after a hiccup, finds the first record instead of adding a second.
+    if (!ui.sup.depositNonce) ui.sup.depositNonce = Validation.uid();
+    input.id = ui.sup.depositNonce;
+    return act((d) => P.recordDeposit(d, input), {
+      errorId: "dpError", fieldMap,
+      done: (r) => { h.notify(t(r.already ? "dep.alreadyRecorded" : input.kind === "refund" ? "dep.refundRecorded" : "dep.recorded")); ui.sup.depositNonce = ""; renderSuppliers(); },
+    });
+  }
+
+  function submitDepositVoid() {
+    const id = ui.sup.voidDepositId;
+    const reason = $("dvReason").value;
+    return act((d) => P.voidDeposit(d, id, reason), {
+      errorId: "dvError", fieldMap: { reason: "dvReason" },
+      done: () => { h.notify(t("dep.voidedDone")); ui.sup.voidDepositId = ""; renderSuppliers(); },
     });
   }
 
@@ -737,6 +900,7 @@
       const preview = P.deletionPreview(S(), id);
       if (preview.stockOut.length) question += "\n\n" + t("pur.deleteAskStock") + "\n" + preview.stockOut.map((x) => `- ${x.name}: ${num(x.qty)} ${x.unit}`).join("\n");
       if (preview.paymentCount) question += "\n\n" + t("pur.deleteAskPayments", { n: preview.paymentCount, amount: money(preview.paid) });
+      if (preview.advanceReturned > 0) question += "\n\n" + t("adv.deleteAsk", { amount: money(preview.advanceReturned) });
       question += "\n\n" + t("pur.deleteAskEnd");
     }
     if (!confirm(question)) return;
@@ -759,6 +923,8 @@
     return S().purchases.filter((p) => {
       if (f.status !== "all" && p.status !== f.status) return false;
       if (f.supplierId && p.supplierId !== f.supplierId) return false;
+      if (f.from && p.invoiceDate < f.from) return false;
+      if (f.to && p.invoiceDate > f.to) return false;
       if (f.pay !== "all") {
         if (p.status !== "confirmed") return false;
         const sum = summaryOf(p);
@@ -772,28 +938,68 @@
     });
   }
 
+  // The list in the order chosen by the column buttons (newest first until one is pressed).
+  function sortedPurchases() {
+    const f = ui.pur;
+    const rows = filteredPurchases().map((p) => {
+      const sum = summaryOf(p);
+      const sp = supplierById(p.supplierId);
+      return { p, reference: p.reference, supplier: sp ? sp.name : "", date: p.invoiceDate, total: p.total, paid: p.status === "confirmed" ? sum.paid : 0, outstanding: p.status === "confirmed" ? sum.outstanding : 0 };
+    });
+    rows.sort((a, b) => compareBy(f.sortKey, f.sortDir)(a, b) || b.date.localeCompare(a.date) || b.reference.localeCompare(a.reference));
+    return rows.map((r) => r.p);
+  }
+
   function purchaseListRows() {
-    return purchaseRowsHtml(filteredPurchases(), { withSupplier: true });
+    return purchaseRowsHtml(sortedPurchases(), { withSupplier: true, keepOrder: true });
+  }
+
+  // The figures above the list. Purchases and payments follow the dates chosen in the filters (all time when empty);
+  // what is owed and what is prepaid are the current balances of all suppliers. A deposit is money paid, never a purchase.
+  function purchaseSummaryStrip() {
+    const s = S();
+    const f = ui.pur;
+    const period = P.periodReport(s, f.from, f.to, today());
+    const out = P.moneyOutReport(s, f.from, f.to);
+    const o = P.overview(s, today());
+    return stat(t("fin.purchasesInPeriod"), num(period.count))
+      + stat(t("fin.totalPurchases"), esc(money(period.total)))
+      + stat(t("fin.paidToSuppliers"), esc(money(out.paid)))
+      + stat(t("fin.owedToSuppliers"), esc(money(o.owed)), o.owed > 0 ? "warn" : "")
+      + stat(t("fin.availableAdvances"), esc(money(o.advance)), o.advance > 0 ? "credit" : "");
+  }
+
+  function refreshPurchaseList() {
+    if ($("purRows")) $("purRows").innerHTML = purchaseListRows();
+    if ($("purStrip")) $("purStrip").innerHTML = purchaseSummaryStrip();
   }
 
   function purchaseListHtml() {
     const f = ui.pur;
     const suppliers = [...S().suppliers].sort((a, b) => a.name.localeCompare(b.name));
-    return `<div class="panel">
-        <div class="panel-head wrap">
-          <h2>${esc(t("pur.title"))}</h2>
-          <div class="toolbar">
+    return `<div class="stat-strip" id="purStrip">${purchaseSummaryStrip()}</div>
+      <p class="muted small balance-note">${esc(t("fin.periodNote"))}</p>
+      <div class="panel stock-list">
+        <div class="stock-toolbar">
+          <div class="stock-search">
+            ${SEARCH_ICON}
             <label class="sr-only" for="purSearch">${esc(t("pur.searchLabel"))}</label>
             <input type="search" id="purSearch" value="${esc(f.q)}" placeholder="${esc(t("pur.searchPlaceholder"))}" autocomplete="off">
+          </div>
+          <div class="list-filters">
             <label class="sr-only" for="purStatus">${esc(t("pur.statusFilter"))}</label>
             <select id="purStatus">${STATUS_FILTERS.map((v) => option(v, t(v === "all" ? "pur.filter.allStatuses" : "pur.status." + v), f.status === v)).join("")}</select>
             <label class="sr-only" for="purPay">${esc(t("pur.payFilter"))}</label>
             <select id="purPay">${PAY_FILTERS.map((v) => option(v, t(v === "all" ? "pur.filter.allPayments" : v === "overdue" ? "pur.filter.overdue" : "pur.pay." + v), f.pay === v)).join("")}</select>
             <label class="sr-only" for="purSupplier">${esc(t("pur.supplierFilter"))}</label>
             <select id="purSupplier">${option("", t("pur.filter.allSuppliers"), !f.supplierId)}${suppliers.map((s) => option(s.id, s.name, s.id === f.supplierId)).join("")}</select>
+            <label class="sr-only" for="purFrom">${esc(t("pur.filter.from"))}</label>
+            <input type="date" id="purFrom" value="${esc(f.from)}" title="${esc(t("pur.filter.from"))}">
+            <label class="sr-only" for="purTo">${esc(t("pur.filter.to"))}</label>
+            <input type="date" id="purTo" value="${esc(f.to)}" title="${esc(t("pur.filter.to"))}">
           </div>
         </div>
-        <div class="table-wrap"><table class="table">${purchaseTableHead(true)}<tbody id="purRows">${purchaseListRows()}</tbody></table></div>
+        <div class="table-wrap stock-table-wrap"><table class="table stock-table">${purchaseTableHead(true, true)}<tbody id="purRows">${purchaseListRows()}</tbody></table></div>
       </div>`;
   }
 
@@ -826,14 +1032,14 @@
         <tbody>${byS.length ? byS.map((g) => `<tr><td>${g.supplier ? `<button type="button" class="link" data-act="sup-open" data-id="${esc(g.supplier.id)}">${esc(g.supplier.name)}</button>` : ""}</td>
           <td class="num">${num(g.count)}</td><td class="num">${esc(money(g.total))}</td><td class="num">${esc(money(g.paid))}</td><td class="num">${esc(money(g.outstanding))}</td><td>${esc(fmtDay(g.last))}</td></tr>`).join("") : none(6)}</tbody></table></div></div>
       <div class="panel"><h2>${esc(t("rep.purchases"))}</h2><div class="table-wrap"><table class="table">${purchaseTableHead(true)}
-        <tbody>${period.rows.length ? purchaseRowsHtml(period.rows.map((x) => x.purchase), { withSupplier: true }) : none(11)}</tbody></table></div></div>
+        <tbody>${period.rows.length ? purchaseRowsHtml(period.rows.map((x) => x.purchase), { withSupplier: true }) : none(10)}</tbody></table></div></div>
       <div class="panel"><h2>${esc(t("rep.balances"))}</h2>
         <p class="muted small">${esc(t("rep.balancesNote"))}</p>
         <div class="table-wrap"><table class="table">
-        ${head([{ label: t("pur.col.supplier") }, { label: t("pur.col.outstanding"), num: true }, { label: t("sup.stat.overdueAmount"), num: true }])}
+        ${head([{ label: t("pur.col.supplier") }, { label: t("fin.outstandingInvoices"), num: true }, { label: t("sup.stat.overdueAmount"), num: true }, { label: t("fin.netBalance"), num: true }])}
         <tbody>${owed.bySupplier.length ? owed.bySupplier.map((x) => `<tr><td><button type="button" class="link" data-act="sup-open" data-id="${esc(x.supplier.id)}">${esc(x.supplier.name)}</button></td>
-          <td class="num owed">${esc(money(x.summary.outstanding))}</td><td class="num">${esc(money(x.summary.overdueTotal))}</td></tr>`).join("")
-          + `<tr class="total-row"><td>${esc(t("col.total"))}</td><td class="num">${esc(money(owed.total))}</td><td class="num">${esc(money(owed.overdueTotal))}</td></tr>` : none(3)}</tbody></table></div></div>
+          <td class="num owed">${esc(money(x.summary.outstanding))}</td><td class="num">${esc(money(x.summary.overdueTotal))}</td><td class="num ${balanceClass(x.summary.net)}">${esc(money(x.summary.net))}</td></tr>`).join("")
+          + `<tr class="total-row"><td>${esc(t("col.total"))}</td><td class="num">${esc(money(owed.total))}</td><td class="num">${esc(money(owed.overdueTotal))}</td><td></td></tr>` : none(4)}</tbody></table></div></div>
       <div class="panel"><h2>${esc(t("rep.overdue"))}</h2><div class="table-wrap"><table class="table">
         ${head([{ label: t("pur.col.reference") }, { label: t("pur.col.supplier") }, { label: t("pur.col.invoiceNo") }, { label: t("pur.col.due") }, { label: t("rep.daysLate"), num: true }, { label: t("pur.col.outstanding"), num: true }])}
         <tbody>${owed.overdue.length ? owed.overdue.map((x) => `<tr><td><button type="button" class="link" data-act="pur-open" data-id="${esc(x.purchase.id)}">${esc(x.purchase.reference)}</button></td>
@@ -880,7 +1086,7 @@
       id: Validation.uid(), supplierId: supplierId || "", supplierInvoiceNumber: "", noSupplierInvoice: false,
       invoiceDate: today(), dueDate: "", reference: "", notes: "", lines: [blankLine()],
       discountType: "amount", discountValue: "", taxType: "none", taxValue: "", taxMode: "added", delivery: "", otherCosts: "",
-      initialPayment: { amount: "", date: today(), reference: "" }, receiveNow: true, receiptDate: today(),
+      initialPayment: { amount: "", date: today(), reference: "" }, advanceApply: "", receiveNow: true, receiptDate: today(),
     };
   }
 
@@ -896,6 +1102,7 @@
       discountType: p.discountType, discountValue: p.discountValue ? String(p.discountValue) : "", taxType: p.taxType, taxValue: p.taxValue ? String(p.taxValue) : "",
       taxMode: p.taxMode, delivery: p.delivery ? String(p.delivery) : "", otherCosts: p.otherCosts ? String(p.otherCosts) : "",
       initialPayment: { amount: ip.amount ? String(ip.amount) : "", date: ip.date || today(), reference: ip.reference || "" },
+      advanceApply: p.advanceApply ? String(p.advanceApply) : "",
       receiveNow: true, receiptDate: today(),
     };
   }
@@ -1292,6 +1499,13 @@
             ${field("pf-payDate", esc(t("spay.date")), `<input type="date" id="pf-payDate" value="${esc(ip.date)}" max="${today()}">`)}
             ${field("pf-payRef", esc(t("spay.reference")), `<input type="text" id="pf-payRef" value="${esc(ip.reference)}" autocomplete="off">`)}
           </div>
+          <div id="pf-advRow" hidden>
+            <div class="grid-3">
+              ${field("pf-advance", esc(t("adv.useLabel")), `<input type="number" id="pf-advance" min="0" step="any" value="${esc(v.advanceApply || "")}" placeholder="0">`)}
+              <div class="field"><span class="label-spacer">&nbsp;</span><button type="button" class="btn" id="pf-advMax" data-act="pur-adv-max"></button></div>
+            </div>
+            <p class="muted small" id="pf-advHint"></p>
+          </div>
         </fieldset>
         <fieldset><legend>${esc(t("pur.deliveryNow"))}</legend>
           <label class="check"><input type="checkbox" id="pf-receive"${v.receiveNow ? " checked" : ""}> ${esc(t("pur.receiveNow"))}</label>
@@ -1336,6 +1550,7 @@
       discountType: $("pf-discountType").value, discountValue: $("pf-discount").value, taxType: $("pf-taxType").value, taxValue: $("pf-tax").value,
       taxMode: $("pf-taxMode").value, delivery: $("pf-delivery").value, otherCosts: $("pf-other").value,
       initialPayment: { amount: $("pf-payAmount").value, date: $("pf-payDate").value, reference: $("pf-payRef").value },
+      advanceApply: $("pf-advance") ? $("pf-advance").value : "",
       receiveNow: $("pf-receive").checked, receiptDate: $("pf-receiptDate").value,
     };
   }
@@ -1389,6 +1604,14 @@
       taxMode: v.taxMode, delivery: loose(v.delivery), otherCosts: loose(v.otherCosts),
     });
     const paidNow = Math.min(loose(v.initialPayment.amount), totals.total);
+    // The supplier's unapplied deposits, offered only when there are some (a normal purchase gets no extra step).
+    const pool = supplier ? P.advanceTotals(supplier.id, S().supplierDeposits, S().advanceAllocations).unapplied : 0;
+    const advMax = Math.max(0, Math.min(pool, round(totals.total - paidNow)));
+    const advance = Math.min(loose(v.advanceApply), advMax);
+    $("pf-advRow").hidden = !(pool > 0 || loose(v.advanceApply) > 0);
+    $("pf-advHint").textContent = t("adv.available", { amount: money(Math.max(0, pool)) });
+    $("pf-advMax").textContent = t("adv.useMax", { amount: money(advMax) });
+    $("pf-advMax").disabled = advMax <= 0;
     const row = (label, value, cls) => `<div${cls ? ` class="${cls}"` : ""}><span>${esc(label)}</span><span>${esc(value)}</span></div>`;
     $("pfTotals").innerHTML = row(t("inv.subtotal"), money(totals.subtotal))
       + (totals.discount ? row(t("inv.discount"), "− " + money(totals.discount)) : "")
@@ -1396,16 +1619,20 @@
       + (totals.delivery ? row(t("pur.f.delivery"), money(totals.delivery)) : "")
       + (totals.otherCosts ? row(t("pur.f.otherCosts"), money(totals.otherCosts)) : "")
       + row(t("inv.grandTotal"), money(totals.total), "grand")
-      + (paidNow > 0 ? row(t("pur.paidNow"), money(paidNow)) + row(t("pur.owedAfter"), money(totals.total - paidNow), "due") : "");
+      + (advance > 0 ? row(t("adv.appliedRow"), money(advance)) : "")
+      + (paidNow > 0 ? row(t("pur.paidNow"), money(paidNow)) : "")
+      + (paidNow > 0 || advance > 0 ? row(t("pur.owedAfter"), money(Math.max(0, totals.total - paidNow - advance)), "due") + (advance > 0 ? row(t("adv.remainingAfter"), money(Math.max(0, pool - advance))) : "") : "");
     $("pf-supplierInfo").textContent = supplier ? supplierInfoText(supplier) : "";
     // The due date follows the supplier's payment terms until it is typed by hand.
     if (!ui.pur.form.dueTouched && supplier && P.isDay(v.invoiceDate)) $("pf-due").value = P.addDays(v.invoiceDate, supplier.paymentTermsDays || 0);
   }
 
   function supplierInfoText(supplier) {
-    const sum = P.supplierSummary(supplier, S().purchases, S().supplierPayments, today());
+    const sum = P.supplierSummary(supplier, S().purchases, S().supplierPayments, today(), S().supplierDeposits, S().advanceAllocations);
     const terms = supplier.paymentTermsDays === 0 ? t("sup.terms.immediate") : tn("sup.terms.days", supplier.paymentTermsDays);
-    return t("pur.supplierInfo", { terms, owed: money(sum.outstanding) }) + (supplier.creditLimit != null ? " · " + t("pur.supplierLimit", { limit: money(supplier.creditLimit) }) : "");
+    return t("pur.supplierInfo", { terms, owed: money(sum.owed) })
+      + (sum.unapplied > 0 ? " · " + t("adv.supplierInfo", { amount: money(sum.unapplied) }) : "")
+      + (supplier.creditLimit != null ? " · " + t("pur.supplierLimit", { limit: money(supplier.creditLimit) }) : "");
   }
 
   function openPurchaseForm(values, attachments, editing) {
@@ -1433,7 +1660,7 @@
   function creditWarning(supplierId, total, paidNow) {
     const supplier = supplierById(supplierId);
     if (!supplier || supplier.creditLimit == null) return "";
-    const sum = P.supplierSummary(supplier, S().purchases, S().supplierPayments, today());
+    const sum = P.supplierSummary(supplier, S().purchases, S().supplierPayments, today(), S().supplierDeposits, S().advanceAllocations);
     const after = sum.outstanding + total - paidNow;
     return after > supplier.creditLimit + 0.01 ? t("pur.creditWarning", { name: supplier.name, after: money(after), limit: money(supplier.creditLimit) }) : "";
   }
@@ -1457,7 +1684,7 @@
   // Maps an error field of purchases.js to the box that shows it.
   function formFieldId(field) {
     const map = {
-      supplierId: "pf-supplier", supplierInvoiceNumber: "pf-invoiceNo", invoiceDate: "pf-date", dueDate: "pf-due", reference: "pf-reference", notes: "pf-notes",
+      advanceApply: "pf-advance", supplierId: "pf-supplier", supplierInvoiceNumber: "pf-invoiceNo", invoiceDate: "pf-date", dueDate: "pf-due", reference: "pf-reference", notes: "pf-notes",
       discountValue: "pf-discount", taxValue: "pf-tax", delivery: "pf-delivery", otherCosts: "pf-other",
       "initialPayment.amount": "pf-payAmount", "initialPayment.date": "pf-payDate", lines: "pf-lines-error", attachments: "pf-att-error",
     };
@@ -1524,7 +1751,7 @@
   }
 
   function logLabel(entry) {
-    const label = t("pur.log." + entry.event);
+    const label = t("pur.log." + entry.event, { amount: entry.amount !== undefined ? money(entry.amount) : "" });
     return entry.note ? `${label}: ${entry.note}` : label;
   }
 
@@ -1578,13 +1805,37 @@
           <button type="button" class="btn small danger" data-act="pur-panel" data-panel="voidPay:${esc(x.id)}">${esc(t("spay.void"))}</button></div>` : ""}</td></tr>`;
     }).join("");
     const payForm = open === "pay" ? `<div class="subpanel">${paymentFormHtml("pur-pay", null, sum)}</div>` : "";
+    const pool = P.advanceTotals(p.supplierId, S().supplierDeposits, S().advanceAllocations).unapplied;
+    const allocs = S().advanceAllocations.filter((a) => a.purchaseId === p.id).sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
+    const allocRows = allocs.map((a) => {
+      if (open === "releaseAdv:" + a.id) {
+        return `<tr><td colspan="4"><form data-form="pur-releaseadv" novalidate>
+          <p>${esc(t("adv.releaseAsk", { amount: money(a.amount) }))}</p>
+          ${field("da-reason", esc(t("spay.voidReason")), `<input type="text" id="da-reason" autocomplete="off">`)}
+          <p class="error" id="da-error" role="alert"></p>
+          <div class="actions left"><button type="submit" class="btn danger">${esc(t("adv.releaseBtn"))}</button><button type="button" class="btn" data-act="pur-close-panel">${esc(t("common.cancel"))}</button></div></form></td></tr>`;
+      }
+      const from = S().supplierDeposits.find((x) => x.id === a.depositId);
+      return `<tr${a.status === "reversed" ? ' class="voided"' : ""}><td>${esc(fmtDay(a.date))}</td><td class="num">${esc(money(a.amount))}</td>
+        <td>${esc(from ? t("dep.fromDeposit", { date: fmtDay(from.date), amount: money(from.amount) }) : "")}${a.status === "reversed" ? `<div class="small">${esc(t("spay.voidedBecause", { reason: a.reverseReason }))}</div>` : ""}</td>
+        <td class="num">${a.status === "reversed" ? badge("st-cancelled", t("adv.reversed")) : p.status === "confirmed" ? `<button type="button" class="btn small danger" data-act="pur-panel" data-panel="releaseAdv:${esc(a.id)}">${esc(t("adv.release"))}</button>` : ""}</td></tr>`;
+    }).join("");
+    const advForm = open === "applyAdv" ? `<div class="subpanel"><form data-form="pur-applyadv" novalidate>
+        <p class="muted small">${esc(t("adv.available", { amount: money(Math.max(0, pool)) }))}</p>
+        <div class="grid-3">${field("da-amount", esc(t("adv.useLabel")), `<input type="number" id="da-amount" min="0" step="any" placeholder="${esc(t("spay.max", { max: num(Math.min(pool, sum.outstanding)) }))}">`)}</div>
+        <p class="error" id="da-error" role="alert"></p>
+        <div class="actions left"><button type="submit" class="btn primary">${esc(t("adv.applyBtn"))}</button>
+          <button type="button" class="btn" data-act="pur-adv-fill" data-target="da-amount" data-max="${Math.max(0, Math.min(pool, sum.outstanding))}">${esc(t("adv.useMax", { amount: money(Math.max(0, Math.min(pool, sum.outstanding))) }))}</button>
+          <button type="button" class="btn" data-act="pur-close-panel">${esc(t("common.cancel"))}</button></div></form></div>` : "";
     return `<div class="panel"><div class="panel-head"><h2>${esc(t("pur.payments"))}</h2>
-        ${p.status === "confirmed" && sum.outstanding > 0 && open !== "pay" ? `<button type="button" class="btn primary" data-act="pur-panel" data-panel="pay">${esc(t("spay.recordBtn"))}</button>` : ""}</div>
-      <div class="stat-strip small">${stat(t("col.total"), esc(money(p.total)))}${stat(t("col.paid"), esc(money(sum.paid)))}${stat(t("pur.col.outstanding"), esc(money(sum.outstanding)), sum.outstanding > 0 ? "warn" : "")}
+        <div class="actions">${p.status === "confirmed" && sum.outstanding > 0 && pool > 0 && open !== "applyAdv" ? `<button type="button" class="btn" data-act="pur-panel" data-panel="applyAdv">${esc(t("adv.apply"))}</button>` : ""}
+        ${p.status === "confirmed" && sum.outstanding > 0 && open !== "pay" ? `<button type="button" class="btn primary" data-act="pur-panel" data-panel="pay">${esc(t("spay.recordBtn"))}</button>` : ""}</div></div>
+      <div class="stat-strip small">${stat(t("col.total"), esc(money(p.total)))}${stat(t("col.paid"), esc(money(sum.paid)) + (sum.advanceApplied > 0 ? `<span class="state">${esc(t("adv.ofWhich", { amount: money(sum.advanceApplied) }))}</span>` : ""))}${stat(t("pur.col.outstanding"), esc(money(sum.outstanding)), sum.outstanding > 0 ? "warn" : "")}
         ${stat(t("col.status"), sum.paymentStatus ? esc(t("pur.pay." + sum.paymentStatus)) : "—")}${stat(t("pur.col.due"), esc(fmtDay(p.dueDate) || "—") + (sum.overdue ? " " + badge("overdue", tn("pur.overdueDays", sum.daysOverdue)) : ""))}</div>
-      ${payForm}
+      ${payForm}${advForm}
       <div class="table-wrap"><table class="table"><thead><tr><th>${esc(t("spay.date"))}</th><th class="num">${esc(t("spay.amount"))}</th><th>${esc(t("spay.reference"))}</th><th></th><th></th></tr></thead>
-      <tbody>${rows || `<tr class="empty-row"><td colspan="5">${esc(t("spay.none"))}</td></tr>`}</tbody></table></div></div>`;
+      <tbody>${rows || (allocRows ? "" : `<tr class="empty-row"><td colspan="5">${esc(t("spay.none"))}</td></tr>`)}</tbody></table></div>
+      ${allocRows ? `<h3>${esc(t("adv.history"))}</h3><div class="table-wrap"><table class="table"><thead><tr><th>${esc(t("spay.date"))}</th><th class="num">${esc(t("spay.amount"))}</th><th>${esc(t("adv.from"))}</th><th></th></tr></thead><tbody>${allocRows}</tbody></table></div>` : ""}</div>`;
   }
 
   function paymentFormHtml(formName, payment, sum) {
@@ -1649,6 +1900,18 @@
       <p class="muted small">${esc(t("pur.att.note"))}</p></div>`;
   }
 
+  // The supplier's unapplied deposits, offered when confirming a draft: an optional amount, never all of it by force.
+  function advanceChoiceHtml(p, ip) {
+    const pool = P.advanceTotals(p.supplierId, S().supplierDeposits, S().advanceAllocations).unapplied;
+    if (!(pool > 0)) return "";
+    const max = Math.max(0, Math.min(pool, round(p.total - (ip && ip.amount ? Number(ip.amount) : 0))));
+    return `<div class="grid-3">
+        ${field("dc-advance", esc(t("adv.useLabel")), `<input type="number" id="dc-advance" min="0" step="any" value="${p.advanceApply ? esc(p.advanceApply) : ""}" placeholder="0">`)}
+        <div class="field"><span class="label-spacer">&nbsp;</span><button type="button" class="btn" data-act="pur-adv-fill" data-target="dc-advance" data-max="${max}">${esc(t("adv.useMax", { amount: money(max) }))}</button></div>
+      </div>
+      <p class="muted small">${esc(t("adv.available", { amount: money(pool) }))}</p>`;
+  }
+
   function panelHtml(p, sum) {
     const open = ui.pur.open;
     const wrap = (title, inner) => `<div class="panel action-panel"><h2>${esc(title)}</h2>${inner}</div>`;
@@ -1664,13 +1927,15 @@
           ${field("dc-pdate", esc(t("spay.date")), `<input type="date" id="dc-pdate" value="${esc(ip.date || today())}" max="${today()}">`)}
           ${field("dc-pref", esc(t("spay.reference")), `<input type="text" id="dc-pref" value="${esc(ip.reference || "")}" autocomplete="off">`)}
         </div>
+        ${advanceChoiceHtml(p, ip)}
         <p class="error" id="dc-error" role="alert"></p>
         <div class="actions left"><button type="submit" class="btn primary">${esc(t("pur.confirm"))}</button>${close}</div></form>`);
     }
     if (open === "cancel" && p.status !== "cancelled") {
       const blocked = sum.payments.length > 0;
       const applied = (p.receipts || []).some((r) => r.status === "applied");
-      return wrap(t("pur.cancelTitle"), `<form data-form="pur-cancel" novalidate>
+      const advance = sum.advanceApplied > 0 ? `<p class="notice">${esc(t("adv.cancelNote", { amount: money(sum.advanceApplied) }))}</p>` : "";
+      return wrap(t("pur.cancelTitle"), `<form data-form="pur-cancel" novalidate>${advance}
         ${blocked ? `<p class="error">${esc(t("pur.cancelHasPayments", { n: sum.payments.length }))}</p>` : `<p class="notice">${esc(t(p.status === "draft" ? "pur.cancelDraftNote" : applied ? "pur.cancelStockNote" : "pur.cancelNote"))}</p>`}
         ${field("dk-reason", esc(t("pur.reason")), `<input type="text" id="dk-reason" autocomplete="off">`)}
         <p class="error" id="dk-error" role="alert"></p>
@@ -1766,16 +2031,16 @@
       if (f.form.ready && f.formLang === language && $("purchaseForm")) return;   // keep what is typed
       let values = f.form.values;
       if (f.form.ready && $("pfLines")) values = readPurchaseForm();               // the language changed: keep the values
-      root.innerHTML = purchaseFormHtml(values, f.form, f.form.editing);
+      root.innerHTML = pageHeader(t("nav.purchases")) + purchaseFormHtml(values, f.form, f.form.editing);
       f.form.ready = true;
       f.formLang = language;
       updatePurchasePreview();
       return;
     }
-    if (f.screen === "detail") { root.innerHTML = purchaseDetailHtml(purchaseById(f.detailId)); return; }
+    if (f.screen === "detail") { root.innerHTML = pageHeader(t("nav.purchases")) + purchaseDetailHtml(purchaseById(f.detailId)); return; }
     const tab = (key, label) => `<button type="button" class="tab" role="tab" aria-selected="${f.tab === key}" data-act="pur-tab" data-tab="${key}">${esc(label)}</button>`;
-    root.innerHTML = `<div class="tabs-row"><div class="tabs" role="tablist">${tab("list", t("pur.tab.list"))}${tab("reports", t("pur.tab.reports"))}</div>
-      <button type="button" class="btn primary" data-act="pur-new" data-id="">${esc(t("pur.new"))}</button></div>
+    root.innerHTML = `${pageHeader(t("nav.purchases"), `<button type="button" class="btn primary" data-act="pur-new" data-id="">${esc(t("pur.new"))}</button>`)}
+      <div class="tabs" role="tablist">${tab("list", t("pur.tab.list"))}${tab("reports", t("pur.tab.reports"))}</div>
       ${f.tab === "reports" ? reportsHtml() : purchaseListHtml()}`;
   }
 
@@ -1794,16 +2059,27 @@
       const p = purchaseById(id);
       const ip = { amount: formValue("dc-pamount"), date: formValue("dc-pdate"), reference: formValue("dc-pref") };
       const receive = $("dc-receive").checked;
-      const preview = P.previewPurchase(S(), { ...P.purchaseToInput(p), initialPayment: ip }, "confirm");
+      const advanceApply = $("dc-advance") ? formValue("dc-advance") : undefined;
+      const preview = P.previewPurchase(S(), { ...P.purchaseToInput(p), initialPayment: ip, ...(advanceApply !== undefined ? { advanceApply } : {}) }, "confirm");
       if (!preview.errors.length) {
         const warn = creditWarning(p.supplierId, p.total, preview.purchase.initialPayment ? preview.purchase.initialPayment.amount : 0);
         const supplier = supplierById(p.supplierId);
         if (!confirm(t("pur.confirmAsk", { supplier: supplier ? supplier.name : "", total: money(p.total), stock: t(receive ? "pur.confirmStockNow" : "pur.confirmStockLater") }) + (warn ? "\n\n" + warn : ""))) return;
       }
-      return act((d) => P.confirmPurchase(d, id, { receive: receive ? undefined : {}, receiptDate: formValue("dc-rdate"), initialPayment: ip }), {
+      return act((d) => P.confirmPurchase(d, id, { receive: receive ? undefined : {}, receiptDate: formValue("dc-rdate"), initialPayment: ip, advanceApply }), {
         errorId: "dc-error",
         done: (r) => { h.notify(t(r.already ? "pur.alreadyConfirmed" : "pur.confirmed", { ref: p.reference })); ui.pur.open = ""; renderPurchases(); },
       });
+    },
+    "pur-applyadv"() {
+      const id = ui.pur.detailId;
+      const amount = formValue("da-amount");
+      return act((d) => P.applyAdvance(d, id, amount), { errorId: "da-error", done: () => { h.notify(t("adv.applied")); ui.pur.open = ""; renderPurchases(); } });
+    },
+    "pur-releaseadv"() {
+      const allocId = ui.pur.open.slice("releaseAdv:".length);
+      const reason = formValue("da-reason");
+      return act((d) => P.reverseAllocation(d, allocId, reason), { errorId: "da-error", done: () => { h.notify(t("adv.released")); ui.pur.open = ""; renderPurchases(); } });
     },
     "pur-pay"() {
       const id = ui.pur.detailId;
@@ -1899,7 +2175,11 @@
       else { ui.sup.sortKey = key; ui.sup.sortDir = key === "name" ? 1 : -1; }
       renderSuppliers();
     },
-    "sup-tab"(el) { ui.sup.tab = el.dataset.tab; renderSuppliers(); },
+    "sup-tab"(el) { ui.sup.tab = el.dataset.tab; ui.sup.editDepositId = ""; ui.sup.voidDepositId = ""; renderSuppliers(); },
+    "sup-deposit"(el) { openSupplier(el.dataset.id, "deposits"); },
+    "sup-dep-edit"(el) { ui.sup.editDepositId = el.dataset.id; ui.sup.voidDepositId = ""; renderSuppliers(); },
+    "sup-dep-void"(el) { ui.sup.voidDepositId = el.dataset.id; ui.sup.editDepositId = ""; renderSuppliers(); },
+    "sup-dep-cancel"() { ui.sup.editDepositId = ""; ui.sup.voidDepositId = ""; renderSuppliers(); },
     "sup-save-anyway"() { return submitSupplier(true); },
     "sup-archive"(el) { return archiveSupplier(el.dataset.id); },
     "sup-delete"(el) { return removeSupplier(el.dataset.id); },
@@ -1912,6 +2192,12 @@
     "sup-print"(el) { const sp = supplierById(el.dataset.id); if (sp) printHtml(supplierStatementHtml(sp), sp.name); },
     // purchases
     "pur-new"(el) { newPurchase(el.dataset.id || ""); },
+    "pur-sort"(el) {
+      const key = el.dataset.key;
+      ui.pur.sortDir = ui.pur.sortKey === key ? -ui.pur.sortDir : (key === "date" || key === "total" || key === "paid" || key === "outstanding" ? -1 : 1);
+      ui.pur.sortKey = key;
+      renderPurchases();
+    },
     "pur-open"(el) { openPurchase(el.dataset.id); },
     "pur-back"() { ui.pur.screen = "list"; ui.pur.form = null; ui.pur.open = ""; renderPurchases(); },
     "pur-tab"(el) {
@@ -1922,6 +2208,17 @@
     "pur-edit"() { editDraft(ui.pur.detailId); },
     "pur-panel"(el) { setPanel(el.dataset.panel); },
     "pur-close-panel"() { ui.pur.open = ""; renderPurchases(); },
+    "pur-adv-max"() {
+      const v = readPurchaseForm();
+      const supplier = supplierById(v.supplierId);
+      const read = P.previewPurchase(S(), v, "draft");
+      const pool = supplier ? P.advanceTotals(supplier.id, S().supplierDeposits, S().advanceAllocations).unapplied : 0;
+      const total = read.purchase ? read.purchase.total : 0;
+      const paid = read.purchase && read.purchase.initialPayment ? read.purchase.initialPayment.amount : 0;
+      $("pf-advance").value = Math.max(0, Math.min(pool, round(total - paid)));
+      updatePurchasePreview();
+    },
+    "pur-adv-fill"(el) { const box = $(el.dataset.target); if (box) box.value = el.dataset.max; },
     "pur-pay-full"() {
       const p = purchaseById(ui.pur.detailId);
       if (p) $("dp-amount").value = summaryOf(p).outstanding;
@@ -1992,6 +2289,8 @@
   const forms = {
     "sup-save"() { return submitSupplier(false); },
     "sup-pay"() { return submitSupplierPayment(); },
+    "sup-deposit"() { return submitDeposit(); },
+    "sup-dep-void"() { return submitDepositVoid(); },
     "pur-save"() { return submitPurchase(false); },
     ...detailForms,
   };
@@ -2055,7 +2354,7 @@
       return;
     }
     if (id === "supSearch") { ui.sup.q = el.value; refreshSupplierRows(); return; }
-    if (id === "purSearch") { ui.pur.q = el.value; $("purRows").innerHTML = purchaseListRows(); return; }
+    if (id === "purSearch") { ui.pur.q = el.value; refreshPurchaseList(); return; }
     if (el.closest && el.closest("#purchaseForm")) {
       ProductForm.route(e);   // typing in a new product's form (its price rows, its stock unit)
       if (id === "pf-due") ui.pur.form.dueTouched = true;
@@ -2073,9 +2372,11 @@
     if (el.classList && el.classList.contains("combo-input")) return;   // the product search only acts while it is typed in
     if (id === "supStatus") { ui.sup.status = el.value; refreshSupplierRows(); }
     else if (id === "sf-terms") { $("sf-termsCustom").disabled = el.value !== "custom"; if (el.value !== "custom") $("sf-termsCustom").value = ""; }
-    else if (id === "purStatus") { ui.pur.status = el.value; $("purRows").innerHTML = purchaseListRows(); }
-    else if (id === "purPay") { ui.pur.pay = el.value; $("purRows").innerHTML = purchaseListRows(); }
-    else if (id === "purSupplier") { ui.pur.supplierId = el.value; $("purRows").innerHTML = purchaseListRows(); }
+    else if (id === "purStatus") { ui.pur.status = el.value; refreshPurchaseList(); }
+    else if (id === "purPay") { ui.pur.pay = el.value; refreshPurchaseList(); }
+    else if (id === "purSupplier") { ui.pur.supplierId = el.value; refreshPurchaseList(); }
+    else if (id === "purFrom") { ui.pur.from = el.value; refreshPurchaseList(); }
+    else if (id === "purTo") { ui.pur.to = el.value; refreshPurchaseList(); }
     else if (id === "repFrom" || id === "repTo") { ui.pur.report[id === "repFrom" ? "from" : "to"] = el.value; ui.pur.report.touched = true; $("repBody").innerHTML = reportBodyHtml(); }
     else if (id === "repProduct") { ui.pur.report.productId = el.value; $("repBody").innerHTML = reportBodyHtml(); }
     else if (id === "pfFile") { addFormAttachments([...el.files]).then(() => { el.value = ""; }); }
@@ -2279,5 +2580,6 @@
     // for tests
     supplierCsv, supplierRows, filteredPurchases, state: ui,
     supplierFormHtml, readSupplierForm, addContactRow, removeContactRow, contactRowsHtml, supplierTableRows, supplierProfileHtml,
+    forms, actions, purchaseListHtml, purchaseSummaryStrip, supplierSummaryStrip,
   };
 })();

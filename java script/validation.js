@@ -46,6 +46,9 @@
   const MONEY_TOLERANCE = 0.01;
   const DEFAULT_BACKUP_DAYS = 7;
   const SUPPLIER_LISTS = ["suppliers", "purchases", "supplierPayments", "attachments"];   // the supplier side of a backup
+  // Optional lists of the supplier side (like debtTransfers): written to a backup only when there is something in them, so
+  // a backup of data without deposits keeps its exact shape, and an older backup that has none restores as "no deposits".
+  const OPTIONAL_SUPPLIER_LISTS = ["supplierDeposits", "advanceAllocations"];
 
   const DEFAULT_SETTINGS = {
     businessName: "My Store",
@@ -1151,6 +1154,12 @@
     const purchases = collect(supplierSide.purchases, "purchase", t("problem.label.purchase"), none, P.purchaseProblem, P.normalizePurchase);
     const supplierPayments = collect(supplierSide.supplierPayments, "supplierPayment", t("problem.label.supplierPayment"), none, P.paymentProblem, P.normalizePayment);
     const attachments = collect(supplierSide.attachments, "attachment", t("problem.label.attachment"), none, P.attachmentProblem, (a) => a);
+    // Deposits and the allocations of them to purchases. Optional: data saved before they existed has none.
+    for (const key of OPTIONAL_SUPPLIER_LISTS) {
+      if (raw[key] !== undefined && !Array.isArray(raw[key])) return { error: t("data.badList", { list: key }) };
+    }
+    const supplierDeposits = collect(raw.supplierDeposits || [], "supplierDeposit", t("problem.label.supplierDeposit"), none, P.depositProblem, P.normalizeDeposit);
+    const advanceAllocations = collect(raw.advanceAllocations || [], "advanceAllocation", t("problem.label.advanceAllocation"), none, P.allocationProblem, P.normalizeAllocation);
 
     if (lenient) {
       // Old data may repeat an id. The first entry is kept and the repeat is set aside, never merged.
@@ -1168,12 +1177,12 @@
       if (dupInvoice) return { error: t("data.dupInvoice", { id: dupInvoice }) };
       const dupNumber = firstDuplicate(invoices.map((i) => i.invoiceNumber));
       if (dupNumber) return { error: t("data.dupNumber", { number: dupNumber }) };
-      for (const [list, kind] of [[suppliers, "supplier"], [purchases, "purchase"], [supplierPayments, "supplier payment"], [attachments, "attachment"]]) {
+      for (const [list, kind] of [[suppliers, "supplier"], [purchases, "purchase"], [supplierPayments, "supplier payment"], [attachments, "attachment"], [supplierDeposits, "supplier deposit"], [advanceAllocations, "advance allocation"]]) {
         const dup = firstDuplicate(list.map((r) => r.id));
         if (dup) return { error: t("data.dupRecord", { kind, id: dup }) };
       }
       // Every link must point at something that is in the file, and no number may be used twice.
-      problems.push(...P.linkProblems({ suppliers, purchases, supplierPayments, attachments }));
+      problems.push(...P.linkProblems({ suppliers, purchases, supplierPayments, attachments, supplierDeposits, advanceAllocations }));
     }
 
     // The debt-transfer ledger. Optional: data saved before debt could be carried forward has none. Whatever is
@@ -1216,6 +1225,9 @@
         purchases,
         supplierPayments,
         attachments,
+        // Only present when there are any, so data without deposits keeps its exact shape (the same as debtTransfers).
+        ...(supplierDeposits.length ? { supplierDeposits } : {}),
+        ...(advanceAllocations.length ? { advanceAllocations } : {}),
         // The purchase reference counter never goes backwards either.
         purchaseCounter: Math.max(Math.max(0, Math.floor(toNumber(raw.purchaseCounter))), P.highestReference(purchases)),
       },
@@ -1230,6 +1242,7 @@
       (data.suppliers && data.suppliers.length > 0) ||
       (data.purchases && data.purchases.length > 0) ||
       (data.supplierPayments && data.supplierPayments.length > 0) ||
+      (data.supplierDeposits && data.supplierDeposits.length > 0) ||
       toNumber(data.counter) > 0 ||
       toNumber(data.purchaseCounter) > 0 ||
       (!!data.settings && !sameValue(normalizeSettings(data.settings), DEFAULT_SETTINGS));
@@ -1266,6 +1279,9 @@
       products: data.products.length, invoices: data.invoices.length,
       suppliers: (data.suppliers || []).length, purchases: (data.purchases || []).length,
       supplierPayments: (data.supplierPayments || []).length, attachments: (data.attachments || []).length,
+      // Only listed when there are any, like the lists themselves: the counts of data without deposits keep their shape.
+      ...((data.supplierDeposits || []).length ? { supplierDeposits: data.supplierDeposits.length } : {}),
+      ...((data.advanceAllocations || []).length ? { advanceAllocations: data.advanceAllocations.length } : {}),
     };
   }
 
@@ -1297,6 +1313,8 @@
         purchases: snapshot.purchases || [],
         supplierPayments: snapshot.supplierPayments || [],
         attachments: snapshot.attachments || [],
+        ...((snapshot.supplierDeposits || []).length ? { supplierDeposits: snapshot.supplierDeposits } : {}),
+        ...((snapshot.advanceAllocations || []).length ? { advanceAllocations: snapshot.advanceAllocations } : {}),
         purchaseCounter: snapshot.purchaseCounter || 0,
       },
     };
@@ -1351,6 +1369,7 @@
         version: DATA_VERSION, products: raw.data.products, invoices: raw.data.invoices, settings: raw.data.settings, invoiceCounter: raw.data.invoiceCounter,
         suppliers: raw.data.suppliers, purchases: raw.data.purchases, supplierPayments: raw.data.supplierPayments, attachments: raw.data.attachments,
         purchaseCounter: raw.data.purchaseCounter, debtTransfers: raw.data.debtTransfers,
+        supplierDeposits: raw.data.supplierDeposits, advanceAllocations: raw.data.advanceAllocations,
       };
       format = "backup";
       exportedAt = isDate(raw.exportedAt) ? raw.exportedAt : "";
@@ -1370,7 +1389,7 @@
     if (counts) {
       const actual = countsOf(built.data);
       const wrong = counts.products !== actual.products || counts.invoices !== actual.invoices ||
-        ["suppliers", "purchases", "supplierPayments", "attachments"].some((key) => counts[key] !== undefined && counts[key] !== actual[key]);
+        ["suppliers", "purchases", "supplierPayments", "attachments", "supplierDeposits", "advanceAllocations"].some((key) => counts[key] !== undefined && counts[key] !== actual[key]);
       if (wrong) return { error: t("backup.countsMismatch") };
     }
     const warnings = [...built.warnings];

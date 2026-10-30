@@ -1,0 +1,51 @@
+/* Purchases and Suppliers pages. They use the same page header, toolbar, search box and table as Stock and Invoices
+   (css/stock.css), the same cards as the rest of the app (.stat in style.css) and the same tabs and badges. Only what is
+   specific to money owed to and prepaid to suppliers is here. No animation or transition is used. */
+
+/* The page's top spacing is the header's margin (as on Stock and Invoices). */
+.app[data-view="purchases"] main, .app[data-view="suppliers"] main { padding-top: 0; }
+
+/* Money states. Colour is never the only signal: every figure sits next to a word (Owed / Prepaid / Settled). */
+.stat.credit strong, .credit { color: #1b6e3c; }
+.stat .state { display: block; margin-top: 2px; font-size: 12px; font-weight: 400; color: var(--muted); }
+.badge.owes { color: #8a5a00; }
+.badge.prepaid { color: #1b6e3c; }
+.badge.square { color: var(--muted); }
+.badge.dep-deposit, .badge.dep-allocation { color: #1b6e3c; }
+.badge.dep-refund { color: #8a5a00; }
+.badge.dep-purchase, .badge.dep-payment { color: var(--muted); }
+
+/* Page header actions (Add supplier / New purchase) sit at the end of the header row, like Stock's Add button. */
+.page-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+
+/* The lists use Stock's toolbar. Selects and dates sit next to the search box and wrap on small screens. */
+.list-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.list-filters select, .list-filters input[type="date"] { height: 42px; }
+.stock-table td.num, .stock-table th.num { text-align: end; font-variant-numeric: tabular-nums; }
+.stock-table .name-cell { min-width: 170px; font-weight: 600; overflow-wrap: anywhere; }
+.stock-table .name-cell .muted { font-weight: 400; }
+.stock-table tr.voided td { color: var(--muted); }
+.stock-table tr.voided td.num { text-decoration: line-through; }
+.stock-table .row-actions .btn { padding: 5px 12px; font-size: 13px; }
+
+/* The one sentence under the figures that explains the sign of the balance. */
+.balance-note { margin: 0 0 14px; font-size: 13px; }
+.panel .stat-strip + .balance-note { margin-top: -6px; }
+.deposit-form .grid-4 { align-items: end; }
+
+@media (max-width: 700px) {
+  .page-actions { justify-content: flex-start; }
+  .list-filters { width: 100%; }
+  .list-filters select, .list-filters input[type="date"] { flex: 1 1 140px; }
+}
+.stock-table.sup-table .row-actions { flex-wrap: wrap; }
+
+/* Sortable column headings are buttons: they take the heading's own look (uppercase, small, bold), like Stock's headings. */
+.stock-table th .th-sort { display: inline-flex; align-items: center; gap: 6px; margin: -5px -8px; padding: 5px 8px; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; border-radius: 4px; }
+.stock-table th .th-sort:hover { color: var(--text); background: #e9edf2; }
+.stock-table th .th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.stock-table .phone-cell { white-space: nowrap; }
+
+/* Filters flow in one row (the app's selects and dates are full width by default). */
+.list-filters select, .list-filters input[type="date"] { width: auto; min-width: 150px; max-width: 100%; }
+.stock-table td:first-child .link { white-space: nowrap; }

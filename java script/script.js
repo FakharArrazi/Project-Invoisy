@@ -295,7 +295,9 @@ const state = {
   counter: 0,
   suppliers: [],          // who the shop buys from (purchases.js); purchases are never mixed with sales
   purchases: [],          // supplier invoices: drafts, confirmed purchases and cancelled ones
-  supplierPayments: [],   // money paid to suppliers, one record per payment
+  supplierPayments: [],   // money paid to suppliers for ONE purchase, one record per payment
+  supplierDeposits: [],   // money given to suppliers without naming an invoice (deposits / advances) and refunds back
+  advanceAllocations: [], // the part of a deposit applied to a purchase; the deposit itself is never changed
   purchaseCounter: 0,     // numbers the internal purchase references (PUR-000001), never goes backwards
   lastSaved: "",          // when the data in the database was last changed
   revision: 0,            // the database revision this page has loaded; every save has to start from it
@@ -326,6 +328,8 @@ function applyData(d) {
   state.suppliers = d.suppliers || [];
   state.purchases = d.purchases || [];
   state.supplierPayments = d.supplierPayments || [];
+  state.supplierDeposits = d.supplierDeposits || [];
+  state.advanceAllocations = d.advanceAllocations || [];
   state.purchaseCounter = d.purchaseCounter || 0;
   state.lastSaved = d.lastSaved || "";
   if (d.revision !== undefined) state.revision = d.revision;
@@ -337,6 +341,7 @@ function draftFromState() {
   const draft = structuredClone({
     products: state.products, invoices: state.invoices, debtTransfers: state.debtTransfers, settings: state.settings, counter: state.counter,
     suppliers: state.suppliers, purchases: state.purchases, supplierPayments: state.supplierPayments, purchaseCounter: state.purchaseCounter,
+    supplierDeposits: state.supplierDeposits, advanceAllocations: state.advanceAllocations,
   });
   // Scanned supplier invoices are not kept in memory. A change that adds or removes one lists it here, and
   // it is saved in the same transaction as the purchase it belongs to.
@@ -425,6 +430,7 @@ async function persistData(draft) {
     {
       products: state.products, invoices: state.invoices, debtTransfers: state.debtTransfers, settings: state.settings, counter: state.counter,
       suppliers: state.suppliers, purchases: state.purchases, supplierPayments: state.supplierPayments, purchaseCounter: state.purchaseCounter,
+      supplierDeposits: state.supplierDeposits, advanceAllocations: state.advanceAllocations,
     },
     draft
   );
@@ -729,6 +735,7 @@ function sameBackupData(a, b) {
     products: d.products, invoices: d.invoices, debtTransfers: d.debtTransfers || [], settings: d.settings, counter: d.counter,
     suppliers: d.suppliers || [], purchases: d.purchases || [], supplierPayments: d.supplierPayments || [],
     attachments: d.attachments || [], purchaseCounter: d.purchaseCounter || 0,
+    supplierDeposits: d.supplierDeposits || [], advanceAllocations: d.advanceAllocations || [],
   });
   return Validation.sameValue(pick(a), pick(b));
 }

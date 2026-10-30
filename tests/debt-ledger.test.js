@@ -57,7 +57,7 @@ test("migration: a version 2 database upgrades to the current version without ch
   const db = newDb({ indexedDB: factory, name: "old" });
   const info = await db.initDatabase();
   assert.equal(info.version, DB.DB_VERSION);
-  assert.equal(info.version, 4);
+  assert.equal(info.version, 5);
   const all = await db.loadAll();
   for (const field of ["id", "invoiceNumber", "date", "total", "subtotal", "discount", "tax"]) assert.deepEqual(plain(all.invoices[0][field]), plain(stored[field]), field);
   assert.deepEqual(plain(all.invoices[0].customer), plain(stored.customer));

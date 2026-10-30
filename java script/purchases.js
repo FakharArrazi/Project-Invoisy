@@ -18,6 +18,19 @@
      cancelled   a confirmed or draft purchase that was undone on purpose. Kept as history, counted nowhere.
      receipt     one delivery of goods. Stock goes up only when a receipt is applied, exactly once.
      payment     money paid to a supplier for ONE purchase. Never deleted: it can be corrected or voided.
+     deposit     money given to a supplier WITHOUT naming an invoice (an advance). It belongs to the supplier, it can exceed
+                 everything bought so far, and it never changes an invoice's paid status by itself. A "refund" is the same
+                 kind of record in the other direction: money the supplier handed back out of the unused advance.
+     allocation  the part of a deposit that was applied to ONE purchase. The deposit stays as it was; the allocation is a
+                 separate record that points at both, so money is never counted twice and every amount can be traced.
+
+   The supplier balance (one formula everywhere, see supplierSummary)
+     paid to supplier   = invoice payments + deposits - refunds        (an allocation is NOT a payment: it moves money
+                                                                         that was already counted when the deposit was made)
+     net balance        = total confirmed purchases - paid to supplier  (> 0 owed to the supplier, < 0 prepaid / credit)
+     open invoices      = what is still unsettled on invoices          (total - invoice payments - allocations)
+     unapplied deposits = deposits - refunds - allocations              (money with the supplier not yet used on an invoice)
+     These always agree:  net balance = open invoices - unapplied deposits.
 
    Money, quantities and stock use the same rules as the rest of Invoisy (calc.js).
    ========================================================================== */
@@ -42,6 +55,11 @@
   const MONEY_TOLERANCE = 0.01;
   const QTY_EPSILON = 1e-9;
   const MAX_TEXT = 2000;
+  const DEPOSIT_KINDS = ["deposit", "refund"];
+  const DEPOSIT_STATUSES = ["recorded", "voided"];
+  const ALLOCATION_STATUSES = ["applied", "reversed"];
+  const PAYMENT_METHODS = ["cash", "bank", "cheque", "other"];
+  const MAX_AMOUNT = 1e12;
 
   /* ---------- Small helpers ---------- */
 
@@ -107,6 +125,8 @@
       suppliers: d.suppliers || [],
       purchases: d.purchases || [],
       payments: d.supplierPayments || [],
+      deposits: d.supplierDeposits || [],
+      allocations: d.advanceAllocations || [],
       settings: d.settings || {},
       currency: ((d.settings && d.settings.currency) || "").trim(),
       now,
@@ -311,7 +331,8 @@
   }
 
   function supplierHasHistory(d, id) {
-    return (d.purchases || []).some((p) => p.supplierId === id) || (d.supplierPayments || []).some((p) => p.supplierId === id);
+    return (d.purchases || []).some((p) => p.supplierId === id) || (d.supplierPayments || []).some((p) => p.supplierId === id)
+      || (d.supplierDeposits || []).some((p) => p.supplierId === id) || (d.advanceAllocations || []).some((p) => p.supplierId === id);
   }
 
   // A supplier that never had a purchase or a payment may be deleted. Any other supplier is archived instead,
@@ -583,6 +604,21 @@
       }
     }
 
+    // The part of the supplier's unapplied deposits to use on this purchase. Empty means none (never "all of it").
+    // The deposit itself is not touched: confirming records an allocation that points at it.
+    let advanceApply = 0;
+    if (!isBlank(input.advanceApply)) {
+      const adv = readNumber(input.advanceApply);
+      if (adv.invalid || adv.value < 0) fail("advanceApply", t("spay.err.negative"));
+      else if (adv.value > 0) {
+        advanceApply = round2(adv.value);
+        const paidNow = initialPayment ? initialPayment.amount : 0;
+        const pool = supplier ? advanceTotals(supplier.id, ctx.deposits, ctx.allocations).unapplied : 0;
+        if (confirming && advanceApply > pool + MONEY_TOLERANCE) fail("advanceApply", t("adv.err.notEnough", { max: String(Math.max(0, pool)) }));
+        else if (confirming && round2(advanceApply + paidNow) > totals.total + MONEY_TOLERANCE) fail("advanceApply", t("adv.err.tooMuch", { max: String(Math.max(0, round2(totals.total - paidNow))) }));
+      }
+    }
+
     const notes = text(input.notes).trim();
     if (notes.length > MAX_TEXT) fail("notes", t("sup.err.tooLong"));
 
@@ -601,6 +637,7 @@
       lines, discountType, discountValue, taxType, taxValue, taxMode, delivery, otherCosts,
       subtotal: totals.subtotal, discount: totals.discount, tax: totals.tax, total: totals.total,
       initialPayment, receipts: [], attachments: attachments.map((a) => ({ ...a })), log: [],
+      ...(advanceApply > 0 ? { advanceApply } : {}),
     };
     return { purchase, errors };
   }
@@ -650,6 +687,7 @@
       delivery: num(raw.delivery), otherCosts: num(raw.otherCosts),
       subtotal: num(raw.subtotal), discount: num(raw.discount), tax: num(raw.tax), total: num(raw.total),
       initialPayment: isObj(raw.initialPayment) ? { ...raw.initialPayment } : null,
+      ...(raw.advanceApply !== undefined ? { advanceApply: num(raw.advanceApply) } : {}),
       receipts: Array.isArray(raw.receipts) ? raw.receipts.map((r) => ({ ...r, lines: Array.isArray(r.lines) ? r.lines.map((x) => ({ ...x })) : [] })) : [],
       attachments: Array.isArray(raw.attachments) ? raw.attachments.map((a) => ({ ...a })) : [],
       log: Array.isArray(raw.log) ? raw.log.map((e) => ({ ...e })) : [],
@@ -767,6 +805,7 @@
       const ip = p.initialPayment;
       if (!isObj(ip) || !isNum(ip.amount) || ip.amount <= 0 || !isDay(ip.date)) return t("problem.badPayment");
     }
+    if (p.advanceApply !== undefined && (!isNum(p.advanceApply) || p.advanceApply < 0 || (!draft && p.advanceApply !== 0))) return t("problem.badPayment");
     if (p.revision !== undefined && (!Number.isInteger(p.revision) || p.revision < 1)) return t("problem.badField", { field: "revision" });
     return "";
   }
@@ -843,12 +882,20 @@
   }
 
   const activePayments = (payments) => payments.filter((p) => p.status !== "voided");
+  const activeDeposits = (deposits) => (deposits || []).filter((x) => x.status !== "voided");
+  const activeAllocations = (allocations) => (allocations || []).filter((x) => x.status !== "reversed");
 
   // The state of one purchase, always worked out from what is stored (nothing here is saved):
-  //   Outstanding balance = purchase total - payments recorded (voided payments are not recorded payments).
-  function purchaseSummary(purchase, payments, today) {
+  //   Outstanding balance = purchase total - payments recorded - advance applied to it
+  //   (voided payments and reversed allocations are not counted). `paid` is everything settled on THIS invoice;
+  //   `paidCash` is only the payments made for it and `advanceApplied` only what came from the supplier's deposits.
+  //   A general deposit that was never applied to this purchase does not change any of these numbers.
+  function purchaseSummary(purchase, payments, today, allocations) {
     const mine = activePayments(payments || []).filter((p) => p.purchaseId === purchase.id);
-    const paid = round2(mine.reduce((sum, p) => sum + toNumber(p.amount), 0));
+    const used = activeAllocations(allocations).filter((a) => a.purchaseId === purchase.id);
+    const paidCash = round2(mine.reduce((sum, p) => sum + toNumber(p.amount), 0));
+    const advanceApplied = round2(used.reduce((sum, a) => sum + toNumber(a.amount), 0));
+    const paid = round2(paidCash + advanceApplied);
     const total = toNumber(purchase.total);
     const confirmed = purchase.status === "confirmed";
     const outstanding = confirmed ? Math.max(0, round2(total - paid)) : 0;
@@ -856,10 +903,10 @@
     const day = today || toDay(new Date());
     const overdue = confirmed && outstanding > 0 && isDay(purchase.dueDate) && purchase.dueDate < day;
     return {
-      paid, outstanding, paymentStatus, overdue,
+      paid, paidCash, advanceApplied, outstanding, paymentStatus, overdue,
       daysOverdue: overdue ? daysBetween(purchase.dueDate, day) : 0,
       overpaid: confirmed && paid > total + MONEY_TOLERANCE ? round2(paid - total) : 0,
-      payments: mine,
+      payments: mine, allocations: used,
       delivery: deliveryState(purchase),
     };
   }
@@ -887,29 +934,55 @@
     return { lines, status };
   }
 
+  // What a supplier's deposits add up to: { deposited, refunded, applied, unapplied } for one supplier.
+  //   unapplied = deposited - refunded - applied   (the money with the supplier that no invoice has used yet)
+  function advanceTotals(supplierId, deposits, allocations) {
+    let deposited = 0, refunded = 0, applied = 0;
+    for (const x of activeDeposits(deposits)) {
+      if (x.supplierId !== supplierId) continue;
+      if (x.kind === "refund") refunded += toNumber(x.amount);
+      else deposited += toNumber(x.amount);
+    }
+    for (const a of activeAllocations(allocations)) if (a.supplierId === supplierId) applied += toNumber(a.amount);
+    return { deposited: round2(deposited), refunded: round2(refunded), applied: round2(applied), unapplied: round2(deposited - refunded - applied) };
+  }
+
   // What is owed to, paid to and bought from one supplier. Drafts and cancelled purchases count nowhere.
-  function supplierSummary(supplier, purchases, payments, today) {
-    let count = 0, total = 0, paid = 0, outstanding = 0, overdueCount = 0, overdueTotal = 0, last = "";
+  //   total       confirmed purchases
+  //   paid        invoice payments + deposits - refunds. An allocation is never added: it moves money already counted
+  //   net         total - paid          > 0 owed to the supplier, < 0 prepaid (credit), 0 square
+  //   owed        max(0, net)           advance   max(0, -net)
+  //   outstanding what is still unsettled on invoices (total - payments - allocations); a deposit not applied to an
+  //               invoice does not reduce it, so   net = outstanding - unapplied
+  function supplierSummary(supplier, purchases, payments, today, deposits, allocations) {
+    let count = 0, total = 0, invoicePaid = 0, outstanding = 0, openInvoices = 0, overdueCount = 0, overdueTotal = 0, last = "";
     for (const p of purchases) {
       if (p.supplierId !== supplier.id || p.status !== "confirmed") continue;
-      const s = purchaseSummary(p, payments, today);
+      const s = purchaseSummary(p, payments, today, allocations);
       count++;
       total += toNumber(p.total);
-      paid += s.paid;
+      invoicePaid += s.paidCash;
       outstanding += s.outstanding;
+      if (s.outstanding > 0) openInvoices++;
       if (s.overdue) { overdueCount++; overdueTotal += s.outstanding; }
       if (p.invoiceDate > last) last = p.invoiceDate;
     }
+    const adv = advanceTotals(supplier.id, deposits, allocations);
+    const paid = round2(invoicePaid + adv.deposited - adv.refunded);
+    const net = round2(total - paid);
+    const owed = Math.max(0, net);
     const limit = supplier.creditLimit;
     return {
-      count, total: round2(total), paid: round2(paid), outstanding: round2(outstanding), overdueCount, overdueTotal: round2(overdueTotal),
-      lastPurchase: last, creditLimit: limit == null ? null : limit, overLimit: limit != null && round2(outstanding) > limit + MONEY_TOLERANCE,
+      count, total: round2(total), paid, invoicePaid: round2(invoicePaid), outstanding: round2(outstanding), openInvoices,
+      deposited: adv.deposited, refunded: adv.refunded, applied: adv.applied, unapplied: adv.unapplied,
+      net, owed, advance: Math.max(0, round2(-net)),
+      overdueCount, overdueTotal: round2(overdueTotal), lastPurchase: last, creditLimit: limit == null ? null : limit, overLimit: limit != null && owed > limit + MONEY_TOLERANCE,
     };
   }
 
   function supplierPayable(d, supplierId, today) {
     const supplier = (d.suppliers || []).find((s) => s.id === supplierId);
-    return supplier ? supplierSummary(supplier, d.purchases || [], d.supplierPayments || [], today) : null;
+    return supplier ? supplierSummary(supplier, d.purchases || [], d.supplierPayments || [], today, d.supplierDeposits || [], d.advanceAllocations || []) : null;
   }
 
   function readPaymentInput(input, ctx, options) {
@@ -934,7 +1007,7 @@
     if (purchase.status !== "confirmed") return { error: t("spay.err.notConfirmed") };
     const read = readPaymentInput(input || {}, ctx);
     if (read.error) return read;
-    const summary = purchaseSummary(purchase, ctx.payments, ctx.today);
+    const summary = purchaseSummary(purchase, ctx.payments, ctx.today, ctx.allocations);
     if (summary.outstanding <= 0) return { error: t("spay.err.alreadyPaid"), field: "amount" };
     if (read.values.amount > summary.outstanding + 1e-9) return { error: t("spay.err.tooMuch", { max: String(summary.outstanding) }), field: "amount" };
     const at = isoOf(ctx);
@@ -981,6 +1054,277 @@
     payment.voidReason = why;
     payment.updatedAt = isoOf(ctx);
     return { payment };
+  }
+
+  /* ==========================================================================
+     SUPPLIER DEPOSITS AND ADVANCE PAYMENTS
+     A deposit is money given to a supplier without naming an invoice. It is a record of its own, linked to the
+     supplier only, so it can be made before anything was bought and can be larger than everything bought so far.
+     It never changes an invoice's paid status. Using it on a purchase is a separate record (an allocation).
+     ========================================================================== */
+
+  function normalizeDeposit(raw) {
+    if (!isObj(raw)) return null;
+    return {
+      ...raw,
+      id: String(raw.id || uid()),
+      supplierId: text(raw.supplierId),
+      kind: raw.kind === "refund" ? "refund" : "deposit",
+      amount: toNumber(raw.amount), date: text(raw.date),
+      method: text(raw.method).trim(), reference: text(raw.reference).trim(), note: text(raw.note).trim(),
+      status: raw.status === "voided" ? "voided" : "recorded",
+      createdAt: text(raw.createdAt), updatedAt: text(raw.updatedAt),
+      history: Array.isArray(raw.history) ? raw.history.map((h) => ({ ...h })) : [],
+    };
+  }
+
+  function depositProblem(x) {
+    if (!isObj(x)) return t("problem.notObject");
+    if (!isStr(x.id) || !x.id) return t("problem.noId");
+    if (!isStr(x.supplierId) || !x.supplierId) return t("problem.badSupplierLink");
+    if (!DEPOSIT_KINDS.includes(x.kind)) return t("problem.badField", { field: "kind" });
+    if (!isNum(x.amount) || x.amount <= 0 || x.amount > MAX_AMOUNT) return t("problem.badPayment");
+    if (!isDay(x.date)) return t("problem.badDate");
+    if (!DEPOSIT_STATUSES.includes(x.status)) return t("problem.badStatus");
+    if (x.method !== undefined && x.method !== "" && !PAYMENT_METHODS.includes(x.method)) return t("problem.badField", { field: "method" });
+    for (const key of ["reference", "note"]) {
+      if (x[key] !== undefined && (!isStr(x[key]) || x[key].length > MAX_TEXT)) return t("problem.badField", { field: key });
+    }
+    if (!isIso(x.createdAt)) return t("problem.badField", { field: "createdAt" });
+    if (x.updatedAt !== undefined && x.updatedAt !== "" && !isIso(x.updatedAt)) return t("problem.badField", { field: "updatedAt" });
+    if (x.status === "voided" && (!isIso(x.voidedAt) || isBlank(x.voidReason))) return t("problem.badField", { field: "voidedAt" });
+    if (x.history !== undefined && (!Array.isArray(x.history) || x.history.some((h) => !isObj(h) || !isNum(h.amount) || !isIso(h.at)))) return t("problem.badField", { field: "history" });
+    return "";
+  }
+
+  function normalizeAllocation(raw) {
+    if (!isObj(raw)) return null;
+    return {
+      ...raw,
+      id: String(raw.id || uid()),
+      depositId: text(raw.depositId), purchaseId: text(raw.purchaseId), supplierId: text(raw.supplierId),
+      amount: toNumber(raw.amount), date: text(raw.date),
+      status: raw.status === "reversed" ? "reversed" : "applied",
+      createdAt: text(raw.createdAt),
+    };
+  }
+
+  function allocationProblem(a) {
+    if (!isObj(a)) return t("problem.notObject");
+    if (!isStr(a.id) || !a.id) return t("problem.noId");
+    if (!isStr(a.depositId) || !a.depositId || !isStr(a.purchaseId) || !a.purchaseId || !isStr(a.supplierId) || !a.supplierId) return t("problem.badSupplierLink");
+    if (!isNum(a.amount) || a.amount <= 0 || a.amount > MAX_AMOUNT) return t("problem.badPayment");
+    if (!isDay(a.date)) return t("problem.badDate");
+    if (!ALLOCATION_STATUSES.includes(a.status)) return t("problem.badStatus");
+    if (!isIso(a.createdAt)) return t("problem.badField", { field: "createdAt" });
+    if (a.status === "reversed" && (!isIso(a.reversedAt) || isBlank(a.reverseReason))) return t("problem.badField", { field: "reversedAt" });
+    return "";
+  }
+
+  // What is left of each deposit after the allocations drawn from it: Map(depositId -> amount).
+  function depositRemaining(supplierId, deposits, allocations) {
+    const left = new Map();
+    for (const x of activeDeposits(deposits)) if (x.supplierId === supplierId && x.kind !== "refund") left.set(x.id, toNumber(x.amount));
+    for (const a of activeAllocations(allocations)) if (left.has(a.depositId)) left.set(a.depositId, round2(left.get(a.depositId) - toNumber(a.amount)));
+    return left;
+  }
+
+  function readDepositInput(input, ctx) {
+    const fail = (field, error) => ({ field, error });
+    const amount = readNumber(input.amount);
+    if (amount.blank || amount.invalid) return fail("amount", t("spay.err.enterAmount"));
+    if (amount.value <= 0) return fail("amount", t(amount.value < 0 ? "spay.err.negative" : "spay.err.enterAmount"));
+    if (amount.value > MAX_AMOUNT) return fail("amount", t("dep.err.tooBig"));
+    const date = isBlank(input.date) ? ctx.today : text(input.date).trim();
+    if (!isDay(date)) return fail("date", t("spay.err.date"));
+    if (date > ctx.today) return fail("date", t("spay.err.future"));
+    const method = text(input.method).trim();
+    if (method && !PAYMENT_METHODS.includes(method)) return fail("method", t("dep.err.method"));
+    const reference = text(input.reference).trim();
+    const note = text(input.note).trim();
+    if (reference.length > 200 || note.length > MAX_TEXT) return fail("note", t("sup.err.tooLong"));
+    return { values: { amount: round2(amount.value), date, method, reference, note } };
+  }
+
+  // Records a general deposit (money given to the supplier, no invoice named) or a refund (money the supplier gave
+  // back out of the unapplied deposits). `input.id` makes the save repeatable: the form makes it once, so a second
+  // click or a retry finds the record and reports it instead of recording the money twice.
+  //   input: { id?, supplierId, kind?: "deposit" | "refund", amount, date, method, reference, note }
+  function recordDeposit(d, input, options) {
+    const ctx = ctxOf(d, options);
+    const inp = input || {};
+    if (isStr(inp.id) && inp.id) {
+      const same = ctx.deposits.find((x) => x.id === inp.id);
+      if (same) return { skip: true, already: true, deposit: same };
+    }
+    const supplier = ctx.suppliers.find((s) => s.id === inp.supplierId);
+    if (!supplier) return { error: t("dep.err.chooseSupplier"), field: "supplierId" };
+    if (supplier.archived) return { error: t("pur.err.supplierArchived", { name: supplier.name }), field: "supplierId" };
+    const read = readDepositInput(inp, ctx);
+    if (read.error) return read;
+    const kind = inp.kind === "refund" ? "refund" : "deposit";
+    if (kind === "refund") {
+      const pool = advanceTotals(supplier.id, ctx.deposits, ctx.allocations).unapplied;
+      if (read.values.amount > pool + 1e-9) return { error: t("dep.err.refundTooMuch", { max: String(Math.max(0, pool)) }), field: "amount" };
+    }
+    const at = isoOf(ctx);
+    const deposit = normalizeDeposit({
+      id: isStr(inp.id) && inp.id ? inp.id : uid(), supplierId: supplier.id, kind, ...read.values,
+      status: "recorded", createdAt: at, updatedAt: at, history: [],
+    });
+    if (!d.supplierDeposits) d.supplierDeposits = [];
+    d.supplierDeposits.push(deposit);
+    return { deposit };
+  }
+
+  // Changes a deposit or refund. The old values stay in its history. The amount can not go below what was already applied
+  // from it, and the supplier's unapplied deposits can never end below zero.
+  function updateDeposit(d, id, input, options) {
+    const ctx = ctxOf(d, options);
+    const deposit = ctx.deposits.find((x) => x.id === id);
+    if (!deposit) return { error: t("dep.err.gone") };
+    if (deposit.status === "voided") return { error: t("dep.err.voided") };
+    const read = readDepositInput(input || {}, ctx);
+    if (read.error) return read;
+    const totals = advanceTotals(deposit.supplierId, ctx.deposits, ctx.allocations);
+    if (deposit.kind === "refund") {
+      if (read.values.amount > round2(totals.unapplied + deposit.amount) + 1e-9) return { error: t("dep.err.refundTooMuch", { max: String(round2(totals.unapplied + deposit.amount)) }), field: "amount" };
+    } else {
+      const usedFromThis = round2(activeAllocations(ctx.allocations).filter((a) => a.depositId === deposit.id).reduce((s, a) => s + toNumber(a.amount), 0));
+      if (read.values.amount < usedFromThis - 1e-9) return { error: t("dep.err.belowApplied", { applied: String(usedFromThis) }), field: "amount" };
+      if (round2(totals.unapplied - deposit.amount + read.values.amount) < -1e-9) return { error: t("dep.err.refundsDepend"), field: "amount" };
+    }
+    const before = { at: isoOf(ctx), amount: deposit.amount, date: deposit.date, method: deposit.method || "", reference: deposit.reference, note: deposit.note };
+    if (before.amount === read.values.amount && before.date === read.values.date && before.method === read.values.method && before.reference === read.values.reference && before.note === read.values.note) return { skip: true, deposit };
+    deposit.history = [...(deposit.history || []), before];
+    Object.assign(deposit, read.values, { updatedAt: isoOf(ctx) });
+    return { deposit };
+  }
+
+  // A deposit is never deleted: voiding keeps it, with the reason, and takes it out of every balance. A deposit that
+  // was applied to a purchase can not be voided until those allocations are reversed, so no allocation is left pointing
+  // at money that is gone. Voiding a deposit is also refused while refunds depend on it.
+  function voidDeposit(d, id, reason, options) {
+    const ctx = ctxOf(d, options);
+    const deposit = ctx.deposits.find((x) => x.id === id);
+    if (!deposit) return { error: t("dep.err.gone") };
+    if (deposit.status === "voided") return { skip: true, deposit };
+    const why = text(reason).trim();
+    if (!why) return { error: t("spay.err.reason"), field: "reason" };
+    if (why.length > MAX_TEXT) return { error: t("sup.err.tooLong"), field: "reason" };
+    if (deposit.kind !== "refund") {
+      const used = activeAllocations(ctx.allocations).filter((a) => a.depositId === deposit.id);
+      if (used.length) return { error: t("dep.err.hasAllocations", { n: used.length }) };
+      const totals = advanceTotals(deposit.supplierId, ctx.deposits, ctx.allocations);
+      if (round2(totals.unapplied - deposit.amount) < -1e-9) return { error: t("dep.err.refundsDepend") };
+    }
+    deposit.status = "voided";
+    deposit.voidedAt = isoOf(ctx);
+    deposit.voidReason = why;
+    deposit.updatedAt = isoOf(ctx);
+    return { deposit };
+  }
+
+  // Draws `amount` from the supplier's deposits, oldest first, and records one allocation per deposit used. The deposits
+  // themselves are not changed. The caller has checked the amount against the purchase and the unapplied deposits.
+  function allocateAdvance(d, purchase, amount, ctx) {
+    const left = depositRemaining(purchase.supplierId, ctx.deposits, ctx.allocations);
+    const order = activeDeposits(ctx.deposits)
+      .filter((x) => x.supplierId === purchase.supplierId && x.kind !== "refund" && (left.get(x.id) || 0) > 0)
+      .sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    if (!d.advanceAllocations) d.advanceAllocations = [];
+    const made = [];
+    let todo = round2(amount);
+    const at = isoOf(ctx);
+    for (const x of order) {
+      if (todo <= 0) break;
+      const take = Math.min(todo, left.get(x.id));
+      if (take <= 0) continue;
+      const allocation = normalizeAllocation({
+        id: uid(), depositId: x.id, purchaseId: purchase.id, supplierId: purchase.supplierId, amount: round2(take),
+        date: ctx.today, status: "applied", createdAt: at,
+      });
+      d.advanceAllocations.push(allocation);
+      made.push(allocation);
+      todo = round2(todo - take);
+    }
+    return todo > 1e-9 ? { error: t("adv.err.notEnough", { max: String(round2(amount - todo)) }) } : { allocations: made };
+  }
+
+  // Uses part of the supplier's unapplied deposits on ONE confirmed purchase. Never more than the deposits that are still
+  // unapplied, never more than the purchase still needs, and never forced to use all of it.
+  function applyAdvance(d, purchaseId, amount, options) {
+    const ctx = ctxOf(d, options);
+    const purchase = ctx.purchases.find((p) => p.id === purchaseId);
+    if (!purchase) return { error: t("pur.err.gone") };
+    if (purchase.status !== "confirmed") return { error: t("spay.err.notConfirmed") };
+    const read = readNumber(amount);
+    if (read.blank || read.invalid || read.value <= 0) return { error: t("spay.err.enterAmount"), field: "amount" };
+    const value = round2(read.value);
+    const summary = purchaseSummary(purchase, ctx.payments, ctx.today, ctx.allocations);
+    if (summary.outstanding <= 0) return { error: t("spay.err.alreadyPaid"), field: "amount" };
+    if (value > summary.outstanding + 1e-9) return { error: t("adv.err.tooMuch", { max: String(summary.outstanding) }), field: "amount" };
+    const pool = advanceTotals(purchase.supplierId, ctx.deposits, ctx.allocations).unapplied;
+    if (value > pool + 1e-9) return { error: t("adv.err.notEnough", { max: String(Math.max(0, pool)) }), field: "amount" };
+    const done = allocateAdvance(d, purchase, value, ctx);
+    if (done.error) return done;
+    touch(purchase, ctx);
+    logEvent(purchase, "advanceApplied", ctx, { amount: value });
+    return { allocations: done.allocations, amount: value };
+  }
+
+  // Gives an allocation back to the supplier's unapplied deposits (the purchase becomes that much less paid). The
+  // allocation stays as history, marked reversed with the reason; the deposit it came from was never changed.
+  function reverseAllocation(d, allocationId, reason, options) {
+    const ctx = ctxOf(d, options);
+    const allocation = ctx.allocations.find((a) => a.id === allocationId);
+    if (!allocation) return { error: t("adv.err.gone") };
+    if (allocation.status === "reversed") return { skip: true, allocation };
+    const why = text(reason).trim();
+    if (!why) return { error: t("spay.err.reason"), field: "reason" };
+    if (why.length > MAX_TEXT) return { error: t("sup.err.tooLong"), field: "reason" };
+    allocation.status = "reversed";
+    allocation.reversedAt = isoOf(ctx);
+    allocation.reverseReason = why;
+    const purchase = ctx.purchases.find((p) => p.id === allocation.purchaseId);
+    if (purchase) { touch(purchase, ctx); logEvent(purchase, "advanceReversed", ctx, { amount: allocation.amount, note: why }); }
+    return { allocation };
+  }
+
+  // The whole money history of one supplier, oldest first, with the net balance after each line. Purchases add to what is
+  // owed; payments, deposits and refunds move it; an allocation changes who a payment belongs to, never the balance, so it is
+  // listed with an effect of 0. Voided and reversed records stay in the list (greyed by the screen) with an effect of 0.
+  //   row: { type: "purchase" | "payment" | "deposit" | "refund" | "allocation", id, date, createdAt, amount, effect,
+  //          status, purchaseId, reference, note, method, balance, ...}
+  function supplierLedger(d, supplierId) {
+    const purchases = (d.purchases || []).filter((p) => p.supplierId === supplierId && p.status === "confirmed");
+    const byId = new Map((d.purchases || []).map((p) => [p.id, p]));
+    const rows = [];
+    for (const p of purchases) {
+      rows.push({ type: "purchase", id: p.id, date: p.invoiceDate, createdAt: p.confirmedAt || p.createdAt || "", amount: toNumber(p.total), effect: toNumber(p.total), status: "active", purchaseId: p.id, reference: p.supplierInvoiceNumber || "", ref: p.reference, note: p.notes || "", method: "" });
+    }
+    for (const x of d.supplierPayments || []) {
+      if (x.supplierId !== supplierId) continue;
+      const p = byId.get(x.purchaseId);
+      const voided = x.status === "voided";
+      rows.push({ type: "payment", id: x.id, date: x.date, createdAt: x.createdAt, amount: toNumber(x.amount), effect: voided ? 0 : -toNumber(x.amount), status: voided ? "voided" : "active", purchaseId: x.purchaseId, ref: p ? p.reference : "", reference: x.reference, note: x.note, method: "" });
+    }
+    for (const x of d.supplierDeposits || []) {
+      if (x.supplierId !== supplierId) continue;
+      const voided = x.status === "voided";
+      const sign = x.kind === "refund" ? 1 : -1;
+      rows.push({ type: x.kind, id: x.id, date: x.date, createdAt: x.createdAt, amount: toNumber(x.amount), effect: voided ? 0 : sign * toNumber(x.amount), status: voided ? "voided" : "active", purchaseId: "", ref: "", reference: x.reference, note: x.note, method: x.method || "" });
+    }
+    for (const a of d.advanceAllocations || []) {
+      if (a.supplierId !== supplierId) continue;
+      const p = byId.get(a.purchaseId);
+      rows.push({ type: "allocation", id: a.id, date: a.date, createdAt: a.createdAt, amount: toNumber(a.amount), effect: 0, status: a.status === "reversed" ? "voided" : "active", purchaseId: a.purchaseId, depositId: a.depositId, ref: p ? p.reference : "", reference: "", note: a.reverseReason || "", method: "" });
+    }
+    const order = { purchase: 0, payment: 1, deposit: 1, refund: 1, allocation: 2 };
+    rows.sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt) || order[a.type] - order[b.type] || a.id.localeCompare(b.id));
+    let balance = 0;
+    for (const r of rows) { balance = round2(balance + r.effect); r.balance = balance; }
+    return rows;
   }
 
   /* ==========================================================================
@@ -1100,7 +1444,7 @@
   // Runs a change that touches several lists of the draft `d` and puts everything back exactly as it was if the
   // change reports an error, so a refused operation never leaves half of its work behind.
   function allOrNothing(d, change) {
-    const keys = ["products", "purchases", "supplierPayments", "suppliers"];
+    const keys = ["products", "purchases", "supplierPayments", "suppliers", "supplierDeposits", "advanceAllocations"];
     const snapshot = JSON.stringify({ lists: keys.map((k) => d[k] || []), counter: d.purchaseCounter, attachments: d.attachments || null });
     const result = change();
     if (result && result.error) {
@@ -1130,6 +1474,7 @@
     // Everything is checked again against today's data: products, prices and suppliers may have changed since the draft.
     const input = purchaseToInput(purchase);
     if (opts.initialPayment !== undefined) input.initialPayment = opts.initialPayment;
+    if (opts.advanceApply !== undefined) input.advanceApply = opts.advanceApply;
     const composed = composePurchase(input, ctx, "confirm");
     if (composed.errors.length) return errorResult(composed.errors);
     const next = composed.purchase;
@@ -1181,7 +1526,19 @@
         if (!d.supplierPayments) d.supplierPayments = [];
         d.supplierPayments.push(payment);
       }
-      return { purchase, receipt, payment, createdProducts: created.map((l) => l.productId) };
+
+      // Advance from the supplier's deposits, if the draft asked for some. The deposits stay as they are; one allocation
+      // per deposit used is recorded, so the purchase and the deposits can each be traced to the other.
+      let allocations = [];
+      delete purchase.advanceApply;
+      if (next.advanceApply > 0) {
+        const fresh = ctxOf(d, opts);
+        const done = allocateAdvance(d, purchase, next.advanceApply, fresh);
+        if (done.error) return { error: done.error, field: "advanceApply" };
+        allocations = done.allocations;
+        logEvent(purchase, "advanceApplied", ctx, { amount: next.advanceApply });
+      }
+      return { purchase, receipt, payment, allocations, createdProducts: created.map((l) => l.productId) };
     });
   }
 
@@ -1191,9 +1548,11 @@
     if (!purchase) return null;
     const supplier = (d.suppliers || []).find((s) => s.id === purchase.supplierId);
     if (!supplier || supplier.creditLimit == null) return null;
-    const summary = supplierSummary(supplier, d.purchases, d.supplierPayments || [], today);
+    const summary = supplierSummary(supplier, d.purchases, d.supplierPayments || [], today, d.supplierDeposits || [], d.advanceAllocations || []);
     const paidNow = purchase.initialPayment ? purchase.initialPayment.amount : 0;
-    const after = round2(summary.outstanding + toNumber(purchase.total) - paidNow);
+    // What is owed to the supplier after this purchase: the net balance plus the purchase, less what is paid with it
+    // (an advance applied to it only moves money that is already in the balance, so it changes nothing here).
+    const after = Math.max(0, round2(summary.net + toNumber(purchase.total) - paidNow));
     return after > supplier.creditLimit + MONEY_TOLERANCE ? { limit: supplier.creditLimit, after, name: supplier.name } : null;
   }
 
@@ -1275,12 +1634,18 @@
     if (purchase.status === "confirmed") {
       const active = activePayments(ctx.payments).filter((p) => p.purchaseId === purchase.id);
       if (active.length) return { error: t("pur.err.cancelHasPayments", { n: active.length }) };
+      const at = isoOf(ctx);
       const applied = (purchase.receipts || []).filter((r) => r.status === "applied");
       if (applied.length) {
         const out = takeOutReceipts(d, purchase, applied, ctx);
         if (out.error) return out;
-        const at = isoOf(ctx);
         for (const r of applied) { r.status = "reversed"; r.reversedAt = at; r.reversalReason = why; }
+      }
+      // An advance applied to it goes back to the supplier's unapplied deposits (nothing is lost: the deposit was never
+      // changed). Each allocation stays as history, marked reversed with the reason. Done last, after the stock check
+      // above could still refuse, so a refused cancellation changes nothing.
+      for (const a of activeAllocations(ctx.allocations).filter((x) => x.purchaseId === purchase.id)) {
+        a.status = "reversed"; a.reversedAt = at; a.reverseReason = why;
       }
     }
     purchase.status = "cancelled";
@@ -1307,7 +1672,12 @@
       if (product) stockOut.push({ productId, name: product.name, qty, unit: unitName(product.stockUnit).toLowerCase() });
     }
     const payments = (d.supplierPayments || []).filter((x) => x.purchaseId === id);
-    return { purchase, stockOut, paymentCount: payments.length, paid: round2(activePayments(payments).reduce((s, x) => s + toNumber(x.amount), 0)) };
+    const used = (d.advanceAllocations || []).filter((x) => x.purchaseId === id);
+    return {
+      purchase, stockOut, paymentCount: payments.length, paid: round2(activePayments(payments).reduce((s, x) => s + toNumber(x.amount), 0)),
+      // Advance applied to it is given back to the supplier's unapplied deposits.
+      allocationCount: used.length, advanceReturned: round2(activeAllocations(used).reduce((s, x) => s + toNumber(x.amount), 0)),
+    };
   }
 
   // Deletes a purchase for good, as if it had never been entered (cancelPurchase() keeps it as history, this does not).
@@ -1330,10 +1700,14 @@
       }
       const removedPayments = (d.supplierPayments || []).filter((x) => x.purchaseId === id).length;
       d.supplierPayments = (d.supplierPayments || []).filter((x) => x.purchaseId !== id);
+      // The allocations of this purchase go with it; the deposits they were drawn from were never changed, so the money
+      // is simply unapplied again (shown in the question asked before deleting).
+      const removedAllocations = (d.advanceAllocations || []).filter((x) => x.purchaseId === id).length;
+      d.advanceAllocations = (d.advanceAllocations || []).filter((x) => x.purchaseId !== id);
       d.purchases = d.purchases.filter((p) => p.id !== id);
       if (!d.attachments) d.attachments = { put: [], remove: [] };
       for (const a of purchase.attachments || []) d.attachments.remove.push(a.id);
-      return { purchase, removedPayments };
+      return { purchase, removedPayments, removedAllocations };
     });
   }
 
@@ -1383,13 +1757,15 @@
      ========================================================================== */
 
   // Problems that only show when all the supplier-side records are looked at together. Nothing is repaired.
-  // data: { suppliers, purchases, supplierPayments, attachments } (any may be missing)
+  // data: { suppliers, purchases, supplierPayments, attachments, supplierDeposits, advanceAllocations } (any may be missing)
   function linkProblems(data) {
     const problems = [];
     const suppliers = data.suppliers || [];
     const purchases = data.purchases || [];
     const payments = data.supplierPayments || [];
     const attachments = data.attachments || [];
+    const deposits = data.supplierDeposits || [];
+    const allocations = data.advanceAllocations || [];
     const supplierIds = new Set(suppliers.map((x) => x.id));
     const purchaseById = new Map(purchases.map((x) => [x.id, x]));
     const ref = (x) => x.reference || x.id;
@@ -1419,9 +1795,42 @@
         paidBy.set(purchase.id, round2((paidBy.get(purchase.id) || 0) + toNumber(pay.amount)));
       }
     }
+
+    // Deposits and the allocations drawn from them. Every record must point at something that exists, an allocation must
+    // agree with both the deposit and the purchase about the supplier, and the numbers must add up: no purchase paid by
+    // more than its total, no deposit applied for more than it holds, no supplier with more applied than was deposited.
+    const depositById = new Map(deposits.map((x) => [x.id, x]));
+    for (const x of deposits) {
+      if (!supplierIds.has(x.supplierId)) problems.push(t("data.depositNoSupplier", { id: x.id }));
+    }
+    const usedFrom = new Map();
+    const usedBy = new Map();
+    for (const a of allocations) {
+      const deposit = depositById.get(a.depositId);
+      const purchase = purchaseById.get(a.purchaseId);
+      if (!deposit) { problems.push(t("data.allocationNoDeposit", { id: a.id })); continue; }
+      if (!purchase) { problems.push(t("data.allocationNoPurchase", { id: a.id })); continue; }
+      if (deposit.supplierId !== a.supplierId || purchase.supplierId !== a.supplierId || deposit.kind === "refund") problems.push(t("data.allocationWrongSupplier", { ref: ref(purchase) }));
+      if (a.status === "applied") {
+        if (purchase.status !== "confirmed") problems.push(t("data.allocationUnconfirmed", { ref: ref(purchase) }));
+        if (deposit.status === "voided") problems.push(t("data.allocationVoidedDeposit", { ref: ref(purchase) }));
+        usedFrom.set(deposit.id, round2((usedFrom.get(deposit.id) || 0) + toNumber(a.amount)));
+        usedBy.set(purchase.id, round2((usedBy.get(purchase.id) || 0) + toNumber(a.amount)));
+      }
+    }
+    for (const [id, used] of usedFrom) {
+      if (used > round2(depositById.get(id).amount) + MONEY_TOLERANCE) problems.push(t("data.allocationOverDeposit", { id }));
+    }
+    const owners = new Set(suppliers.map((x) => x.id));
+    for (const id of owners) {
+      if (advanceTotals(id, deposits, allocations).unapplied < -MONEY_TOLERANCE) problems.push(t("data.advanceNegative", { name: (suppliers.find((x) => x.id === id) || {}).name || id }));
+    }
     for (const [id, paid] of paidBy) {
       const purchase = purchaseById.get(id);
-      if (paid > round2(purchase.total) + MONEY_TOLERANCE) problems.push(t("data.paymentOver", { ref: ref(purchase) }));
+      if (round2(paid + (usedBy.get(id) || 0)) > round2(purchase.total) + MONEY_TOLERANCE) problems.push(t("data.paymentOver", { ref: ref(purchase) }));
+    }
+    for (const [id, used] of usedBy) {
+      if (!paidBy.has(id) && used > round2(purchaseById.get(id).total) + MONEY_TOLERANCE) problems.push(t("data.paymentOver", { ref: ref(purchaseById.get(id)) }));
     }
 
     const stored = new Map(attachments.map((a) => [a.id, a]));
@@ -1445,16 +1854,19 @@
   const inPeriod = (day, from, to) => isDay(day) && (!from || day >= from) && (!to || day <= to);
 
   function dataOf(d) {
-    return { suppliers: d.suppliers || [], purchases: d.purchases || [], payments: d.supplierPayments || [], products: d.products || [] };
+    return {
+      suppliers: d.suppliers || [], purchases: d.purchases || [], payments: d.supplierPayments || [], products: d.products || [],
+      deposits: d.supplierDeposits || [], allocations: d.advanceAllocations || [],
+    };
   }
 
   // Confirmed purchases only. A cancelled purchase, and a draft, never count. Reversed deliveries do not matter here:
   // only a cancellation removes a purchase from the totals.
   function purchasesInPeriod(d, from, to, today) {
-    const { purchases, payments } = dataOf(d);
+    const { purchases, payments, allocations } = dataOf(d);
     return purchases
       .filter((p) => p.status === "confirmed" && inPeriod(p.invoiceDate, from, to))
-      .map((purchase) => ({ purchase, summary: purchaseSummary(purchase, payments, today) }))
+      .map((purchase) => ({ purchase, summary: purchaseSummary(purchase, payments, today, allocations) }))
       .sort((a, b) => b.purchase.invoiceDate.localeCompare(a.purchase.invoiceDate) || b.purchase.reference.localeCompare(a.purchase.reference));
   }
 
@@ -1471,14 +1883,14 @@
 
   // Everything still owed to suppliers, whenever it was bought, and which of it is overdue.
   function outstandingReport(d, today) {
-    const { suppliers, purchases, payments } = dataOf(d);
+    const { suppliers, purchases, payments, deposits, allocations } = dataOf(d);
     const bySupplier = suppliers
-      .map((supplier) => ({ supplier, summary: supplierSummary(supplier, purchases, payments, today) }))
+      .map((supplier) => ({ supplier, summary: supplierSummary(supplier, purchases, payments, today, deposits, allocations) }))
       .filter((r) => r.summary.outstanding > 0)
       .sort((a, b) => b.summary.outstanding - a.summary.outstanding);
     const overdue = purchases
       .filter((p) => p.status === "confirmed")
-      .map((purchase) => ({ purchase, summary: purchaseSummary(purchase, payments, today), supplier: suppliers.find((s) => s.id === purchase.supplierId) }))
+      .map((purchase) => ({ purchase, summary: purchaseSummary(purchase, payments, today, allocations), supplier: suppliers.find((s) => s.id === purchase.supplierId) }))
       .filter((r) => r.summary.overdue)
       .sort((a, b) => b.summary.daysOverdue - a.summary.daysOverdue);
     return {
@@ -1728,17 +2140,34 @@
     return { rows, count: rows.length, total: round2(rows.reduce((s, r) => s + toNumber(r.payment.amount), 0)) };
   }
 
-  // All the numbers at the top of the Suppliers page.
+  // Money given to suppliers in a period (by date), net of refunds, and what it was made of. Voided records and payments of
+  // purchases that are not confirmed do not count. An allocation is not money paid, so it is not here.
+  function moneyOutReport(d, from, to) {
+    const invoice = paymentsReport(d, from, to);
+    let deposited = 0, refunded = 0;
+    for (const x of activeDeposits(dataOf(d).deposits)) {
+      if (!inPeriod(x.date, from, to)) continue;
+      if (x.kind === "refund") refunded += toNumber(x.amount);
+      else deposited += toNumber(x.amount);
+    }
+    return { invoicePayments: invoice.total, deposited: round2(deposited), refunded: round2(refunded), paid: round2(invoice.total + deposited - refunded) };
+  }
+
+  // All the numbers at the top of the Suppliers page. Every figure is the sum of the same per-supplier summary, so the page
+  // and the Purchases page can never disagree. `owed` (net debt) and `advance` (net credit) are summed separately: a supplier
+  // we owe and a supplier we prepaid never cancel each other out.
   function overview(d, today) {
-    const { suppliers, purchases, payments } = dataOf(d);
-    let total = 0, paid = 0, outstanding = 0, overdueCount = 0;
+    const { suppliers, purchases, payments, deposits, allocations } = dataOf(d);
+    let total = 0, paid = 0, outstanding = 0, overdueCount = 0, owed = 0, advance = 0, unapplied = 0, openInvoices = 0;
     for (const s of suppliers) {
-      const x = supplierSummary(s, purchases, payments, today);
+      const x = supplierSummary(s, purchases, payments, today, deposits, allocations);
       total += x.total; paid += x.paid; outstanding += x.outstanding; overdueCount += x.overdueCount;
+      owed += x.owed; advance += x.advance; unapplied += x.unapplied; openInvoices += x.openInvoices;
     }
     return {
       suppliers: suppliers.length, active: suppliers.filter((s) => !s.archived).length,
       total: round2(total), paid: round2(paid), outstanding: round2(outstanding), overdueCount,
+      owed: round2(owed), advance: round2(advance), unapplied: round2(unapplied), openInvoices,
     };
   }
 
@@ -1752,6 +2181,9 @@
     normalizePurchase, purchaseProblem, purchaseWarnings, attachmentProblem, attachmentMetaProblem, attachmentMeta, withKeys, stripKeys,
     referenceSequence, formatReference, highestReference,
     normalizePayment, paymentProblem, purchaseSummary, deliveryState, supplierSummary, supplierPayable,
+    DEPOSIT_KINDS, DEPOSIT_STATUSES, ALLOCATION_STATUSES, PAYMENT_METHODS,
+    normalizeDeposit, depositProblem, normalizeAllocation, allocationProblem, advanceTotals, depositRemaining,
+    recordDeposit, updateDeposit, voidDeposit, applyAdvance, reverseAllocation, supplierLedger, moneyOutReport,
     saveDraft, deleteDraft, confirmPurchase, creditCheck, receiveDelivery, reverseReceipt, cancelPurchase, deletePurchase, deletionPreview, updatePurchaseDetails, setAttachmentMeta,
     recordPayment, updatePayment, voidPayment,
     linkProblems,

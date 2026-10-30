@@ -811,8 +811,8 @@ test("upgrade 2 -> 3: every product, invoice, payment, setting, counter and back
   const db = newDb({ indexedDB: factory, name: "legacy" });
   await db.initDatabase();
   const upgraded = await rawRows(factory, "legacy");
-  assert.equal(upgraded.version, 4, "opening a version 2 database runs the version 3 (purchases) and version 4 (debt ledger) upgrades");
-  assert.deepEqual(upgraded.stores, ["attachments", "counters", "debtTransfers", "invoices", "meta", "products", "purchases", "settings", "supplierPayments", "suppliers"]);
+  assert.equal(upgraded.version, 5, "opening a version 2 database runs the version 3 (purchases), 4 (debt ledger) and 5 (supplier deposits) upgrades");
+  assert.deepEqual(upgraded.stores, ["advanceAllocations", "attachments", "counters", "debtTransfers", "invoices", "meta", "products", "purchases", "settings", "supplierDeposits", "supplierPayments", "suppliers"]);
   for (const store of ["products", "invoices", "settings", "counters", "meta"]) {
     assert.deepEqual(upgraded[store], oldRows[store], `${store} rows are byte for byte the same after the upgrade`);
   }
