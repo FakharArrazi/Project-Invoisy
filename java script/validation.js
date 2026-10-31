@@ -143,8 +143,46 @@
   const carriedTotal = (inv) => round2(carriedLines(inv).reduce((sum, l) => sum + toNumber(l && l.amount), 0));
   // The money the invoice still holds for the customer: everything paid, less what was handed back.
   const netPaid = (inv) => round2(paidTotal(inv) - refundedTotal(inv));
-  // What the invoice asks the customer to pay: this purchase plus the debt carried onto it. A cancelled sale asks only for the debt.
-  const amountDue = (inv) => (isCancelled(inv) ? carriedTotal(inv) : round2(toNumber(inv && inv.total) + carriedTotal(inv)));
+  /* ---------- Delivery information (optional) ----------
+     An invoice may carry `deliveryInfo: { person, phone, fee }`: who delivers the goods, their phone number and the delivery fee. It is
+     only present when at least one of the three was filled in, so every invoice made before it keeps exactly its old shape.
+     The fee is part of what the CUSTOMER pays (see amountDue) but it is not shop income and never a refund:
+       - `total` (and subtotal, discount, tax) stay the figures of the PRODUCTS, so sales figures never include the fee;
+       - the fee is kept out of every refund (see refundableOf): once the goods are delivered it belongs to the delivery person.
+     Not to be confused with `deliveries[]`, the log of goods handed over (partial fulfilment, further down). */
+
+  const MAX_DELIVERY_PERSON = 80;
+  const MAX_DELIVERY_PHONE = 40;
+
+  // What was typed in the three boxes ({ person, phone, fee } as text or numbers) as the value an invoice keeps: tidy text, a fee in
+  // money (never negative, two decimals), and null when nothing was filled in (a fee of 0 is nothing).
+  function cleanDeliveryInfo(input) {
+    const source = isObj(input) ? input : {};
+    const text = (value, max) => String(value == null ? "" : value).replace(/\s+/g, " ").trim().slice(0, max);
+    const person = text(source.person, MAX_DELIVERY_PERSON);
+    const phone = text(source.phone, MAX_DELIVERY_PHONE);
+    const raw = source.fee == null ? "" : String(source.fee).trim();
+    const number = raw === "" ? 0 : Number(raw);
+    const fee = Number.isFinite(number) && number > 0 ? round2(number) : 0;
+    return person || phone || fee > 0 ? { person, phone, fee } : null;
+  }
+
+  // The delivery information an invoice holds, read defensively (a backup from outside is never trusted); null when there is none.
+  function deliveryInfoOf(inv) {
+    const info = inv && inv.deliveryInfo;
+    if (!isObj(info)) return null;
+    return cleanDeliveryInfo({ person: isStr(info.person) ? info.person : "", phone: isStr(info.phone) ? info.phone : "", fee: isNum(info.fee) ? info.fee : 0 });
+  }
+  const deliveryFeeOf = (inv) => {
+    const info = deliveryInfoOf(inv);
+    return info ? info.fee : 0;
+  };
+
+  // What the invoice asks the customer to pay: this purchase, the delivery fee and the debt carried onto it. A cancelled sale asks only for
+  // the fee (the delivery was made) and the debt.
+  const amountDue = (inv) => round2((isCancelled(inv) ? 0 : toNumber(inv && inv.total)) + deliveryFeeOf(inv) + carriedTotal(inv));
+  // The part of the money held for an invoice that can go back to the customer: never the delivery fee, which is not the shop's to give back.
+  const refundableOf = (inv) => Math.max(0, round2(netPaid(inv) - deliveryFeeOf(inv)));
   // What the customer is owed back when the money held for the invoice is MORE than it now asks for (an invoice whose total
   // was lowered by an edit, for example a returned box, or a cancelled sale, after it had been paid), less what was already
   // refunded. Derived, never stored, and never a payment: the payment history is never changed to hide it.
@@ -165,7 +203,7 @@
       left = round2(left - settled);
       return { ...l, settled: round2(settled), remaining: round2(toNumber(l.amount) - settled) };
     });
-    const total = isCancelled(inv) ? 0 : round2(toNumber(inv && inv.total));
+    const total = round2((isCancelled(inv) ? 0 : toNumber(inv && inv.total)) + deliveryFeeOf(inv));
     const currentPaid = Math.min(left, total);
     return {
       lines,
@@ -1003,6 +1041,11 @@
     if (inv.secondCustomer !== undefined && (!isObj(inv.secondCustomer) || typeof inv.secondCustomer.name !== "string")) return t("problem.badSecondCustomer");
     // Optional seller name (older invoices do not have one): the name that was on the Sell page when the invoice was made.
     if (inv.sellerName !== undefined && typeof inv.sellerName !== "string") return t("problem.badSellerName");
+    // Optional delivery information (older invoices do not have it): { person: string, phone: string, fee: number >= 0 }.
+    if (inv.deliveryInfo !== undefined) {
+      const info = inv.deliveryInfo;
+      if (!isObj(info) || !isStr(info.person) || !isStr(info.phone) || !isNum(info.fee) || info.fee < 0) return t("problem.badDeliveryInfo");
+    }
     if (inv.carriedForward !== undefined) {
       if (!Array.isArray(inv.carriedForward)) return t("problem.badCarried");
       const seenTransfers = new Set();
@@ -1370,7 +1413,7 @@
     const pay = paymentDetail(inv, transfers);
     const derived = { amountPaid: pay.paid, remaining: pay.remaining, status: pay.cls };
     if (pay.refunded > 0) derived.amountRefunded = pay.refunded;
-    if (carriedLines(inv).length || isCancelled(inv)) derived.amountDue = pay.due;
+    if (carriedLines(inv).length || isCancelled(inv) || deliveryFeeOf(inv) > 0) derived.amountDue = pay.due;
     if (pay.transferredOut > 0) derived.transferredOut = pay.transferredOut;
     if (isTracked(inv)) derived.deliveryStatus = deliveryDetail(inv).status;
     return { ...inv, ...derived };
@@ -1632,7 +1675,7 @@
     cleanProductTypes, productTypesOf, addProductType, removeProductType, countProductsOfType, productTypeAllowed, DERIVED_INVOICE_FIELDS, WALK_IN,
     isObj, isStr, isNum, isDate, round2, toNumber, uid, sameValue,
     formatInvoiceNumber, invoiceSequence, highestInvoiceNumber,
-    carriedLines, paidTotal, carriedTotal, amountDue, refundDue, transferredOut, carriedBreakdown,
+    carriedLines, paidTotal, carriedTotal, amountDue, refundDue, refundableOf, cleanDeliveryInfo, deliveryInfoOf, deliveryFeeOf, transferredOut, carriedBreakdown,
     isCancelled, refundsOf, refundedTotal, netPaid, REFUND_REASONS, cancellationHistoryProblem,
     ROLLBACK_REASONS, rollbackLogOf, rollbackEntryProblem,
     isTracked, deliveryDetail, collectionNumber, receiptNumber, collectionReceipts, deliveryProblem, deliveryHistoryProblem, DELIVERY_EPSILON, DELIVERY_NOTE_MAX,

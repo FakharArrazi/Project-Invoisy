@@ -211,6 +211,22 @@
               </div>
             </fieldset>
 
+            <fieldset>
+              <legend data-i18n="sell.deliveryLegend">Delivery Information</legend>
+              <div class="field">
+                <label for="deliveryPerson" data-i18n="sell.deliveryPerson">Delivery Person Name</label>
+                <input type="text" id="deliveryPerson" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="deliveryPhone" data-i18n="sell.deliveryPhone">Phone Number</label>
+                <input type="text" id="deliveryPhone" inputmode="tel" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="deliveryFee" data-i18n="sell.deliveryFee">Delivery Fee</label>
+                <input type="number" id="deliveryFee" min="0" step="any" placeholder="0">
+              </div>
+            </fieldset>
+
           </div>
         </div>
 
@@ -221,6 +237,7 @@
           <div><span data-i18n="sell.subtotal">Subtotal</span><span id="tSubtotal"></span></div>
           <div><span data-i18n="sell.discount">Discount</span><span id="tDiscount"></span></div>
           <div><span data-i18n="sell.tax">Tax</span><span id="tTax"></span></div>
+          <div id="tDeliveryRow" hidden><span data-i18n="sell.deliveryFee">Delivery Fee</span><span id="tDelivery"></span></div>
           <div class="grand" id="tTotalRow"><span id="tTotalLabel">Total</span><span id="tTotal"></span></div>
           <div id="tCarriedRow" hidden><span data-i18n="sell.carried">Carried-forward debt</span><span id="tCarried"></span></div>
           <div class="grand" id="tDueRow" hidden><span data-i18n="sell.totalDue">Total due</span><span id="tDue"></span></div>

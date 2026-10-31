@@ -1697,5 +1697,16 @@ I18n.register("ar", "العربية", {
   "led.type.refund": "استرداد من المورد",
   "led.type.allocation": "دفعة مقدمة مطبقة",
   "pur.log.advanceApplied": "تم تطبيق دفعة مقدمة: {amount}",
-  "pur.log.advanceReversed": "تم تحرير دفعة مقدمة: {amount}"
+  "pur.log.advanceReversed": "تم تحرير دفعة مقدمة: {amount}",
+  "sell.deliveryLegend": "معلومات التوصيل",
+  "sell.deliveryPerson": "اسم عامل التوصيل",
+  "sell.deliveryPhone": "رقم الهاتف",
+  "sell.deliveryFee": "رسوم التوصيل",
+  "sell.deliveryFeeInvalid": "يجب أن تكون رسوم التوصيل رقمًا أكبر من أو يساوي 0.",
+  "inv.deliveryHeading": "التوصيل",
+  "inv.deliveryPerson": "عامل التوصيل",
+  "inv.deliveryPhone": "الهاتف",
+  "inv.deliveryFee": "رسوم التوصيل",
+  "problem.badDeliveryInfo": "معلومات التوصيل غير صالحة",
+  "rollback.feeNote": "رسوم التوصيل محتفظ بها ولا تُسترد أبدًا: {fee}"
 }, { locale: "ar-u-nu-latn", dir: "rtl" });

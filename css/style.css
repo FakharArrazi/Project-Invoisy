@@ -500,6 +500,11 @@ html[data-currency-unit="centimes"] :is(.invoice, #invoicePages) .inv-totals td:
 .inv-carried { margin-top: 14px; }
 .inv-carried h3 { margin: 0 0 4px; font-size: 12px; letter-spacing: 1px; }
 .inv-carried-table td:first-child { font-style: italic; }
+/* Optional delivery information (name, phone, fee): one quiet section above the totals, only on invoices that have it. */
+.inv-delivery { margin-top: 14px; }
+.inv-delivery h3 { margin: 0 0 4px; font-size: 12px; letter-spacing: 1px; }
+.inv-delivery-lines { display: flex; flex-wrap: wrap; gap: 2px 22px; }
+.inv-delivery .label { color: #555; font-size: 12px; }
 .inv-totals .purchase td { border-top: 1px solid #ddd; }
 .inv-totals .moved td { color: #5b3fa0; }
 .totals .debt-row { color: #8a5a00; }
@@ -547,7 +552,7 @@ html[data-currency-unit="centimes"] :is(.invoice, #invoicePages) .inv-totals td:
   .inv-biz-name { font-size: 15pt; }
   .inv-title { font-size: 20pt; }
   .inv-table th, .inv-table td { font-size: 10.5pt; }
-  .inv-table tr, .inv-totals, .inv-summary, .inv-status, .inv-payments, .inv-carried { page-break-inside: avoid; }
+  .inv-table tr, .inv-totals, .inv-summary, .inv-status, .inv-payments, .inv-carried, .inv-delivery { page-break-inside: avoid; }
   html[data-paper="a5"] .invoice { padding: 10mm; font-size: 10pt; }
   html[data-paper="a5"] .inv-biz-name { font-size: 13pt; }
   html[data-paper="a5"] .inv-title { font-size: 17pt; }

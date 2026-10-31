@@ -1646,5 +1646,16 @@ I18n.register("en", "English", {
   "led.type.refund": "Supplier refund",
   "led.type.allocation": "Advance applied",
   "pur.log.advanceApplied": "Advance applied: {amount}",
-  "pur.log.advanceReversed": "Advance released: {amount}"
+  "pur.log.advanceReversed": "Advance released: {amount}",
+  "sell.deliveryLegend": "Delivery Information",
+  "sell.deliveryPerson": "Delivery Person Name",
+  "sell.deliveryPhone": "Phone Number",
+  "sell.deliveryFee": "Delivery Fee",
+  "sell.deliveryFeeInvalid": "The delivery fee must be a number of 0 or more.",
+  "inv.deliveryHeading": "DELIVERY",
+  "inv.deliveryPerson": "Delivery person",
+  "inv.deliveryPhone": "Phone",
+  "inv.deliveryFee": "Delivery fee",
+  "problem.badDeliveryInfo": "has invalid delivery information",
+  "rollback.feeNote": "Delivery fee kept, never refunded: {fee}"
 });

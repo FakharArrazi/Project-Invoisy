@@ -279,6 +279,7 @@ function newSale() {
     sellerName: "",                         // who handles this sale ("Nom du vendeur"): follows the saved setting (see renderSellerName); copied onto the invoice when it is made
     discountType: "amount", discountValue: "",
     taxType: "amount", taxValue: "",
+    delivery: { person: "", phone: "", fee: "" },   // optional delivery information, as typed (see saleDelivery): the fee is paid by the customer with the invoice
     paidValue: "",                          // amount paid now; empty = 0 (nothing paid yet)
     identity: null,                         // the returning customer the person confirmed: { key, name, phone } (see debt.js)
     debts: [],                              // old debt to carry onto this invoice: [{ sourceInvoiceId, amount }]. Draft only until the sale is saved.
@@ -1705,8 +1706,29 @@ function saleCarried(sale) {
   return round2((sale.debts || []).reduce((sum, d) => sum + toNumber(d.amount), 0));
 }
 
+// Optional delivery information of a sale: { person, phone, fee } as an invoice keeps it, or null when the three boxes are empty.
+// The fee is paid by the customer as part of the invoice, but it is NOT part of calculateTotals (those are the products): it is
+// kept out of the sales figures and out of every refund (see Validation.refundableOf).
+function saleDelivery(sale) {
+  return Validation.cleanDeliveryInfo(sale.delivery);
+}
+
+function saleDeliveryFee(sale) {
+  const info = saleDelivery(sale);
+  return info ? info.fee : 0;
+}
+
+// What is wrong with a typed delivery fee ("" when it is fine or empty). Never silently counted as 0.
+function deliveryFeeProblem(delivery) {
+  const raw = String(delivery && delivery.fee != null ? delivery.fee : "").trim();
+  if (raw === "") return "";
+  const v = Number(raw);
+  return Number.isFinite(v) && v >= 0 ? "" : t("sell.deliveryFeeInvalid");
+}
+
+// What the customer owes on this sale: the products, the delivery fee and the old debt carried onto it.
 function saleDue(sale) {
-  return round2(calculateTotals(sale).total + saleCarried(sale));
+  return round2(calculateTotals(sale).total + saleDeliveryFee(sale) + saleCarried(sale));
 }
 
 // The carried-forward lines a sale will print, worked out from its draft debts (the ids are replaced by real
@@ -1767,7 +1789,7 @@ function adjustmentError() {
     if (!Number.isFinite(v) || v < 0) return t(negativeKey);
     if (type === "percent" && v > 100) return t(percentKey);
   }
-  return "";
+  return deliveryFeeProblem(s.delivery);
 }
 
 function validateSale() {
@@ -1869,6 +1891,9 @@ function clearSale() {
   $("custName2").value = "";
   $("discountValue").value = "";
   $("taxValue").value = "";
+  $("deliveryPerson").value = "";
+  $("deliveryPhone").value = "";
+  $("deliveryFee").value = "";
   $("amountPaid").value = "";
   $("discountType").value = "amount";
   $("taxType").value = "amount";
@@ -1957,7 +1982,8 @@ function soldLine(item, product) {
 function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
   const totals = calculateTotals(sale);
   const carried = draftCarriedLines(sale, data);
-  const paid = salePaid(sale, round2(totals.total + round2(carried.reduce((sum, l) => sum + l.amount, 0))));
+  const deliveryInfo = saleDelivery(sale);
+  const paid = salePaid(sale, round2(totals.total + (deliveryInfo ? deliveryInfo.fee : 0) + round2(carried.reduce((sum, l) => sum + l.amount, 0))));
   // When some line leaves something to collect later, the invoice keeps a delivery log (see Validation.deliveryDetail).
   const tracked = sale.items.some(leavesRemainder);
   const handedOver = [];
@@ -1986,6 +2012,9 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
     // Debt carried forward from older invoices: its own lines, never products. subtotal, discount, tax and total
     // above stay the figures of this purchase; what the customer owes is total + the carried lines.
     ...(carried.length ? { carriedForward: carried } : {}),
+    // Delivery information: only present when something was filled in, so invoices without a delivery keep their shape. The fee is not in
+    // subtotal / total (the products); the invoice asks the customer for total + fee (see Validation.amountDue).
+    ...(deliveryInfo ? { deliveryInfo } : {}),
     ...(tracked ? { deliveries: handedOver.length ? [{ id: uid(), type: "sale", date: dateIso, lines: handedOver }] : [] } : {}),
     subtotal: totals.subtotal,
     discount: totals.discount,
@@ -2185,6 +2214,7 @@ function rollbackSentences(plan, currency) {
     plan.stock.length ? t("rollback.stockBack", { list: rollbackStockList(plan) }) : t("rollback.noStock"),
     plan.notRestored.length ? t("rollback.notRestored", { names: plan.notRestored.join(", ") }) : "",
     plan.refund > 0 ? t("rollback.refund", { amount: money(plan.refund, currency) }) : t("rollback.noRefund"),
+    plan.deliveryFee > 0 ? t("rollback.feeNote", { fee: money(plan.deliveryFee, currency) }) : "",
   ].filter(Boolean);
 }
 
@@ -2352,6 +2382,12 @@ function invoiceAdjustInputs(inv) {
 
 const clean = (v) => String(v == null ? "" : v).trim();
 
+// The delivery information of a saved invoice as the Sell page boxes show it (text); empty boxes for an invoice without any.
+function deliveryInputs(inv) {
+  const info = Validation.deliveryInfoOf(inv);
+  return info ? { person: info.person, phone: info.phone, fee: info.fee > 0 ? String(info.fee) : "" } : { person: "", phone: "", fee: "" };
+}
+
 // A saved invoice line as a Sell page line, with the pricing it was sold with (never today's price):
 //   - sold at the product's price in the unit it is priced in (2,500 DA/m² for 10 boxes = 14.4 m²): the line shows
 //     2,500 DA/m² and bills 14.4 m², as the Sell page does;
@@ -2384,6 +2420,7 @@ function saleFromInvoice(inv) {
   sale.secondCustomer = { name: secondCustomerName(inv) };
   sale.sellerName = sellerNameOf(inv);   // shown, never changed: a saved invoice keeps the seller it was made with
   Object.assign(sale, invoiceAdjustInputs(inv));
+  sale.delivery = deliveryInputs(inv);
   sale.items = inv.items.map((item, index) => saleLineFromItem(item, index));
   return sale;
 }
@@ -2398,6 +2435,10 @@ function loadSaleIntoForm(sale) {
   $("discountType").value = sale.discountType;
   $("taxValue").value = sale.taxValue;
   $("taxType").value = sale.taxType;
+  const delivery = sale.delivery || { person: "", phone: "", fee: "" };
+  $("deliveryPerson").value = delivery.person;
+  $("deliveryPhone").value = delivery.phone;
+  $("deliveryFee").value = delivery.fee;
   $("amountPaid").value = sale.paidValue;
   $("sellerName").value = sale.sellerName || "";
   sellerDirty = false;
@@ -2476,6 +2517,7 @@ function editSignature(sale = state.sale) {
     customer: sale.customer, second: secondCustomerName(sale),
     items: sale.items.map((i) => [i.origIndex == null ? null : i.origIndex, i.productId, i.sellingUnit, i.qty, i.unitPrice, i.priceQty]),
     adjust: [sale.discountType, sale.discountValue, sale.taxType, sale.taxValue],
+    delivery: [sale.delivery.person, sale.delivery.phone, sale.delivery.fee],
   });
 }
 
@@ -2549,7 +2591,9 @@ function planInvoiceRollback(d, invoiceId, options = {}) {
   if (Validation.transferredOut(inv, transfers) > 0) {
     return { error: t(options.reason === "edit" ? "edit.cancelCarried" : "invoice.cannotDeleteCarried", { number, numbers: carriedToNumbers(inv, transfers) }) };
   }
-  const refund = Math.max(0, round2(Validation.netPaid(inv)));
+  // The delivery fee is never handed back: it belongs to the delivery person, not to the shop (see Validation.refundableOf).
+  const deliveryFee = Validation.deliveryFeeOf(inv);
+  const refund = Validation.refundableOf(inv);
   if (options.confirmedRefund !== undefined && Math.abs(options.confirmedRefund - refund) > 0.005) return { error: t("rollback.changed", { number }) };
 
   const stockChanges = new Map();
@@ -2576,13 +2620,14 @@ function planInvoiceRollback(d, invoiceId, options = {}) {
     currency: inv.currency || (d.settings || state.settings).currency,
     status: Validation.paymentDetail(inv, transfers).cls,
     total: toNumber(inv.total), paid: Validation.paidTotal(inv), alreadyRefunded: Validation.refundedTotal(inv), refund,
+    ...(deliveryFee > 0 ? { deliveryFee } : {}),
     payments: (Array.isArray(inv.payments) ? inv.payments : []).map((p) => ({ amount: p.amount, timestamp: p.timestamp })),
     items: inv.items.map((item) => ({ name: invoiceItemLabel(item), qty: item.qty, unit: item.sellingUnit || null })),
     stock,
     ...(notRestored.length ? { notRestored } : {}),
     ...(Validation.isCancelled(inv) ? { wasCancelled: true } : {}),
   };
-  return { stockChanges, stock, notRestored, refund, entry };
+  return { stockChanges, stock, notRestored, refund, deliveryFee, entry };
 }
 
 // Writes a plan on the data draft `d`: the invoice and the debt records that carried debt into it are removed, the stock goes back and
@@ -2741,6 +2786,9 @@ function planInvoiceEdit(d, invoiceId, edit) {
     if (!Number.isFinite(v) || v < 0) return { error: t(negativeKey) };
     if (type === "percent" && v > 100) return { error: t(percentKey) };
   }
+  const feeProblem = deliveryFeeProblem(sale.delivery);
+  if (feeProblem) return { error: feeProblem };
+  const deliveryInfo = Validation.cleanDeliveryInfo(sale.delivery);
   const before = invoiceAdjustInputs(inv);
   // Nothing typed (or 0) is the same whichever type is selected; otherwise the type and the number must both match.
   const sameAdjust = (type, value, beforeType, beforeValue) => (toNumber(value) === 0 && toNumber(beforeValue) === 0) || (type === beforeType && toNumber(value) === toNumber(beforeValue));
@@ -2750,6 +2798,8 @@ function planInvoiceEdit(d, invoiceId, edit) {
   const updated = { ...inv, customer: editedCustomer(inv, sale), items };
   const second = secondCustomerName(sale);
   if (second) updated.secondCustomer = { name: second }; else delete updated.secondCustomer;
+  // The delivery information as typed now: it replaces the saved one, and an invoice whose boxes are all empty has none.
+  if (deliveryInfo) updated.deliveryInfo = deliveryInfo; else delete updated.deliveryInfo;
 
   if (linesChanged || adjustChanged) {
     const totals = calculateTotals({ items, ...adjust });
@@ -2789,6 +2839,7 @@ function planInvoiceEdit(d, invoiceId, edit) {
   // ----- the history: this edit's entry, added to the earlier ones -----
   updated.edits = [...(Array.isArray(inv.edits) ? inv.edits : []), {
     at: now, totalBefore: inv.total, totalAfter: updated.total, paid,
+    ...(Validation.deliveryFeeOf(inv) !== Validation.deliveryFeeOf(updated) ? { deliveryFeeBefore: Validation.deliveryFeeOf(inv), deliveryFeeAfter: Validation.deliveryFeeOf(updated) } : {}),
     ...(result.refundDue > 0 ? { refundDue: result.refundDue } : {}),
     ...(lineLog.length ? { lines: lineLog } : {}),
     ...(stockLog.length ? { stock: stockLog } : {}),
@@ -2943,9 +2994,12 @@ function renderEditTotals() {
   $("tSubtotal").textContent = money(toNumber(shown.subtotal), cur);
   $("tDiscount").textContent = money(toNumber(shown.discount), cur);
   $("tTax").textContent = money(toNumber(shown.tax), cur);
+  const fee = Validation.deliveryFeeOf(shown);
+  $("tDeliveryRow").hidden = fee <= 0;
+  $("tDelivery").textContent = money(fee, cur);
   $("tTotalLabel").textContent = I18n.t(pay.carried > 0 ? "sell.totalPurchase" : plan.deleted ? "edit.originalTotal" : "edit.newDue");
   $("tTotalRow").classList.toggle("grand", pay.carried <= 0);
-  $("tTotal").textContent = money(toNumber(shown.total), cur);
+  $("tTotal").textContent = money(round2(toNumber(shown.total) + fee), cur);   // the final total: products + delivery fee
   $("tCarriedRow").hidden = pay.carried <= 0;
   $("tCarried").textContent = money(pay.carried, cur);
   $("tDueRow").hidden = pay.carried <= 0;
@@ -3003,10 +3057,10 @@ function saveInvoiceEdit(options = {}) {
     if (plan.deleted) {
       const inv = state.invoices.find((i) => i.id === edit.id);
       const question = t("edit.cancelConfirm", {
-        number: inv.invoiceNumber, total: money(toNumber(inv.total), inv.currency),
+        number: inv.invoiceNumber, total: money(round2(toNumber(inv.total) + Validation.deliveryFeeOf(inv)), inv.currency),
         paid: money(Validation.netPaid(inv), inv.currency), refund: money(plan.refund, inv.currency),
         stock: plan.stock.length ? rollbackStockList(plan) : t("rollback.noStockShort"),
-      });
+      }) + (plan.deliveryFee > 0 ? "\n" + t("rollback.feeNote", { fee: money(plan.deliveryFee, inv.currency) }) : "");
       if (!confirm(question)) return;   // nothing was changed
       input.confirmedRefund = plan.refund;
     }
@@ -3351,14 +3405,17 @@ function renderTotals() {
   $("editSave").classList.toggle("danger", false);
   const totals = calculateTotals(state.sale);
   const carried = saleCarried(state.sale);
-  const due = round2(totals.total + carried);
+  const fee = saleDeliveryFee(state.sale);
+  const due = round2(totals.total + fee + carried);
   $("tSubtotal").textContent = money(totals.subtotal);
   $("tDiscount").textContent = money(totals.discount);
   $("tTax").textContent = money(totals.tax);
+  $("tDeliveryRow").hidden = fee <= 0;
+  $("tDelivery").textContent = money(fee);
   // With debt carried forward the Total is the products only, followed by the carried debt and the total due.
   $("tTotalLabel").textContent = I18n.t(carried > 0 ? "sell.totalPurchase" : "sell.total");
   $("tTotalRow").classList.toggle("grand", carried <= 0);
-  $("tTotal").textContent = money(totals.total);
+  $("tTotal").textContent = money(round2(totals.total + fee));   // the final total: products + delivery fee
   $("tCarriedRow").hidden = carried <= 0;
   $("tCarried").textContent = money(carried);
   $("tDueRow").hidden = carried <= 0;
@@ -3417,6 +3474,21 @@ function invoiceParts(inv) {
   const pay = paymentInfo(inv);
   const cancelled = Validation.isCancelled(inv);
   const hasItems = inv.items.length > 0;
+  // Optional delivery information: a section of its own and a line in the summary; the fee is part of the final total.
+  // Nothing is shown (no section, no line) when the invoice has none. `inv.total` stays the products only.
+  const deliveryInfo = Validation.deliveryInfoOf(inv);
+  const deliveryFee = deliveryInfo ? deliveryInfo.fee : 0;
+  const purchaseTotal = round2(toNumber(inv.total) + deliveryFee);
+  const deliveryBlock = deliveryInfo
+    ? `<section class="inv-delivery"><h3>${esc(t("inv.deliveryHeading"))}</h3><div class="inv-delivery-lines">${
+        deliveryInfo.person ? `<div><span class="label">${esc(t("inv.deliveryPerson"))}</span> ${esc(deliveryInfo.person)}</div>` : ""
+      }${
+        deliveryInfo.phone ? `<div><span class="label">${esc(t("inv.deliveryPhone"))}</span> ${esc(ltr(deliveryInfo.phone))}</div>` : ""
+      }${
+        deliveryFee > 0 ? `<div><span class="label">${esc(t("inv.deliveryFee"))}</span> ${esc(cash(deliveryFee))}</div>` : ""
+      }</div></section>`
+    : "";
+  const deliveryRow = deliveryFee > 0 ? `<tr><td>${esc(t("inv.deliveryFee"))}</td><td>${esc(cash(deliveryFee))}</td></tr>` : "";
   // Debt carried onto this invoice from older ones: separate lines under the products, never mixed into them.
   const carried = Validation.carriedLines(inv);
   const carriedBlock = carried.length
@@ -3425,10 +3497,10 @@ function invoiceParts(inv) {
       }</tbody></table></section>`
     : "";
   const totalRows = carried.length
-    ? `<tr class="purchase"><td>${esc(t("inv.totalPurchase"))}</td><td>${esc(cash(toNumber(inv.total)))}</td></tr>
+    ? `<tr class="purchase"><td>${esc(t("inv.totalPurchase"))}</td><td>${esc(cash(purchaseTotal))}</td></tr>
       <tr><td>${esc(t("inv.carriedTotal"))}</td><td>${esc(cash(pay.carried))}</td></tr>
       <tr class="grand"><td>${esc(t("inv.totalDue"))}</td><td>${esc(cash(pay.due))}</td></tr>`
-    : `<tr class="grand"><td>${esc(t(cancelled ? "inv.cancelledTotal" : "inv.grandTotal"))}</td><td>${esc(cash(toNumber(inv.total)))}</td></tr>`;
+    : `<tr class="grand"><td>${esc(t(cancelled ? "inv.cancelledTotal" : "inv.grandTotal"))}</td><td>${esc(cash(purchaseTotal))}</td></tr>`;
   // On an older invoice whose balance moved to a newer one, the original total is untouched and the move is shown as its own line.
   const movedRow = pay.transferredOut > 0
     ? `<tr class="moved"><td>${esc(t("inv.transferredOut", { numbers: carriedToNumbers(inv) }))}</td><td>${esc(cash(pay.transferredOut))}</td></tr>`
@@ -3450,6 +3522,7 @@ function invoiceParts(inv) {
         <tr><td>${esc(t("inv.subtotal"))}</td><td>${esc(cash(toNumber(inv.subtotal)))}</td></tr>
         <tr><td>${esc(t("inv.discount"))}${pct(inv.discountPercent)}</td><td>${esc(cash(toNumber(inv.discount)))}</td></tr>
         <tr><td>${esc(t("inv.tax"))}${pct(inv.taxPercent)}</td><td>${esc(cash(toNumber(inv.tax)))}</td></tr>
+        ${deliveryRow}
         ${totalRows}
         ${paidRows}
       </table>
@@ -3504,6 +3577,7 @@ function invoiceParts(inv) {
     cancelBanner,
     rows,
     carried: carriedBlock,
+    deliveryInfo: deliveryBlock,
     summary,
     payments,
     refunds,
@@ -3534,6 +3608,7 @@ function invoiceHtml(inv) {
     ${p.cancelBanner}
     ${invoiceTableHtml(p, p.rows)}
     ${p.carried}
+    ${p.deliveryInfo}
     ${p.summary}
     ${p.payments ? invoiceSectionHtml(p.payments, p.payments.entries, false) : ""}
     ${p.refunds ? invoiceSectionHtml(p.refunds, p.refunds.entries, false) : ""}
@@ -3563,6 +3638,7 @@ function printItems(inv) {
     { kind: "flow", lead: "", entries: p.rows, build: (rows) => invoiceTableHtml(p, rows) },
   ];
   if (p.carried) items.push({ kind: "block", html: p.carried });
+  if (p.deliveryInfo) items.push({ kind: "block", html: p.deliveryInfo });
   items.push({ kind: "block", html: p.summary });
   for (const section of [p.payments, p.refunds, p.deliveries]) {
     if (section) items.push({ kind: "flow", lead: section.lead, entries: section.entries, build: (entries, continued) => invoiceSectionHtml(section, entries, continued) });
@@ -5319,6 +5395,16 @@ function bindEvents() {
   for (const [id, key] of Object.entries(adjustFields)) {
     $(id).addEventListener("input", () => {
       state.sale[key] = $(id).value;
+      showError("saleError", adjustmentError() || paidError());
+      refreshLive();
+    });
+  }
+
+  // Delivery information: plain data entry. Typing updates the totals and the preview; nothing is saved until the sale (or the edit) is.
+  const deliveryFields = { deliveryPerson: "person", deliveryPhone: "phone", deliveryFee: "fee" };
+  for (const [id, key] of Object.entries(deliveryFields)) {
+    $(id).addEventListener("input", () => {
+      state.sale.delivery[key] = $(id).value;
       showError("saleError", adjustmentError() || paidError());
       refreshLive();
     });

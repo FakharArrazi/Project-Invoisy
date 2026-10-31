@@ -1650,7 +1650,18 @@
     "led.type.refund": "Remboursement fournisseur",
     "led.type.allocation": "Acompte appliqué",
     "pur.log.advanceApplied": "Acompte appliqué : {amount}",
-    "pur.log.advanceReversed": "Acompte libéré : {amount}"
+    "pur.log.advanceReversed": "Acompte libéré : {amount}",
+    "sell.deliveryLegend": "Informations de livraison",
+    "sell.deliveryPerson": "Nom du livreur",
+    "sell.deliveryPhone": "Numéro de téléphone",
+    "sell.deliveryFee": "Frais de livraison",
+    "sell.deliveryFeeInvalid": "Les frais de livraison doivent être un nombre supérieur ou égal à 0.",
+    "inv.deliveryHeading": "LIVRAISON",
+    "inv.deliveryPerson": "Livreur",
+    "inv.deliveryPhone": "Téléphone",
+    "inv.deliveryFee": "Frais de livraison",
+    "problem.badDeliveryInfo": "informations de livraison non valides",
+    "rollback.feeNote": "Frais de livraison conservés, jamais remboursés : {fee}"
   };
 
   for (const key of Object.keys(messages)) messages[key] = typo(messages[key]);
