@@ -292,8 +292,10 @@ test("sell search lists nothing until something is typed, then the closest match
   assert.equal(api.findMatches("zzz").length, 0);
 });
 
-test("sell search shows at most 8 results", () => {
+// This used to say "at most 8 results". That cap was the bug: a product that matched was silently left out of the list (see
+// tests/sell-search.test.js). Every match is listed now; the list scrolls.
+test("sell search lists every matching product, however many there are", () => {
   const { api } = loadProductApi();
   api.applyData({ products: Array.from({ length: 12 }, (_, i) => api.normalizeProduct({ id: "m" + i, name: "Tile " + i, sellingPrice: 10, priceUnit: "piece", stock: 5 })), invoices: [], settings: { ...api.DEFAULT_SETTINGS }, counter: 0, lastSaved: "" });
-  assert.equal(api.findMatches("tile").length, 8);
+  assert.equal(api.findMatches("tile").length, 12);
 });

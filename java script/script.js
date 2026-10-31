@@ -912,11 +912,53 @@ function findProduct(id, data = state) {
   return data.products.find((p) => p.id === id);
 }
 
-// The products matching every word typed (name, manufacturer, tile size, SKU, category), in stored order.
+/* ---------- Product search (the Sell page box and the Stock filter share it) ----------
+   Text is only normalized to be COMPARED: nothing stored (name, manufacturer, type) is ever changed. */
+
+// Search text: lower case, accents removed (é → e, ï → i, à → a), every run of spaces or punctuation (a hyphen, a comma) one
+// space, and a tile size written 60*60, 60x60 or 60 × 60 the same way ("60x60"). Letters of any script are kept (Arabic works).
+function normalizeSearchText(value) {
+  return String(value == null ? "" : value)
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/(\d)\s*[x×*]\s*(?=\d)/g, "$1x")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+// The words typed, normalized: "  Pâte à  JOINT " → ["pate", "a", "joint"].
+function searchTerms(query) {
+  return normalizeSearchText(query).split(" ").filter(Boolean);
+}
+
+// The words a stored product type is known by, in EVERY language ("PateAJoint" → "Pâte à joint Pâte à joint ..."), so a type is found
+// whichever language the app is in. The type itself stays what it was: the existing productType value is the only type there is.
+// A type this version does not know (it never normalizes to one) is searched as it is written.
+const typeSearchCache = new Map();
+function productTypeSearchText(type) {
+  const value = String(type == null ? "" : type).trim();
+  if (!value) return "";
+  const known = Validation.normalizeProductType(value);
+  const key = known || value;
+  if (!typeSearchCache.has(key)) {
+    const words = known ? I18n.languages().map((l) => I18n.textIn(l.code, "productType." + known)) : [value];
+    typeSearchCache.set(key, words.filter(Boolean).join(" "));
+  }
+  return typeSearchCache.get(key);
+}
+
+// Everything a search looks in, as one normalized text: name, manufacturer, tile size, SKU, category and product type. A field an
+// older product does not have is simply left out (it never turns into the word "undefined").
+function productSearchText(p) {
+  const parts = [p.name, p.manufacturer, p.tileSize, p.sku, p.category, productTypeSearchText(p.productType)];
+  return normalizeSearchText(parts.filter((v) => v != null && v !== "").join(" "));
+}
+
+// The products matching EVERY word typed, each word somewhere in the product's search text, in stored order.
 function filterProducts(query) {
-  const terms = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = searchTerms(query);
   return state.products.filter((p) => {
-    const haystack = (p.name + " " + (p.manufacturer || "") + " " + p.tileSize + " " + p.sku + " " + p.category).toLowerCase();
+    const haystack = productSearchText(p);
     return terms.every((t) => haystack.includes(t));
   });
 }
@@ -974,24 +1016,23 @@ function sortProducts(list, key) {
 }
 
 // Sell page search: nothing is listed until the user types. Best matches first:
-// names that start with the text, then names with a word that starts with it, then the rest.
-const MAX_SEARCH_RESULTS = 8;
-
+// names that start with the text, then names with a word that starts with it, then the rest (a product found only through its
+// manufacturer or type). EVERY match is listed: the list scrolls, and ordering decides what is seen first, never what is dropped.
 function findMatches(query) {
-  const terms = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = searchTerms(query);
   if (terms.length === 0) return [];
   const rank = (p) => {
-    const name = p.name.toLowerCase();
+    const name = normalizeSearchText(p.name);
+    const words = name.split(" ");
     return terms.reduce((sum, t) => {
       if (name.startsWith(t)) return sum;
-      if (name.split(/[\s\-—*×x]+/).some((w) => w.startsWith(t))) return sum + 1;
+      if (words.some((w) => w.startsWith(t))) return sum + 1;
       return sum + 2;
     }, 0);
   };
   return searchProducts(query)
     .map((p) => ({ p, score: rank(p) }))
     .sort((a, b) => a.score - b.score)   // stable: ties stay alphabetical
-    .slice(0, MAX_SEARCH_RESULTS)
     .map((m) => m.p);
 }
 
@@ -5529,6 +5570,9 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     productProblem,
     productLabel,
     findMatches,
+    normalizeSearchText,
+    searchTerms,
+    renderResults,
     priceLabel,
     buildInvoiceData,
     calculateTotals,

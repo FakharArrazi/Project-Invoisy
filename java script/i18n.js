@@ -79,5 +79,13 @@
     return t(key + "." + form, { ...params, n: count });
   }
 
-  globalThis.I18n = { register, has, language, locale, dir, languages, setLanguage, t, tn };
+  // The text of a key in one particular language, whichever language is shown now ("" when that language does not have it).
+  // Used to search a stored value by its words in every language (a product type is stored as "PateAJoint" and shown as
+  // "Pâte à joint", "Faience" / "Faïence" ...), without storing anything extra.
+  function textIn(code, key) {
+    const own = packs[code] && packs[code].messages[key];
+    return own !== undefined ? own : "";
+  }
+
+  globalThis.I18n = { register, has, language, locale, dir, languages, setLanguage, t, tn, textIn };
 })();
