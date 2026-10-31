@@ -74,9 +74,10 @@
     };
   }
 
-  // options: { prefix, holder, products(), editing(), stockFromPurchase, onError(message) }
+  // options: { prefix, holder, products(), editing(), productTypes(), stockFromPurchase, onError(message) }
   //   holder: where the price rows are kept (the Stock page keeps them in its state)
   //   products(): the catalogue the form is checked against; editing(): the product being edited, if any
+  //   productTypes(): the product types to offer (the list managed in Settings -> Product types); the built-in types when omitted
   //   stockFromPurchase: a product made by a purchase starts at 0, the goods received add to it (so it is not typed)
   //   onError(message): where a message about the form goes ("" clears it)
   function create(options) {
@@ -182,6 +183,43 @@
       if (select) select.focus();
     }
 
+    /* ---------- Product type choices ---------- */
+
+    // The types on offer, as stored values: the list from Settings (or the built-in types when the form was given none).
+    const offeredTypes = () => (options.productTypes ? options.productTypes() : Validation.PRODUCT_TYPES).map(Validation.normalizeProductType).filter(Boolean);
+
+    // What the Product type list holds: the types on offer and, only while a product is being edited, the type that product
+    // already has when it is no longer on offer (so editing it never loses or changes its type). Types taken out of the Settings
+    // list are not offered to a new product. A built-in type is translated with the page (i18n); any other is shown as typed.
+    function typeChoices() {
+      const offered = offeredTypes();
+      const own = options.editing ? options.editing() : null;
+      const kept = own ? Validation.normalizeProductType(own.productType) : "";
+      const choices = offered.map((type) => ({ value: type, label: Validation.productTypeLabel(type), i18n: Validation.isBuiltInProductType(type) }));
+      if (kept && !offered.includes(kept)) choices.push({ value: kept, label: t("stock.typeNotInList", { type: Validation.productTypeLabel(kept) }), i18n: false });
+      return choices;
+    }
+
+    function typeOptionsHtml(choices, selected) {
+      return `<option value=""${selected ? "" : " selected"} data-i18n="stock.productTypeNone">${esc(t("stock.productTypeNone"))}</option>` +
+        choices.map((c) => `<option value="${esc(c.value)}"${selected === c.value ? " selected" : ""}${c.i18n ? ` data-i18n="productType.${esc(c.value)}"` : ""}>${esc(c.label)}</option>`).join("");
+    }
+
+    // Puts the types now on offer into the Product type list of a form that is already on the page, keeping what is chosen when it
+    // is still a choice (otherwise None). `selected` says what to keep when the caller is about to fill the form with a product.
+    function refreshTypes(selected) {
+      const select = el("productType");
+      if (!select) return;
+      const current = selected === undefined ? select.value : selected;
+      const choices = typeChoices();
+      const signature = JSON.stringify(choices.map((c) => [c.value, c.label]));
+      if (select.dataset.typeChoices !== signature) {
+        select.innerHTML = typeOptionsHtml(choices, current);
+        select.dataset.typeChoices = signature;
+      }
+      select.value = choices.some((c) => c.value === current) ? current : "";
+    }
+
     /* ---------- Markup ---------- */
 
     // The form's fields, filled with `values` (a saved product, or what readRaw() gave; blank when omitted).
@@ -192,8 +230,7 @@
       holder.priceRows = raw.prices.map((p) => newRow(p.unit, p.price));
       const attr = (key) => (raw[key] === "" ? "" : ` value="${esc(raw[key])}"`);
       const stockUnits = STOCK_UNITS.map((u) => `<option value="${u}"${raw.stockUnit === u ? " selected" : ""} data-i18n="stockunit.${u}">${esc(t("stockunit." + u))}</option>`).join("");
-      const typeOptions = `<option value=""${raw.productType ? "" : " selected"} data-i18n="stock.productTypeNone">${esc(t("stock.productTypeNone"))}</option>` +
-        Validation.PRODUCT_TYPES.map((type) => `<option value="${esc(type)}"${raw.productType === type ? " selected" : ""} data-i18n="productType.${esc(type)}">${esc(t("productType." + type))}</option>`).join("");
+      const typeOptions = typeOptionsHtml(typeChoices(), raw.productType);
       const touched = given && raw.stockUnit ? ' data-touched="1"' : "";   // an edit never changes the unit on its own
       const cover = needsCoverage();
       return `<div class="product-fields" data-product-form="${esc(prefix)}">
@@ -289,6 +326,7 @@
     function fill(values) {
       const given = values !== undefined && values !== null;
       const raw = toRaw(given ? values : null);
+      refreshTypes(raw.productType);   // first, so a type that is no longer on offer but belongs to this product is a choice to select
       for (const key of Object.keys(FIELD_SUFFIX)) el(key).value = raw[key];
       if (fromPurchase) el("stock").value = "0";
       if (given && raw.stockUnit) el("stockUnit").dataset.touched = "1";   // an edit never changes the unit on its own
@@ -318,6 +356,7 @@
       if (asNew) raw.stock = "0";
       const checked = Validation.readProductInput(raw, {
         products: options.products ? options.products() : [],
+        productTypes: options.productTypes ? options.productTypes() : undefined,
         editing: asNew ? null : (options.editing ? options.editing() : null),
         stockFromPurchase: fromPurchase,
       });
@@ -368,7 +407,7 @@
     }
 
     const instance = {
-      prefix, ids, html, read, readRaw, fill, blank, mark, clearInvalid, handle,
+      prefix, ids, html, read, readRaw, fill, blank, mark, clearInvalid, handle, refreshTypes,
       get rows() { return rows(); },
       setRows, addRow, removeRow, setRowUnit, renderRows, nextUnit, syncCoverageMark,
     };

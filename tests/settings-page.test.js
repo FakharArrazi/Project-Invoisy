@@ -24,15 +24,16 @@ test("every control of the Settings page is there once, with the id the code loo
     "autoDbRevision", "autoBackedRevision", "autoError", "autoChoose", "autoGrant", "autoRetry", "settingsForm", "sName", "sAddress",
     "sPhonesLabel", "sPhones", "addPhone", "sStaffLabel", "sStaff", "addStaff", "sEmail", "sCurrency", "paperA4", "paperA5",
     "currencyUnitDinars", "currencyUnitCentimes", "logoPreview", "logoFile", "chooseLogo", "removeLogo", "logoError", "loadDemo",
+    "productTypesPanel", "productTypeForm", "productTypeInput", "addProductType", "productTypeError", "productTypeList", "productTypesEmpty",
   ]) {
     assert.ok(ids.includes(id), `${id} is on the Settings page`);
   }
 });
 
-test("the page has a visible heading and eight panels in the Stock page's style", () => {
+test("the page has a visible heading and nine panels in the Stock page's style", () => {
   assert.match(settings, /<header class="stock-header">\s*<h1 class="stock-title" data-i18n="nav\.settings">Settings<\/h1>/);
   assert.doesNotMatch(settings, /sr-only/, "the heading is no longer hidden");
-  assert.equal((settings.match(/<div class="panel settings-panel/g) || []).length, 8);
+  assert.equal((settings.match(/<div class="panel settings-panel/g) || []).length, 9);
   assert.equal((settings.match(/<div class="panel(?! settings-panel)/g) || []).length, 0, "every panel has the new style");
 });
 

@@ -75,7 +75,7 @@ with sync_playwright() as p:
     check(abs(page.locator("#exportBackup").bounding_box()["height"] - 42) < 1, "main buttons are 42 px tall, as the Stock page's")
     check(abs(page.locator("#sName").bounding_box()["height"] - 42) < 1, "text boxes are 42 px tall")
     check(abs(page.locator("#sLanguage").bounding_box()["height"] - 42) < 1, "the language list is 42 px tall")
-    check(page.locator("#view-settings .settings-panel").count() == 8, "the eight settings panels are all there")
+    check(page.locator("#view-settings .settings-panel").count() == 9, "the nine settings panels are all there")
     check(page.inner_text("#dataState").strip() == "Ready" and "state-ready" in page.get_attribute("#dataState", "class"), "the database status shows Ready in green")
     check(page.is_visible("#autoBackupPanel") and page.is_visible("#autoChoose"), "the automatic backup panel and its button are there")
     if SHOTS:

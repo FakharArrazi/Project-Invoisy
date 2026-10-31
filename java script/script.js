@@ -252,11 +252,9 @@ function invoiceItemLabel(item) {
 
 // A product type in the language shown now: Dalle de sol, Faience / Faïence, Porcelain / Porcelaine, Rock / Pierre, Évier, Ciment-colle, Pâte à joint.
 // A type saved under an old spelling (Daldosol, Daltosol) reads as the current one; "" when the product has no type.
+// A type the person added in Settings (Électricité ...) has no translation: it is shown as it was typed.
 function productTypeLabel(type) {
-  const value = String(type || "").trim();
-  if (!value) return "";
-  const known = Validation.normalizeProductType(value);
-  return known ? t("productType." + known) : value;
+  return Validation.productTypeLabel(type);
 }
 
 // The type under the product name, in the same small grey style as the converted quantity ("1,42 m²").
@@ -933,18 +931,16 @@ function searchTerms(query) {
 
 // The words a stored product type is known by, in EVERY language ("PateAJoint" → "Pâte à joint Pâte à joint ..."), so a type is found
 // whichever language the app is in. The type itself stays what it was: the existing productType value is the only type there is.
-// A type this version does not know (it never normalizes to one) is searched as it is written.
+// A type the person added in Settings has no translations: it is searched as it was typed.
 const typeSearchCache = new Map();
 function productTypeSearchText(type) {
-  const value = String(type == null ? "" : type).trim();
+  const value = Validation.normalizeProductType(type);
   if (!value) return "";
-  const known = Validation.normalizeProductType(value);
-  const key = known || value;
-  if (!typeSearchCache.has(key)) {
-    const words = known ? I18n.languages().map((l) => I18n.textIn(l.code, "productType." + known)) : [value];
-    typeSearchCache.set(key, words.filter(Boolean).join(" "));
+  if (!typeSearchCache.has(value)) {
+    const words = Validation.isBuiltInProductType(value) ? I18n.languages().map((l) => I18n.textIn(l.code, "productType." + value)) : [value];
+    typeSearchCache.set(value, words.filter(Boolean).join(" "));
   }
-  return typeSearchCache.get(key);
+  return typeSearchCache.get(value);
 }
 
 // Everything a search looks in, as one normalized text: name, manufacturer, tile size, SKU, category and product type. A field an
@@ -1043,6 +1039,7 @@ const stockForm = ProductForm.create({
   holder: state,
   products: () => state.products,
   editing: () => (state.editingId ? findProduct(state.editingId) : null),
+  productTypes: () => Validation.productTypesOf(state.settings),   // the list managed in Settings -> Product types
   onError: (message) => showError("productError", message),
 });
 
@@ -1140,8 +1137,7 @@ function productSuggestions() {
 }
 
 function suggestionHtml(p, typedSize) {
-  const type = Validation.normalizeProductType(p.productType);
-  const details = [p.tileSize, type ? t("productType." + type) : "", p.manufacturer].filter(Boolean);
+  const details = [p.tileSize, Validation.productTypeLabel(p.productType), p.manufacturer].filter(Boolean);
   const same = typedSize && Calc.normalizeTileSize(p.tileSize) === typedSize;
   return `<li class="similar-item" data-id="${esc(p.id)}">` +
     `<div class="similar-text"><strong>${esc(p.name)}</strong>` +
@@ -4121,6 +4117,85 @@ function setStaffPhone(rowId, phoneId, value) {
 // What is typed, as the list that is saved: blank boxes, repeated numbers and people with neither name nor number left out.
 const typedStaff = () => Validation.cleanStaff(state.staffRows.map((p) => ({ name: p.name, phones: p.phones.map((x) => x.value) })));
 
+/* ---------- The product types (Settings -> Product types) ----------
+   The list the Product type field of the product form offers. Unlike the business details above it has no Save button: Add and
+   Remove save at once (like the language and the paper size) and every product form shows the new list straight away.
+   Only settings.productTypes is written. No product, invoice or stock level is touched, so a type taken out of the list stays on
+   the products that already carry it (and on the invoices already made). */
+
+// The list as the screen shows it, each type in the language shown now.
+function renderProductTypes() {
+  const list = Validation.productTypesOf(state.settings);
+  $("productTypeList").innerHTML = list.map((value) => {
+    const label = Validation.productTypeLabel(value);
+    return `<li class="type-row" data-type="${esc(value)}">` +
+      `<span class="type-name">${esc(label)}</span>` +
+      `<button type="button" class="btn small" data-action="remove-type" aria-label="${esc(t("settings.removeProductTypeN", { type: label }))}">${esc(t("common.remove"))}</button>` +
+      `</li>`;
+  }).join("");
+  $("productTypesEmpty").hidden = list.length > 0;
+}
+
+// The sentence for a refused type ({ error } from Validation.addProductType).
+function productTypeProblemText(problem) {
+  if (problem.error === "empty") return t("settings.productTypeEmpty");
+  if (problem.error === "tooLong") return t("settings.productTypeTooLong", { max: Validation.MAX_PRODUCT_TYPE_LENGTH });
+  if (problem.error === "tooMany") return t("settings.productTypeTooMany", { max: Validation.MAX_PRODUCT_TYPES });
+  return t("settings.productTypeDuplicate", { type: Validation.productTypeLabel(problem.value) });
+}
+
+// Adds typed text to the list. Resolves { value } when it was added, or { error: the sentence to show } when it was not
+// (empty, too long, already there under another capital letter, accent or spacing, ...). Nothing is saved on an error.
+async function addProductTypeToSettings(text) {
+  const first = Validation.addProductType(Validation.productTypesOf(state.settings), text);
+  if (first.error) return { error: productTypeProblemText(first) };
+  const r = await commit((d) => {
+    // Checked again against the data about to be saved (a change made in another window may have come first).
+    const again = Validation.addProductType(Validation.productTypesOf(d.settings), text);
+    if (again.error) return { error: productTypeProblemText(again) };
+    d.settings = { ...d.settings, productTypes: again.list };
+    return { value: again.value };
+  });
+  if (r.error) return { error: r.error };
+  renderAll();
+  return { value: r.value };
+}
+
+// Takes a type out of the list after asking. The question says how many products use it; they keep it either way.
+// Resolves { removed }, { cancelled } or { error }.
+async function removeProductTypeFromSettings(value) {
+  if (!Validation.productTypesOf(state.settings).includes(value)) return { cancelled: true };
+  const label = Validation.productTypeLabel(value);
+  const used = Validation.countProductsOfType(state.products, value);
+  const question = used ? tn("settings.productTypeRemoveUsed", used, { type: label }) : t("settings.productTypeRemoveConfirm", { type: label });
+  if (!confirm(question)) return { cancelled: true };
+  const r = await commit((d) => {
+    d.settings = { ...d.settings, productTypes: Validation.removeProductType(Validation.productTypesOf(d.settings), value) };
+  });
+  if (r.error) return { error: r.error };
+  renderAll();
+  return { removed: value };
+}
+
+// The Add button (and Enter in the box).
+function submitProductType() {
+  return guard(async () => {
+    const input = $("productTypeInput");
+    const r = await addProductTypeToSettings(input.value);
+    showError("productTypeError", r.error || "");
+    if (!r.error) input.value = "";
+    input.focus();
+  });
+}
+
+function clickRemoveProductType(value) {
+  return guard(async () => {
+    const r = await removeProductTypeFromSettings(value);
+    showError("productTypeError", r.error || "");
+    if (r.removed !== undefined) $("productTypeInput").focus();   // the button that was pressed is gone
+  });
+}
+
 // Save Settings: the business details, with every phone number typed (blank rows and repeats of the same number left out).
 function saveBusinessSettings() {
   return guard(async () => {
@@ -4491,6 +4566,8 @@ function renderEverything() {
   applyLanguage();
   renderProductFormMode();
   stockForm.renderRows();
+  stockForm.refreshTypes();   // the Product type list follows Settings -> Product types (and the language) at once
+  renderProductTypes();
   applyPaperSize();
   applyCurrencyUnit();
   applyCurrency();
@@ -5494,6 +5571,18 @@ function bindEvents() {
     if (box) box.focus();
   });
 
+  // Product types: Add and Remove save at once (see renderProductTypes).
+  $("productTypeForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitProductType();
+  });
+  $("productTypeInput").addEventListener("input", () => showError("productTypeError", ""));
+  $("productTypeList").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-action='remove-type']");
+    const row = btn && btn.closest("[data-type]");
+    if (row) clickRemoveProductType(row.dataset.type);
+  });
+
   // Language
   $("sLanguage").addEventListener("change", () => saveLanguage($("sLanguage").value));
 
@@ -5670,6 +5759,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     sellerNameOf, invoiceFooterHtml, renderSellerName, saveSellerName, onSellerInput, submitSellerName, updateSellerButton,
     invoiceHeadHtml, renderStaffRows, addStaffRow, removeStaffRow, setStaffName, addStaffPhone, removeStaffPhone, setStaffPhone,
     getStaffRows: () => state.staffRows,
+    renderProductTypes, addProductTypeToSettings, removeProductTypeFromSettings, submitProductType, clickRemoveProductType, productTypeLabel,
   });
 } else {
   bindEvents();

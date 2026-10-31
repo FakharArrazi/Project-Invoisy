@@ -457,6 +457,23 @@
         <p class="muted small" data-i18n="settings.currencyDisplayNote">Changes only how amounts are shown on invoices (1 DA = 100 centimes). Saved prices, totals and payments stay the same.</p>
       </div>
         </div>
+        <!-- What you sell: the choices of the Product type field in the product form -->
+      <div class="panel settings-panel" id="productTypesPanel">
+        <h2 data-i18n="settings.productTypes">Product types</h2>
+        <p class="muted small" data-i18n="settings.productTypesNote">The choices offered in the Product type field when you add or edit a product. Removing a type here never changes products that already have it.</p>
+        <form class="type-add" id="productTypeForm" novalidate>
+          <div class="field">
+            <label for="productTypeInput" data-i18n="settings.productTypeNew">New product type</label>
+            <div class="type-add-line">
+              <input type="text" id="productTypeInput" maxlength="60" autocomplete="off" placeholder="e.g. Électricité" data-i18n-placeholder="settings.productTypePlaceholder">
+              <button type="submit" class="btn primary" id="addProductType" data-i18n="settings.addProductType">Add type</button>
+            </div>
+          </div>
+          <p class="error" id="productTypeError" role="alert"></p>
+        </form>
+        <ul class="type-list" id="productTypeList"></ul>
+        <p class="muted small" id="productTypesEmpty" data-i18n="settings.productTypesEmpty" hidden>No product types yet. Add one above.</p>
+      </div>
         <!-- Where the data is kept and how it is backed up -->
       <div class="panel settings-panel">
         <h2 data-i18n="settings.dataStorage">Data storage</h2>

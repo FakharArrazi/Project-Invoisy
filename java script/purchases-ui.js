@@ -1117,6 +1117,7 @@
       prefix: newProductPrefix(lineId),
       stockFromPurchase: true,
       products: () => S().products,
+      productTypes: () => Validation.productTypesOf(S().settings),
       onError: (message) => showErr(`pl-${lineId}-error`, message),
     });
   }
@@ -1197,6 +1198,7 @@
       stockFromPurchase: mode === "add",
       products: () => S().products,
       editing: () => product,
+      productTypes: () => Validation.productTypesOf(S().settings),
       onError: (message) => showErr("purProductError", message),
     });
     $("purProductTitle").textContent = t(mode === "edit" ? "pur.productDialog.editTitle" : "pur.productDialog.addTitle");
@@ -1267,7 +1269,7 @@
     if (input && select) input.value = comboLabelOf(select.value);
   }
 
-  const typeLabel = (p) => (p.productType ? t("productType." + p.productType) : "");
+  const typeLabel = (p) => Validation.productTypeLabel(p.productType);
 
   function comboMatches(query) {
     return P.matchProducts(S().products, query, typeLabel);

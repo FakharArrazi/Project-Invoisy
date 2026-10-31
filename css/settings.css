@@ -40,6 +40,18 @@
 #view-settings .radio-row label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
 #view-settings .radio-row input { flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
 
+/* Product types: a box with a large Add button, then the list with a Remove button on every row. */
+#view-settings .type-add .field { margin-bottom: 6px; }
+#view-settings .type-add-line { display: flex; flex-wrap: wrap; gap: 10px; }
+#view-settings .type-add-line input { flex: 1 1 220px; min-width: 0; }
+#view-settings .type-add-line .btn { flex: none; }
+#view-settings .type-add .error { margin: 0 0 8px; }
+#view-settings .type-list { margin: 8px 0 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: 6px; }
+#view-settings .type-list:empty { display: none; }
+#view-settings .type-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-block: 8px; padding-inline: 14px 8px; border-bottom: 1px solid var(--border); }
+#view-settings .type-row:last-child { border-bottom: 0; }
+#view-settings .type-name { min-width: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+
 /* A note under a choice or under the logo: a little air above it. */
 #view-settings .radio-row + .muted, #view-settings .logo-setting + .muted { margin-top: 12px; }
 

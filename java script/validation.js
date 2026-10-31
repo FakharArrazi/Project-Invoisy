@@ -355,10 +355,104 @@
   // Spellings an earlier version saved (the type is "Dalle de sol"): they are read as the current value, so no saved
   // product or invoice is lost.
   const LEGACY_PRODUCT_TYPES = { Daldosol: "DalleDeSol", Daltosol: "DalleDeSol" };
-  // The stored value a type is known by (an old spelling becomes the current one); "" for no type or an unknown one.
+
+  // The list of types offered by the product form is managed in Settings -> Product types and saved as `settings.productTypes`
+  // (a list of stored values: the built-in ones above, or any text the person added, like "Électricité"). Like `phones` and
+  // `staff` it is only present once it has been changed; settings without it offer the built-in types, so nothing is reset.
+  // Taking a type OUT of that list never touches a product: a product keeps whatever type it was saved with.
+  const MAX_PRODUCT_TYPES = 100;
+  const MAX_PRODUCT_TYPE_LENGTH = 60;
+
+  // The stored value of a product's type: an old spelling becomes the current one, spaces around it are dropped, and anything
+  // else is kept exactly as it is (a type that is no longer offered stays on its products). "" for no type.
   function normalizeProductType(type) {
-    const value = LEGACY_PRODUCT_TYPES.hasOwnProperty(type) ? LEGACY_PRODUCT_TYPES[type] : type;
-    return PRODUCT_TYPES.includes(value) ? value : "";
+    if (typeof type !== "string") return "";
+    const value = type.trim();
+    return Object.prototype.hasOwnProperty.call(LEGACY_PRODUCT_TYPES, value) ? LEGACY_PRODUCT_TYPES[value] : value;
+  }
+
+  const isBuiltInProductType = (value) => PRODUCT_TYPES.includes(value);
+
+  // What two spellings of a type are compared by: capitals, accents and extra spaces make no difference
+  // ("Électricité", "electricite" and " ÉLECTRICITÉ " are one type).
+  function productTypeKey(text) {
+    return String(text == null ? "" : text).normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  // Typed text with its spaces tidied ("  Dalle   de sol " -> "Dalle de sol").
+  const cleanProductTypeName = (text) => String(text == null ? "" : text).replace(/\s+/g, " ").trim();
+
+  // The words people see: a built-in type in the language shown now (Dalle de sol, Faïence ...), any other type as it was typed.
+  function productTypeLabel(type) {
+    const value = normalizeProductType(type);
+    if (!value) return "";
+    return isBuiltInProductType(value) ? t("productType." + value) : value;
+  }
+
+  // Typed text -> the value that gets stored. Text that names a built-in type in ANY language (Faience, Faïence, Pierre, Rock ...)
+  // is that built-in type, so one type is never stored under two spellings; any other text is a type of its own.
+  function resolveProductType(text) {
+    const name = cleanProductTypeName(text);
+    const key = productTypeKey(name);
+    if (!key) return "";
+    const legacy = normalizeProductType(name);
+    if (legacy !== name) return legacy;
+    for (const code of PRODUCT_TYPES) {
+      if (productTypeKey(code) === key) return code;
+      if (I18n.languages().some((l) => productTypeKey(I18n.textIn(l.code, "productType." + code)) === key)) return code;
+    }
+    return name;
+  }
+
+  // A list of types as it is kept: texts only, spaces tidied, no empty one, no repeat (by productTypeKey), at most MAX_PRODUCT_TYPES.
+  function cleanProductTypes(list) {
+    const seen = new Set();
+    const out = [];
+    for (const item of Array.isArray(list) ? list : []) {
+      if (typeof item !== "string") continue;
+      const value = normalizeProductType(cleanProductTypeName(item));
+      const key = productTypeKey(value);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(value);
+      if (out.length >= MAX_PRODUCT_TYPES) break;
+    }
+    return out;
+  }
+
+  // The types the product form offers: the saved list, or the built-in types for settings that never changed it.
+  const productTypesOf = (settings) => (settings && Array.isArray(settings.productTypes) ? cleanProductTypes(settings.productTypes) : PRODUCT_TYPES.slice());
+
+  // Adds typed text to a list of types: { list, value } with the new list, or { error } (empty, tooLong, duplicate, tooMany).
+  // Nothing is changed in `list` itself.
+  function addProductType(list, text) {
+    const name = cleanProductTypeName(text);
+    if (!name) return { error: "empty" };
+    if (name.length > MAX_PRODUCT_TYPE_LENGTH) return { error: "tooLong" };
+    const value = resolveProductType(name);
+    const key = productTypeKey(value);
+    if (list.some((existing) => productTypeKey(existing) === key)) return { error: "duplicate", value };
+    if (list.length >= MAX_PRODUCT_TYPES) return { error: "tooMany" };
+    return { list: [...list, value], value };
+  }
+
+  const removeProductType = (list, value) => list.filter((existing) => existing !== value);
+
+  // How many products carry this type (removing it from the list leaves every one of them as it is).
+  const countProductsOfType = (products, type) => {
+    const value = normalizeProductType(type);
+    return value ? (Array.isArray(products) ? products : []).filter((p) => p && normalizeProductType(p.productType) === value).length : 0;
+  };
+
+  // May a product be saved with this type? It may when the type is one the form offers now (ctx.productTypes, the list from
+  // Settings; the built-in types when none is given), or when it is the type the product being edited already has: a type taken
+  // out of the list stays valid on the products that carry it, so editing one of them never forces a change.
+  function productTypeAllowed(type, ctx) {
+    const value = normalizeProductType(type);
+    if (!value) return true;
+    const offered = ctx && Array.isArray(ctx.productTypes) ? ctx.productTypes : PRODUCT_TYPES;
+    if (value.length <= MAX_PRODUCT_TYPE_LENGTH && offered.some((x) => normalizeProductType(x) === value)) return true;
+    return Boolean(ctx && ctx.editing && normalizeProductType(ctx.editing.productType) === value);
   }
 
   function normalizeProduct(raw) {
@@ -484,7 +578,7 @@
     const name = get("name");
     if (!name) return fail("name", t("product.nameRequired"));
     const productType = get("productType");
-    if (productType && !normalizeProductType(productType)) return fail("productType", t("product.typeInvalid"));
+    if (productType && !productTypeAllowed(productType, options)) return fail("productType", t("product.typeInvalid"));
     const tileSizeRaw = get("tileSize");
     if (tileSizeRaw && !isTileSize(tileSizeRaw)) return fail("tileSize", t("product.tileSizeFormat"));
     const tileSize = tileSizeRaw ? normalizeTileSize(tileSizeRaw) : "";
@@ -703,6 +797,10 @@
       if (Array.isArray(stored.phones)) settings.phones = cleanPhoneList(stored.phones.filter(isStr)).slice(0, MAX_BUSINESS_PHONES);
       // The staff contacts (a list of people), likewise only present when saved.
       if (Array.isArray(stored.staff)) settings.staff = cleanStaff(stored.staff);
+      // The product types the product form offers (Settings -> Product types), likewise only present when saved. An empty list is
+      // kept as it is: it means "no type is offered", which is different from never having changed the list.
+      if (Array.isArray(stored.productTypes)) settings.productTypes = cleanProductTypes(stored.productTypes);
+      else delete settings.productTypes;   // not a list: never carried over, or the check on saving settings would refuse every later save
       // The rollback log (money to hand back after a deleted invoice). Kept as it is: nothing in it is ever "cleaned" away.
       if (Array.isArray(stored.rollbackLog)) settings.rollbackLog = stored.rollbackLog.filter(isObj);
     }
@@ -871,7 +969,8 @@
     if (!isObj(p)) return t("problem.notObject");
     if (!isStr(p.id) || !p.id) return t("problem.noId");
     if (!isStr(p.name) || !p.name.trim()) return t("problem.noName");
-    if (p.productType !== undefined && p.productType !== "" && !normalizeProductType(p.productType)) return t("problem.badProductType");
+    // Any text is a valid saved type: a type removed from the Settings list stays on its products (see normalizeProductType).
+    if (p.productType !== undefined && p.productType !== "" && (!isStr(p.productType) || normalizeProductType(p.productType).length > MAX_PRODUCT_TYPE_LENGTH)) return t("problem.badProductType");
     if (p.manufacturer !== undefined && !isStr(p.manufacturer)) return t("problem.badManufacturer");
     if (p.tileSize !== undefined && (!isStr(p.tileSize) || (p.tileSize.trim() && !isTileSize(p.tileSize)))) return t("problem.badTileSize");
     if (p.coveragePerBox !== undefined && p.coveragePerBox !== null && (!isNum(p.coveragePerBox) || p.coveragePerBox <= 0)) return t("problem.badCoverage");
@@ -1007,6 +1106,10 @@
       const badPerson = (c) => !isObj(c) || (c.name !== undefined && (!isStr(c.name) || c.name.length > MAX_STAFF_NAME_LENGTH))
         || !Array.isArray(c.phones) || c.phones.length > MAX_BUSINESS_PHONES || c.phones.some((p) => !isStr(p) || p.length > MAX_PHONE_LENGTH);
       if (!Array.isArray(s.staff) || s.staff.length > MAX_STAFF || s.staff.some(badPerson)) return t("problem.staff", { max: MAX_STAFF });
+    }
+    if (s.productTypes !== undefined) {
+      if (!Array.isArray(s.productTypes) || s.productTypes.length > MAX_PRODUCT_TYPES
+        || s.productTypes.some((x) => !isStr(x) || cleanProductTypeName(x).length > MAX_PRODUCT_TYPE_LENGTH)) return t("problem.productTypes", { max: MAX_PRODUCT_TYPES });
     }
     if (s.rollbackLog !== undefined) {
       if (!Array.isArray(s.rollbackLog)) return t("problem.badRollback");
@@ -1524,7 +1627,9 @@
 
   globalThis.Validation = {
     APP_NAME, CURRENCY, CURRENCY_UNITS, DEFAULT_CURRENCY_UNIT, CENTIMES_PER_DINAR, CENTIMES_LABEL, DATA_VERSION, BACKUP_FORMAT_VERSION, MIRROR_KEY, LEGACY_KEYS, DEFAULT_BACKUP_DAYS,
-    DEFAULT_SETTINGS, SELLING_UNITS, PRODUCT_TYPES, normalizeProductType, INVOICE_STATUSES, DERIVED_INVOICE_FIELDS, WALK_IN,
+    DEFAULT_SETTINGS, SELLING_UNITS, PRODUCT_TYPES, normalizeProductType, INVOICE_STATUSES,
+    MAX_PRODUCT_TYPES, MAX_PRODUCT_TYPE_LENGTH, isBuiltInProductType, productTypeKey, cleanProductTypeName, productTypeLabel, resolveProductType,
+    cleanProductTypes, productTypesOf, addProductType, removeProductType, countProductsOfType, productTypeAllowed, DERIVED_INVOICE_FIELDS, WALK_IN,
     isObj, isStr, isNum, isDate, round2, toNumber, uid, sameValue,
     formatInvoiceNumber, invoiceSequence, highestInvoiceNumber,
     carriedLines, paidTotal, carriedTotal, amountDue, refundDue, transferredOut, carriedBreakdown,

@@ -178,10 +178,14 @@ test("Export Backup / Import keep the type of every product, and a backup from b
   assert.ok(third.api.getProducts().every((p) => p.productType === ""), "and they default to None");
 });
 
-test("a backup with an unknown product type is refused instead of printing it on invoices", () => {
+// Product types are now a list the person manages in Settings (tests/product-types-settings.test.js), so a product may carry a
+// type that is not one of the built-in ones (one added in Settings, or one taken out of the list later). A backup keeps it.
+test("a backup keeps whatever type a product has, even one that is not a built-in type; only a type that is not text, or far too long, is refused", () => {
   const { api } = loadApp();
-  assert.equal(api.Validation.productProblem({ ...legacyProduct(), productType: "Granite" }) !== "", true);
-  for (const ok of [undefined, "", ...TYPES]) assert.equal(api.Validation.productProblem({ ...legacyProduct(), productType: ok }), "", String(ok));
+  for (const ok of [undefined, "", ...TYPES, "Granite", "Électricité"]) assert.equal(api.Validation.productProblem({ ...legacyProduct(), productType: ok }), "", String(ok));
+  for (const bad of [5, {}, ["Rock"], null, "x".repeat(api.Validation.MAX_PRODUCT_TYPE_LENGTH + 1)]) {
+    assert.notEqual(api.Validation.productProblem({ ...legacyProduct(), productType: bad }), "", JSON.stringify(bad).slice(0, 14));
+  }
 });
 
 /* ---------- Invoices ---------- */
@@ -351,7 +355,7 @@ test("the old spellings Daldosol and DalleDeSol are read as Dalle de sol (DalleD
   assert.equal(api.Validation.normalizeProductType("Daldosol"), "DalleDeSol");
   assert.equal(api.Validation.normalizeProductType("Daltosol"), "DalleDeSol");
   assert.equal(api.Validation.normalizeProductType("DalleDeSol"), "DalleDeSol");
-  assert.equal(api.Validation.normalizeProductType("Granite"), "");
+  assert.equal(api.Validation.normalizeProductType("Granite"), "Granite", "a type that is not a built-in one is kept as it is, never blanked");
   assert.equal(api.Validation.normalizeProductType(undefined), "");
   assert.equal(api.normalizeProduct(legacyProduct({ productType: "Daldosol" })).productType, "DalleDeSol");
   assert.equal(api.Validation.productProblem({ ...legacyProduct(), productType: "Daltosol" }), "", "a backup saved by the first patch is not refused either");
@@ -435,7 +439,7 @@ test("a product of an existing type is unaffected by the added types: same store
   const { api } = loadApp();
   assert.deepEqual(plain(api.Validation.PRODUCT_TYPES.slice(0, 4)), ["DalleDeSol", "Faience", "Porcelain", "Rock"], "the stored values of the existing types did not change");
   for (const type of TYPES) assert.equal(api.Validation.normalizeProductType(type), type, type);
-  assert.equal(api.Validation.normalizeProductType("Evier "), "", "an unknown spelling is still refused, never printed");
+  assert.equal(api.Validation.normalizeProductType("Evier "), "Evier", "spaces around a type are dropped; the value is never turned into another type");
 });
 
 /* ---------- Parquet ---------- */
@@ -445,7 +449,8 @@ test("Parquet is the last type in the list, with the same label in English, Fren
   assert.deepEqual(plain(api.Validation.PRODUCT_TYPES), TYPES);
   assert.equal(api.Validation.PRODUCT_TYPES[api.Validation.PRODUCT_TYPES.length - 1], "Parquet");
   assert.equal(api.Validation.normalizeProductType("Parquet"), "Parquet");
-  assert.equal(api.Validation.normalizeProductType("parquet"), "", "only the stored value is accepted, like the other types");
+  assert.equal(api.Validation.normalizeProductType("parquet"), "parquet", "another spelling is a different, custom type: kept as written, never blanked or turned into Parquet");
+  assert.equal(api.Validation.isBuiltInProductType("parquet"), false, "and it is not the built-in type, so it has no translated label");
   assert.equal(api.productTypeLabel("Parquet"), "Parquet");
   const messages = (file) => {   // the language file registers its messages with I18n.register(code, name, messages)
     let loaded = {};
