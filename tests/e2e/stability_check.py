@@ -109,6 +109,13 @@ def go(page, view):
     page.click(f'.nav-btn[data-view="{view}"]')
 
 
+def open_business(page):
+    """Settings -> Business details is folded each time Settings is opened: unfold it (its title bar) before typing in it."""
+    if page.get_attribute("#businessToggle", "aria-expanded") != "true":
+        page.click("#businessToggle")
+    page.wait_for_selector("#sName", state="visible")
+
+
 def add_item(page, term, qty):
     page.fill("#search", term)
     page.wait_for_selector(RES)
@@ -338,6 +345,7 @@ try:
             after = focus_state(page)
             check(before == after, f"{view}: search box keeps focus, text and caret when another window saves" + ("" if before == after else f" ({before} -> {after})"))
         go(page, "settings")
+        open_business(page)
         page.click("#sName")
         page.keyboard.type(" TYPED")
         typed = page.input_value("#sName")

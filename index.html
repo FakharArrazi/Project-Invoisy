@@ -399,8 +399,17 @@
       </header>
       <div class="settings-page">
         <!-- Your business, as printed on invoices -->
-      <div class="panel settings-panel">
-        <h2 data-i18n="settings.business">Business details</h2>
+      <div class="panel settings-panel accordion" id="businessPanel">
+        <!-- A folding panel, like Product types below: the whole title bar is the button (folded when Settings is opened) -->
+        <h2 class="accordion-title">
+          <button type="button" class="accordion-head" id="businessToggle" aria-expanded="false" aria-controls="businessBody">
+            <span data-i18n="settings.business">Business details</span>
+            <span class="accordion-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" focusable="false"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
+          </button>
+        </h2>
+        <div class="accordion-body" id="businessBody" role="region" aria-labelledby="businessToggle">
+          <div class="accordion-inner">
+            <div class="accordion-content">
         <form id="settingsForm" novalidate>
           <div class="settings-fields">
           <div class="field">
@@ -435,6 +444,9 @@
             <button type="submit" class="btn primary" data-i18n="settings.save">Save Settings</button>
           </div>
         </form>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="panel settings-panel">
         <h2 data-i18n="settings.logo">Store logo</h2>

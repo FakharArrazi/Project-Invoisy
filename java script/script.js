@@ -4303,15 +4303,18 @@ function renderProductTypes() {
   $("productTypesEmpty").hidden = list.length > 0;
 }
 
-// The panel folds and unfolds (Settings -> Product types). Folded is the starting point, and again each time Settings is opened
-// (see showView). Nothing is saved: it is only how the panel looks, so the list, Add and Remove are not touched by it.
-function setProductTypesOpen(open) {
-  $("productTypesPanel").classList.toggle("is-open", Boolean(open));
-  $("productTypesToggle").setAttribute("aria-expanded", open ? "true" : "false");
+// The Settings panels that fold and unfold (Business details, Product types). Each one is a <name>Panel with a <name>Toggle button
+// (its title bar). Folded is the starting point, and again each time Settings is opened (see showView). Nothing is saved: it is only
+// how the panel looks, so what is typed, the list, Add, Remove and Save are not touched by it.
+const FOLDING_PANELS = ["businessPanel", "productTypesPanel"];
+
+function setSettingsPanelOpen(panelId, open) {
+  $(panelId).classList.toggle("is-open", Boolean(open));
+  $(panelId.replace(/Panel$/, "Toggle")).setAttribute("aria-expanded", open ? "true" : "false");
 }
 
-function toggleProductTypes() {
-  setProductTypesOpen(!$("productTypesPanel").classList.contains("is-open"));
+function toggleSettingsPanel(panelId) {
+  setSettingsPanelOpen(panelId, !$(panelId).classList.contains("is-open"));
 }
 
 // The sentence for a refused type ({ error } from Validation.addProductType).
@@ -5207,7 +5210,7 @@ function showView(name, options) {
     notes = syncSaleWithProducts();
     if (!keepPreview && previous !== "sell") state.previewInvoice = null;
   }
-  if (name === "settings" && previous !== "settings") setProductTypesOpen(false);   // Product types is folded each time Settings is opened
+  if (name === "settings" && previous !== "settings") FOLDING_PANELS.forEach((id) => setSettingsPanelOpen(id, false));   // folded each time Settings is opened
   if (name === "settings") fillSettingsForm();
 
   renderAll();
@@ -5776,7 +5779,8 @@ function bindEvents() {
     const row = btn && btn.closest("[data-type]");
     if (row) clickRemoveProductType(row.dataset.type);
   });
-  $("productTypesToggle").addEventListener("click", toggleProductTypes);   // the whole title bar folds / unfolds the panel
+  // The whole title bar of Business details and of Product types folds / unfolds its panel.
+  FOLDING_PANELS.forEach((id) => $(id.replace(/Panel$/, "Toggle")).addEventListener("click", () => toggleSettingsPanel(id)));
 
   // Language
   $("sLanguage").addEventListener("change", () => saveLanguage($("sLanguage").value));
@@ -5959,7 +5963,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     sellerNameOf, invoiceFooterHtml, renderSellerName, saveSellerName, onSellerInput, submitSellerName, updateSellerButton,
     invoiceHeadHtml, renderStaffRows, addStaffRow, removeStaffRow, setStaffName, addStaffPhone, removeStaffPhone, setStaffPhone,
     getStaffRows: () => state.staffRows,
-    renderProductTypes, setProductTypesOpen, toggleProductTypes, addProductTypeToSettings, removeProductTypeFromSettings, submitProductType, clickRemoveProductType, productTypeLabel,
+    renderProductTypes, setSettingsPanelOpen, toggleSettingsPanel, addProductTypeToSettings, removeProductTypeFromSettings, submitProductType, clickRemoveProductType, productTypeLabel,
   });
 } else {
   bindEvents();

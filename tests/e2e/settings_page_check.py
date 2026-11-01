@@ -45,10 +45,19 @@ def style(page, sel, props):
 def sideways(page):
     return page.evaluate("() => document.documentElement.scrollWidth - innerWidth")
 
+BUSINESS = "#businessToggle"
+
+def open_business(page):
+    """Business details is folded each time Settings is opened: unfold it by its title bar before typing in it."""
+    if page.get_attribute(BUSINESS, "aria-expanded") != "true":
+        page.click(BUSINESS)
+    page.wait_for_selector("#sName", state="visible")
+
 def reload_to_settings(page):
     page.reload()
     go(page, "settings")
     ready(page)
+    open_business(page)
 
 logo = OUT / "logo.png"
 Image.new("RGB", (240, 120), (30, 90, 160)).save(logo)
@@ -72,6 +81,41 @@ with sync_playwright() as p:
     stock_heading = style(page, "#view-stock .stock-title", ["fontSize", "letterSpacing", "textTransform", "fontWeight"])
     go(page, "settings")
     check(heading == stock_heading, f"the heading looks like Stock's: {heading}")
+    # ---------- Business details folds ----------
+    check(page.is_visible(BUSINESS) and page.inner_text(BUSINESS).strip() == "Business details", "the Business details title bar is there")
+    check(page.get_attribute(BUSINESS, "aria-expanded") == "false", "Business details is folded when Settings is opened")
+    check(not any(page.is_visible(s) for s in ("#sName", "#sAddress", "#sEmail", "#sCurrency", "#addPhone", "#addStaff", "#settingsForm button[type=submit]")),
+          "folded: the fields, the Add buttons and Save Settings are all hidden")
+    bar = page.locator(BUSINESS).bounding_box()
+    icon = page.locator(f"{BUSINESS} .accordion-icon").bounding_box()
+    check(bar["height"] >= 48 and bar["width"] > 400 and icon["x"] > bar["x"] + bar["width"] - 70, f"a wide title bar with the chevron at its right end ({bar['width']:.0f} x {bar['height']:.0f})")
+    check(page.evaluate("getComputedStyle(document.querySelector('#businessToggle .accordion-icon')).transform") == "none", "folded: the chevron points down")
+    page.focus(BUSINESS)
+    page.keyboard.press("Tab")
+    check(not page.evaluate("!!document.activeElement.closest('#businessBody')"), "folded: Tab does not land on a field that cannot be seen")
+    page.click(f"{BUSINESS} span[data-i18n]")   # the title text, not the chevron
+    page.wait_for_selector("#sName", state="visible")
+    check(page.get_attribute(BUSINESS, "aria-expanded") == "true", "clicking the title opens it")
+    check(all(page.is_visible(s) for s in ("#sName", "#sAddress", "#sEmail", "#sCurrency", "#addPhone", "#addStaff", "#settingsForm button[type=submit]")),
+          "unfolded: every field and Save Settings are there")
+    page.wait_for_timeout(350)   # the chevron turns over 0.22 s
+    check(page.evaluate("getComputedStyle(document.querySelector('#businessToggle .accordion-icon')).transform").startswith("matrix(-1"), "unfolded: the chevron points up")
+    page.fill("#sName", "Typed then folded")
+    page.click(f"{BUSINESS} .accordion-icon")   # the chevron closes it
+    page.wait_for_selector("#sName", state="hidden")
+    check(page.get_attribute(BUSINESS, "aria-expanded") == "false", "clicking the chevron closes it")
+    page.focus(BUSINESS)
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#sName", state="visible")
+    check(page.input_value("#sName") == "Typed then folded", "Enter opens it from the keyboard, and what was typed is still in the box")
+    page.keyboard.press("Space")
+    page.wait_for_selector("#sName", state="hidden")
+    check(page.get_attribute("#productTypesToggle", "aria-expanded") == "false", "Space closes it, and Product types is not affected")
+    open_business(page)
+    check(page.is_visible("#productTypesToggle"), "Product types is still its own folded bar")
+    if SHOTS:
+        Path(SHOTS).mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=f"{SHOTS}/settings-business-open.png")
     check(abs(page.locator("#exportBackup").bounding_box()["height"] - 42) < 1, "main buttons are 42 px tall, as the Stock page's")
     check(abs(page.locator("#sName").bounding_box()["height"] - 42) < 1, "text boxes are 42 px tall")
     check(abs(page.locator("#sLanguage").bounding_box()["height"] - 42) < 1, "the language list is 42 px tall")

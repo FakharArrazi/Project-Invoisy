@@ -1,6 +1,6 @@
 /* Settings page: the same look as Stock and Invoices (page heading, panels, 42 px controls and buttons), nothing else is changed.
    It reuses the heading classes of css/stock.css and the colours, borders and radii of the rest of the app. The only animation is the
-   Product types panel folding and unfolding (and it is switched off for people who ask their system for less motion).
+   Business details and Product types panels folding and unfolding (and it is switched off for people who ask their system for less motion).
    Every rule starts with #view-settings, so it wins over the older general rules whatever the order of the style sheets. */
 
 /* The page's top spacing is the heading's margin (as on Stock). */
@@ -53,11 +53,11 @@
 #view-settings .type-row:last-child { border-bottom: 0; }
 #view-settings .type-name { min-width: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
 
-/* Product types folds like an accordion: the whole title bar is one button with a chevron at its end (down = folded, up = open);
+/* Business details and Product types fold like an accordion: the whole title bar is one button with a chevron at its end (down = folded, up = open);
    the content below slides open and shut. The height is animated by moving a grid row between 0fr and 1fr, so no height is measured.
    Folded content is also visibility:hidden, so Tab never lands on a field that cannot be seen. */
-#view-settings #productTypesPanel { padding: 0; overflow: hidden; }
-#view-settings #productTypesPanel > .accordion-title { margin: 0; }
+#view-settings .settings-panel.accordion { padding: 0; overflow: hidden; }
+#view-settings .accordion > .accordion-title { margin: 0; }
 #view-settings .accordion-head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 56px; margin: 0; padding: 12px 20px;
   font: inherit; color: var(--text); text-align: start; background: #fafbfc; border: 0; border-bottom: 1px solid transparent; border-radius: 0;
@@ -80,7 +80,7 @@
 #view-settings .accordion-inner { min-height: 0; overflow: hidden; }
 #view-settings .accordion-content { padding: 16px 20px 20px; }
 @media (prefers-reduced-motion: reduce) {
-  #view-settings .accordion-head, #view-settings .accordion-icon, #view-settings #productTypesPanel .accordion-body { transition: none; }
+  #view-settings .accordion-head, #view-settings .accordion-icon, #view-settings .accordion .accordion-body { transition: none; }
 }
 
 /* A note under a choice or under the logo: a little air above it. */

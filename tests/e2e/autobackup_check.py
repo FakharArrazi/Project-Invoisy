@@ -45,6 +45,13 @@ NO_API = "delete window.showSaveFilePicker; Object.defineProperty(window, 'showS
 def go(page, view):
     page.click(f'.nav-btn[data-view="{view}"]')
 
+
+def open_business(page):
+    """Settings -> Business details is folded each time Settings is opened: unfold it (its title bar) before typing in it."""
+    if page.get_attribute("#businessToggle", "aria-expanded") != "true":
+        page.click("#businessToggle")
+    page.wait_for_selector("#sName", state="visible")
+
 def text(page, sel):
     return page.inner_text(sel).strip()
 
@@ -164,6 +171,7 @@ try:
         go(page, "settings"); wait_status(page, "Backup current")
         check([x["amount"] for x in file_json(page)["data"]["invoices"][0]["payments"]] == [1000, 500], "the later payment is in the payment history in the file")
 
+        open_business(page)
         page.fill("#sName", "Timgad Ceramic")
         page.click('#settingsForm button[type="submit"]')
         check(wait_until(lambda: file_json(page)["data"]["settings"]["businessName"] == "Timgad Ceramic"), "changed business settings are in the file")

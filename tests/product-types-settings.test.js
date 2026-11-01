@@ -550,12 +550,12 @@ test("the title bar opens and closes the panel, and the chevron and aria-expande
   const app = await startedApp();
   const panel = app.field("productTypesPanel");
   assert.equal(panel.classList.contains("is-open"), false, "folded at the start");
-  app.api.toggleProductTypes();
+  app.api.toggleSettingsPanel("productTypesPanel");
   assert.equal(panel.classList.contains("is-open"), true, "one click opens it");
-  app.api.toggleProductTypes();
+  app.api.toggleSettingsPanel("productTypesPanel");
   assert.equal(panel.classList.contains("is-open"), false, "the next click closes it");
-  app.api.setProductTypesOpen(true);
-  app.api.setProductTypesOpen(true);
+  app.api.setSettingsPanelOpen("productTypesPanel", true);
+  app.api.setSettingsPanelOpen("productTypesPanel", true);
   assert.equal(panel.classList.contains("is-open"), true, "opening twice leaves it open");
 });
 
@@ -563,8 +563,8 @@ test("opening or closing the panel touches no data: the list, the saved settings
   const app = await startedApp();
   await typeAndAdd(app, "Électricité");
   const before = { list: listed(app), saved: await savedTypes(app), form: offered(app), settings: plain(await app.api.db.getSettings()) };
-  app.api.toggleProductTypes();
-  app.api.toggleProductTypes();
+  app.api.toggleSettingsPanel("productTypesPanel");
+  app.api.toggleSettingsPanel("productTypesPanel");
   assert.deepEqual(listed(app), before.list);
   assert.deepEqual(await savedTypes(app), before.saved);
   assert.deepEqual(offered(app), before.form);
@@ -574,7 +574,7 @@ test("opening or closing the panel touches no data: the list, the saved settings
 
 test("adding and removing a type leaves the panel open (the page is redrawn, the panel is not reset)", async () => {
   const app = await startedApp();
-  app.api.setProductTypesOpen(true);
+  app.api.setSettingsPanelOpen("productTypesPanel", true);
   await typeAndAdd(app, "Électricité");
   assert.equal(app.field("productTypesPanel").classList.contains("is-open"), true, "still open after Add");
   app.answer(true);
@@ -589,7 +589,7 @@ test("the panel is folded again each time Settings is opened, but not when Setti
   const panel = app.field("productTypesPanel");
   app.api.showView("settings");
   assert.equal(panel.classList.contains("is-open"), false, "folded when Settings is opened");
-  app.api.toggleProductTypes();
+  app.api.toggleSettingsPanel("productTypesPanel");
   app.api.showView("settings");
   assert.equal(panel.classList.contains("is-open"), true, "asking for the page already on screen keeps it as it is");
   app.api.showView("stock");

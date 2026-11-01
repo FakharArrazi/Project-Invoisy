@@ -20,6 +20,13 @@ def check(cond, label):
 def go(page, view):
     page.click(f'.nav-btn[data-view="{view}"]')
 
+
+def open_business(page):
+    """Settings -> Business details is folded each time Settings is opened: unfold it (its title bar) before typing in it."""
+    if page.get_attribute("#businessToggle", "aria-expanded") != "true":
+        page.click("#businessToggle")
+    page.wait_for_selector("#sName", state="visible")
+
 def text(page, sel):
     return page.inner_text(sel).strip()
 
@@ -57,6 +64,7 @@ with sync_playwright() as p:
     page.wait_for_function("document.getElementById('dataState').textContent === 'Ready'", timeout=10000)
 
     # --- 1. several business phone numbers
+    open_business(page)
     page.fill("#sName", "Tile House")
     page.locator("#sPhones input").first.fill("0550 11 22 33")
     page.click("#addPhone")
