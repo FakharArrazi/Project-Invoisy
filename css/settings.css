@@ -1,5 +1,6 @@
 /* Settings page: the same look as Stock and Invoices (page heading, panels, 42 px controls and buttons), nothing else is changed.
-   It reuses the heading classes of css/stock.css and the colours, borders and radii of the rest of the app. No animation is used.
+   It reuses the heading classes of css/stock.css and the colours, borders and radii of the rest of the app. The only animation is the
+   Product types panel folding and unfolding (and it is switched off for people who ask their system for less motion).
    Every rule starts with #view-settings, so it wins over the older general rules whatever the order of the style sheets. */
 
 /* The page's top spacing is the heading's margin (as on Stock). */
@@ -52,6 +53,36 @@
 #view-settings .type-row:last-child { border-bottom: 0; }
 #view-settings .type-name { min-width: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
 
+/* Product types folds like an accordion: the whole title bar is one button with a chevron at its end (down = folded, up = open);
+   the content below slides open and shut. The height is animated by moving a grid row between 0fr and 1fr, so no height is measured.
+   Folded content is also visibility:hidden, so Tab never lands on a field that cannot be seen. */
+#view-settings #productTypesPanel { padding: 0; overflow: hidden; }
+#view-settings #productTypesPanel > .accordion-title { margin: 0; }
+#view-settings .accordion-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 56px; margin: 0; padding: 12px 20px;
+  font: inherit; color: var(--text); text-align: start; background: #fafbfc; border: 0; border-bottom: 1px solid transparent; border-radius: 0;
+  appearance: none; cursor: pointer; transition: background-color 0.15s ease, border-color 0.2s ease;
+}
+#view-settings .accordion-head:hover { background: #f1f3f6; }
+#view-settings .accordion-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+#view-settings .is-open > .accordion-title .accordion-head { border-bottom-color: var(--border); }
+#view-settings .accordion-icon {
+  flex: none; display: grid; place-items: center; width: 30px; height: 30px; color: var(--muted); background: var(--panel);
+  border: 1px solid var(--border-strong); border-radius: 50%; transition: transform 0.22s ease, color 0.15s ease, border-color 0.15s ease;
+}
+#view-settings .accordion-head:hover .accordion-icon { color: var(--accent); border-color: var(--accent); }
+#view-settings .is-open > .accordion-title .accordion-icon { transform: rotate(180deg); }
+#view-settings .accordion-body {
+  display: grid; grid-template-rows: 0fr; visibility: hidden;
+  transition: grid-template-rows 0.22s ease, visibility 0s linear 0.22s;
+}
+#view-settings .is-open > .accordion-body { grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows 0.22s ease, visibility 0s; }
+#view-settings .accordion-inner { min-height: 0; overflow: hidden; }
+#view-settings .accordion-content { padding: 16px 20px 20px; }
+@media (prefers-reduced-motion: reduce) {
+  #view-settings .accordion-head, #view-settings .accordion-icon, #view-settings #productTypesPanel .accordion-body { transition: none; }
+}
+
 /* A note under a choice or under the logo: a little air above it. */
 #view-settings .radio-row + .muted, #view-settings .logo-setting + .muted { margin-top: 12px; }
 
@@ -88,6 +119,8 @@
 @media (max-width: 720px) {
   #view-settings .settings-fields { grid-template-columns: minmax(0, 1fr); }
   #view-settings .settings-panel { padding: 16px; }
+  #view-settings .accordion-head { padding: 10px 16px; }
+  #view-settings .accordion-content { padding: 14px 16px 16px; }
   #view-settings .data-info { grid-template-columns: minmax(0, 1fr); }
   #view-settings .data-info dt { padding-bottom: 0; border-bottom: 0; }
   #view-settings .data-info dd { padding-top: 2px; }

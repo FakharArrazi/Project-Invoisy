@@ -4303,6 +4303,17 @@ function renderProductTypes() {
   $("productTypesEmpty").hidden = list.length > 0;
 }
 
+// The panel folds and unfolds (Settings -> Product types). Folded is the starting point, and again each time Settings is opened
+// (see showView). Nothing is saved: it is only how the panel looks, so the list, Add and Remove are not touched by it.
+function setProductTypesOpen(open) {
+  $("productTypesPanel").classList.toggle("is-open", Boolean(open));
+  $("productTypesToggle").setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function toggleProductTypes() {
+  setProductTypesOpen(!$("productTypesPanel").classList.contains("is-open"));
+}
+
 // The sentence for a refused type ({ error } from Validation.addProductType).
 function productTypeProblemText(problem) {
   if (problem.error === "empty") return t("settings.productTypeEmpty");
@@ -5196,6 +5207,7 @@ function showView(name, options) {
     notes = syncSaleWithProducts();
     if (!keepPreview && previous !== "sell") state.previewInvoice = null;
   }
+  if (name === "settings" && previous !== "settings") setProductTypesOpen(false);   // Product types is folded each time Settings is opened
   if (name === "settings") fillSettingsForm();
 
   renderAll();
@@ -5764,6 +5776,7 @@ function bindEvents() {
     const row = btn && btn.closest("[data-type]");
     if (row) clickRemoveProductType(row.dataset.type);
   });
+  $("productTypesToggle").addEventListener("click", toggleProductTypes);   // the whole title bar folds / unfolds the panel
 
   // Language
   $("sLanguage").addEventListener("change", () => saveLanguage($("sLanguage").value));
@@ -5946,7 +5959,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     sellerNameOf, invoiceFooterHtml, renderSellerName, saveSellerName, onSellerInput, submitSellerName, updateSellerButton,
     invoiceHeadHtml, renderStaffRows, addStaffRow, removeStaffRow, setStaffName, addStaffPhone, removeStaffPhone, setStaffPhone,
     getStaffRows: () => state.staffRows,
-    renderProductTypes, addProductTypeToSettings, removeProductTypeFromSettings, submitProductType, clickRemoveProductType, productTypeLabel,
+    renderProductTypes, setProductTypesOpen, toggleProductTypes, addProductTypeToSettings, removeProductTypeFromSettings, submitProductType, clickRemoveProductType, productTypeLabel,
   });
 } else {
   bindEvents();

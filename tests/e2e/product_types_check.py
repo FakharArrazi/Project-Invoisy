@@ -42,6 +42,32 @@ def ready(page):
     page.wait_for_function("document.getElementById('dataState').textContent === 'Ready'", timeout=10000)
 
 
+TOGGLE = "#productTypesToggle"
+
+
+def open_types(page):
+    """Product types is folded each time Settings is opened: unfold it, by its title bar, before using the list."""
+    if page.get_attribute(TOGGLE, "aria-expanded") != "true":
+        page.click(TOGGLE)
+    page.wait_for_selector("#productTypeInput", state="visible")
+
+
+def go_settings(page):
+    go(page, "settings")
+    open_types(page)
+
+
+def body_heights(page, seconds=0.6):
+    """The height of the folding body on every animation frame after the title bar is clicked (a click made inside the page)."""
+    return page.evaluate("""(ms) => new Promise((resolve) => {
+        const body = document.getElementById('productTypesBody'), out = [];
+        document.getElementById('productTypesToggle').click();
+        const t0 = performance.now();
+        const tick = () => { out.push(Math.round(body.getBoundingClientRect().height)); performance.now() - t0 < ms ? requestAnimationFrame(tick) : resolve(out); };
+        tick();
+    })""", seconds * 1000)
+
+
 def shot(page, name):
     if SHOTS:
         Path(SHOTS).mkdir(parents=True, exist_ok=True)
@@ -108,6 +134,52 @@ with sync_playwright() as p:
     go(page, "settings")
     ready(page)
 
+    # ---------- the folding panel ----------
+    check(page.is_visible(TOGGLE) and page.inner_text(TOGGLE).strip() == "Product types", "the Product types title bar is there")
+    check(page.get_attribute(TOGGLE, "aria-expanded") == "false", "the section is folded when Settings is opened")
+    check(not any(page.is_visible(s) for s in ("#productTypeInput", "#addProductType", "#productTypeList", "#productTypesBody .muted")),
+          "folded: the note, the box, the Add button and the list are all hidden")
+    bar = page.locator(TOGGLE).bounding_box()
+    icon = page.locator(f"{TOGGLE} .accordion-icon").bounding_box()
+    check(bar["height"] >= 48 and bar["width"] > 400, f"the title bar is a wide, comfortable button ({bar['width']:.0f} x {bar['height']:.0f})")
+    check(page.is_visible(f"{TOGGLE} svg") and icon["x"] > bar["x"] + bar["width"] - 70, "a chevron sits at the right end of the bar")
+    check(page.evaluate("getComputedStyle(document.querySelector('#productTypesToggle .accordion-icon')).transform") == "none", "folded: the chevron points down")
+    check(page.evaluate("getComputedStyle(document.getElementById('productTypesToggle')).cursor") == "pointer", "the bar shows the pointer, so it looks clickable")
+    shot(page, "0-types-folded")
+    page.focus(TOGGLE)
+    page.keyboard.press("Tab")
+    check(not page.evaluate("!!document.activeElement.closest('#productTypesBody')"), "folded: Tab does not land on a field that cannot be seen")
+
+    heights = body_heights(page)   # click the bar: watch the body grow frame by frame
+    full = heights[-1]
+    check(heights[0] < 5 and full > 150 and any(5 < h < full - 5 for h in heights), f"unfolding is animated, not a jump ({heights[:8]} ... {full})")
+    check(heights == sorted(heights), "and smooth: it only grows")
+    check(page.get_attribute(TOGGLE, "aria-expanded") == "true" and "is-open" in page.get_attribute("#productTypesPanel", "class"), "unfolded: aria-expanded is true")
+    check(all(page.is_visible(s) for s in ("#productTypeInput", "#addProductType", "#productTypeList", "#productTypesBody .muted")),
+          "unfolded: the note, the box, the Add button and the list are there")
+    check(page.evaluate("getComputedStyle(document.querySelector('#productTypesToggle .accordion-icon')).transform").startswith("matrix(-1"), "unfolded: the chevron points up")
+    shot(page, "0-types-unfolded")
+
+    heights = body_heights(page)   # click again: it shrinks back to nothing
+    check(heights[0] > 150 and heights[-1] == 0 and any(5 < h < heights[0] - 5 for h in heights) and heights == sorted(heights, reverse=True),
+          f"folding is animated too ({heights[:3]} ... {heights[-1]})")
+    check(page.get_attribute(TOGGLE, "aria-expanded") == "false" and not page.is_visible("#productTypeInput"), "folded again: hidden and aria-expanded is false")
+
+    page.click(f"{TOGGLE} span[data-i18n]")   # the title text, not the chevron
+    page.wait_for_selector("#productTypeInput", state="visible")
+    check(page.get_attribute(TOGGLE, "aria-expanded") == "true", "clicking the title text opens it (the whole bar is the button)")
+    page.click(f"{TOGGLE} .accordion-icon")
+    page.wait_for_selector("#productTypeInput", state="hidden")
+    check(page.get_attribute(TOGGLE, "aria-expanded") == "false", "clicking the chevron closes it")
+    page.focus(TOGGLE)
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#productTypeInput", state="visible")
+    page.keyboard.press("Space")
+    page.wait_for_selector("#productTypeInput", state="hidden")
+    check(True, "Enter opens and Space closes it from the keyboard")
+    check(page.locator("#view-settings .settings-panel").evaluate_all("els => els.every(e => e.getBoundingClientRect().width > 300)"), "the other panels are not affected")
+    open_types(page)
+
     # ---------- the starting point ----------
     check(page.is_visible("#productTypesPanel"), "the Settings page has a Product types section")
     check(settings_types(page) == BUILT_IN_EN, "it starts with the types the product form always had, nothing missing")
@@ -123,6 +195,7 @@ with sync_playwright() as p:
     wait_types(page, 9)
     check(settings_types(page)[-1] == "Électricité", "Add (the button) puts the new type at the end of the list")
     check(page.input_value("#productTypeInput") == "" and error_text(page) == "", "the box is emptied and no message is shown")
+    check(page.get_attribute(TOGGLE, "aria-expanded") == "true", "adding a type keeps the section open")
     add_type(page, "  Gaz   naturel ", press_enter=True)
     wait_types(page, 10)
     check(settings_types(page)[-1] == "Gaz naturel", "pressing Enter in the box adds as well, and the spaces are tidied")
@@ -175,6 +248,8 @@ with sync_playwright() as p:
     page.reload()
     ready(page)
     go(page, "settings")
+    check(page.get_attribute(TOGGLE, "aria-expanded") == "false" and not page.is_visible("#productTypeList"), "after a reload the section is folded again")
+    open_types(page)
     check(settings_types(page) == BUILT_IN_EN + ["Électricité", "Gaz naturel"], "after a reload the Settings list is the same")
     go(page, "stock")
     open_product_form(page)
@@ -188,6 +263,8 @@ with sync_playwright() as p:
 
     # ---------- removing ----------
     go(page, "settings")
+    check(page.get_attribute(TOGGLE, "aria-expanded") == "false", "coming back to Settings from another page: folded again")
+    open_types(page)
     answer["accept"] = False
     dialogs.clear()
     remove_type(page, "Rock")
@@ -209,6 +286,7 @@ with sync_playwright() as p:
     check(len(dialogs) == 1 and "used by 1 product" in dialogs[0] and "keeps its type" in dialogs[0],
           "a type that a product uses says how many products use it, and that they keep it")
     check("Électricité" not in settings_types(page), "and it is removed from the list")
+    check(page.get_attribute(TOGGLE, "aria-expanded") == "true" and page.is_visible("#productTypeList"), "removing a type keeps the section open")
     shot(page, "3-settings-removed")
 
     go(page, "stock")
@@ -246,7 +324,7 @@ with sync_playwright() as p:
     # ---------- after a reload ----------
     page.reload()
     ready(page)
-    go(page, "settings")
+    go_settings(page)
     after = settings_types(page)
     check("Rock" not in after and "Électricité" not in after and "Gaz naturel" in after and len(after) == 8, "after a reload the removed types are still removed")
     go(page, "stock")
@@ -257,7 +335,7 @@ with sync_playwright() as p:
     page.wait_for_selector("#stockFormPanel", state="hidden")
 
     # a removed built-in type can be added back under any of its names
-    go(page, "settings")
+    go_settings(page)
     add_type(page, "Pierre")
     wait_types(page, 9)
     check(stored_types(page)[-1] == "Rock" and settings_types(page)[-1] == "Rock", "typing Pierre brings the built-in Rock type back (not a second spelling)")
@@ -274,10 +352,12 @@ with sync_playwright() as p:
     fr_form = dict(form_choices(page))
     check(fr_form["Faience"] == "Faïence" and fr_form["Gaz naturel"] == "Gaz naturel", "so is the product form")
     page.click("#stockAddToggle")
-    go(page, "settings")
+    go_settings(page)
     page.select_option("#sLanguage", "ar")
     page.wait_for_function("document.documentElement.dir === 'rtl'", timeout=8000)
     check(page.locator("#productTypeList .type-row").count() == 9, "in Arabic the list is there")
+    ar_bar, ar_icon = page.locator(TOGGLE).bounding_box(), page.locator(f"{TOGGLE} .accordion-icon").bounding_box()
+    check(ar_icon["x"] < ar_bar["x"] + 70 and page.get_attribute(TOGGLE, "aria-expanded") == "true", "in Arabic the chevron moves to the left end and the section stays open")
     check(sideways(page) <= 1, f"no sideways scrolling in Arabic ({sideways(page)}px)")
     shot(page, "5-settings-arabic")
     page.select_option("#sLanguage", "en")

@@ -490,8 +490,17 @@
       </div>
         </div>
         <!-- What you sell: the choices of the Product type field in the product form -->
-      <div class="panel settings-panel" id="productTypesPanel">
-        <h2 data-i18n="settings.productTypes">Product types</h2>
+      <div class="panel settings-panel accordion" id="productTypesPanel">
+        <!-- A folding panel: the whole title bar is the button; the content below it opens and closes (folded when Settings is opened) -->
+        <h2 class="accordion-title">
+          <button type="button" class="accordion-head" id="productTypesToggle" aria-expanded="false" aria-controls="productTypesBody">
+            <span data-i18n="settings.productTypes">Product types</span>
+            <span class="accordion-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" focusable="false"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
+          </button>
+        </h2>
+        <div class="accordion-body" id="productTypesBody" role="region" aria-labelledby="productTypesToggle">
+          <div class="accordion-inner">
+            <div class="accordion-content">
         <p class="muted small" data-i18n="settings.productTypesNote">The choices offered in the Product type field when you add or edit a product. Removing a type here never changes products that already have it.</p>
         <form class="type-add" id="productTypeForm" novalidate>
           <div class="field">
@@ -505,6 +514,9 @@
         </form>
         <ul class="type-list" id="productTypeList"></ul>
         <p class="muted small" id="productTypesEmpty" data-i18n="settings.productTypesEmpty" hidden>No product types yet. Add one above.</p>
+            </div>
+          </div>
+        </div>
       </div>
         <!-- Where the data is kept and how it is backed up -->
       <div class="panel settings-panel">

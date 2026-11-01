@@ -522,3 +522,94 @@ test("a failed save shows the reason next to the box and leaves the list as it w
   assert.equal(app.field("productTypeInput").value, "Électricité", "what was typed is kept");
   assert.equal(offered(app).includes("Électricité"), false);
 });
+
+/* ---------- The panel folds and unfolds (look only: no data, no saving) ---------- */
+
+const settingsHtml = () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  return html.slice(html.indexOf('id="productTypesPanel"'), html.indexOf("<!-- Where the data is kept"));
+};
+
+test("the Product types title is one button in the heading, folded to begin with, and it controls the body that holds every control", () => {
+  const panel = settingsHtml();
+  assert.match(panel, /<h2 class="accordion-title">\s*<button type="button" class="accordion-head" id="productTypesToggle" aria-expanded="false" aria-controls="productTypesBody">/);
+  assert.match(panel, /<span data-i18n="settings\.productTypes">Product types<\/span>/, "the title keeps its translation key, on a span so the chevron is not wiped");
+  assert.match(panel, /<span class="accordion-icon" aria-hidden="true"><svg [^>]*><polyline points="6 9 12 15 18 9">/, "a chevron that points down");
+  assert.doesNotMatch(panel.slice(0, panel.indexOf("accordion-body")), /is-open/, "no 'is-open' in the markup: folded until the person opens it");
+  const body = panel.slice(panel.indexOf('id="productTypesBody"'));
+  for (const id of ["productTypeForm", "productTypeInput", "addProductType", "productTypeError", "productTypeList", "productTypesEmpty"]) {
+    assert.ok(body.includes(`id="${id}"`), `${id} is inside the folding body`);
+  }
+  assert.ok(body.includes('data-i18n="settings.productTypesNote"') && body.includes('data-i18n="settings.productTypeNew"'), "the note and the field label are inside too");
+  assert.equal(panel.slice(0, panel.indexOf('id="productTypesBody"')).includes("<form"), false, "nothing but the title bar is outside the body");
+});
+
+test("the title bar opens and closes the panel, and the chevron and aria-expanded follow", async () => {
+  const app = await startedApp();
+  const panel = app.field("productTypesPanel");
+  assert.equal(panel.classList.contains("is-open"), false, "folded at the start");
+  app.api.toggleProductTypes();
+  assert.equal(panel.classList.contains("is-open"), true, "one click opens it");
+  app.api.toggleProductTypes();
+  assert.equal(panel.classList.contains("is-open"), false, "the next click closes it");
+  app.api.setProductTypesOpen(true);
+  app.api.setProductTypesOpen(true);
+  assert.equal(panel.classList.contains("is-open"), true, "opening twice leaves it open");
+});
+
+test("opening or closing the panel touches no data: the list, the saved settings and the product forms stay as they are", async () => {
+  const app = await startedApp();
+  await typeAndAdd(app, "Électricité");
+  const before = { list: listed(app), saved: await savedTypes(app), form: offered(app), settings: plain(await app.api.db.getSettings()) };
+  app.api.toggleProductTypes();
+  app.api.toggleProductTypes();
+  assert.deepEqual(listed(app), before.list);
+  assert.deepEqual(await savedTypes(app), before.saved);
+  assert.deepEqual(offered(app), before.form);
+  assert.deepEqual(plain(await app.api.db.getSettings()), before.settings, "nothing was written");
+  assert.equal(app.localStorage.writes.length, 0, "and the state is not kept in the browser either");
+});
+
+test("adding and removing a type leaves the panel open (the page is redrawn, the panel is not reset)", async () => {
+  const app = await startedApp();
+  app.api.setProductTypesOpen(true);
+  await typeAndAdd(app, "Électricité");
+  assert.equal(app.field("productTypesPanel").classList.contains("is-open"), true, "still open after Add");
+  app.answer(true);
+  assert.deepEqual(plain(await app.api.removeProductTypeFromSettings("Électricité")), { removed: "Électricité" });
+  assert.equal(app.field("productTypesPanel").classList.contains("is-open"), true, "still open after Remove");
+  await typeAndAdd(app, "");   // a refused type
+  assert.equal(app.field("productTypesPanel").classList.contains("is-open"), true, "still open after a message is shown");
+});
+
+test("the panel is folded again each time Settings is opened, but not when Settings is already showing", async () => {
+  const app = await startedApp();
+  const panel = app.field("productTypesPanel");
+  app.api.showView("settings");
+  assert.equal(panel.classList.contains("is-open"), false, "folded when Settings is opened");
+  app.api.toggleProductTypes();
+  app.api.showView("settings");
+  assert.equal(panel.classList.contains("is-open"), true, "asking for the page already on screen keeps it as it is");
+  app.api.showView("stock");
+  app.api.showView("settings");
+  assert.equal(panel.classList.contains("is-open"), false, "back from another page: folded again");
+});
+
+test("the folding style: the body is hidden and has no height while folded, the motion is short and switched off for reduced motion", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const css = fs.readFileSync(path.join(__dirname, "..", "css", "settings.css"), "utf8");
+  assert.match(css, /\.accordion-body\s*\{[^}]*grid-template-rows:\s*0fr;[^}]*visibility:\s*hidden;/, "folded: no height and not reachable with Tab");
+  assert.match(css, /\.is-open > \.accordion-body\s*\{[^}]*grid-template-rows:\s*1fr;[^}]*visibility:\s*visible;/, "open: full height and visible");
+  assert.match(css, /\.is-open > \.accordion-title \.accordion-icon\s*\{[^}]*rotate\(180deg\)/, "the chevron turns to point up when open");
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)[^}]*\{[^}]*transition:\s*none/, "no motion for people who ask for less");
+  for (const [, seconds] of css.matchAll(/transition:[^;]*?([\d.]+)s/g)) assert.ok(Number(seconds) <= 0.25, `every transition is short (${seconds}s)`);
+  for (const rule of css.split("}")) {
+    const selector = rule.split("{")[0].trim();
+    if (selector && !selector.startsWith("@") && !selector.startsWith("/*") && /accordion|productTypesPanel/.test(selector)) {
+      assert.ok(/^(#view-settings|\.app)/.test(selector.replace(/\/\*[\s\S]*?\*\/\s*/g, "")) || selector.includes("#view-settings"), `${selector} starts with #view-settings, like the rest of the file`);
+    }
+  }
+});
