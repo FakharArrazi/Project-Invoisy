@@ -284,16 +284,16 @@ const rule = (selector) => {
   return found;
 };
 
-test("print: the logo square is 3 x 3 cm on A4 and 2.5 x 2.5 cm on A5, fixed, with the picture contained inside", () => {
+test("print: the logo box is sized in cm from the saved logo size (3 x 3 cm on A4 and 2.5 x 2.5 cm on A5 by default), fixed, with the picture contained inside", () => {
   const box = rule(".inv-logo-box");
-  assert.match(box, /width: 3cm/);
-  assert.match(box, /height: 3cm/);
+  assert.match(box, /width: var\(--logo-w, 3cm\)/);
+  assert.match(box, /height: var\(--logo-h, 3cm\)/);
   assert.match(box, /box-sizing: border-box/, "the border is part of the size");
   assert.match(box, /overflow: hidden/);
   assert.match(box, /border: 1px solid/, "a visible but subtle border");
   const a5 = rule('html[data-paper="a5"] .inv-logo-box');
-  assert.match(a5, /width: 2\.5cm/);
-  assert.match(a5, /height: 2\.5cm/);
+  assert.match(a5, /width: var\(--logo-w, 2\.5cm\)/);
+  assert.match(a5, /height: var\(--logo-h, 2\.5cm\)/);
   const img = rule(".inv-logo-box img");
   assert.match(img, /object-fit: contain/);
   assert.match(img, /max-width: 100%/);

@@ -269,7 +269,11 @@ I18n.register("en", "English", {
   "settings.logo": "Store logo",
   "settings.chooseLogo": "Choose Logo",
   "settings.removeLogo": "Remove Logo",
-  "settings.logoNote": "PNG image. It is resized to fit a fixed square at the top center of invoices (3 × 3 cm on A4, 2.5 × 2.5 cm on A5).",
+  "settings.logoNote": "PNG image. It is resized to fit the logo box at the top of invoices, which has the size set above for the chosen paper size.",
+  "settings.logoSizeTitle": "Logo size for {paper} invoices",
+  "settings.logoWidth": "Logo width (cm)",
+  "settings.logoHeight": "Logo height (cm)",
+  "settings.logoSizeHint": "A4 and A5 each keep their own size. Decimals are allowed (1.5) and the logo can be a rectangle (4 × 3).",
   "settings.demo": "Demo data",
   "settings.demoNote": "Add a few sample products to try the app. Products you already have are kept.",
   "settings.loadDemo": "Load Demo Data",
@@ -279,6 +283,7 @@ I18n.register("en", "English", {
   "logo.removed": "Logo removed.",
   "logo.pickPng": "Please choose a PNG image.",
   "logo.badPng": "That file is not a valid PNG image.",
+  "logo.sizeInvalid": "Enter a width and a height between {min} and {max} cm, for example 2.5.",
 
   // ----- Demo products (names, descriptions and categories are saved in the language that is active) -----
   "demo.COCA33.name": "Coca Cola 33cl",
@@ -585,6 +590,7 @@ I18n.register("en", "English", {
   "problem.badSellerName": "has an invalid seller name",
   "problem.setting": "The setting \"{key}\" is not valid.",
   "problem.paper": "The paper size must be A4 or A5.",
+  "problem.logoSize": "The logo size must be an object holding an A4 size and an A5 size.",
   "problem.currencyUnit": "The currency display must be dinars or centimes.",
   "problem.logo": "The logo is not valid image data.",
   "data.notObject": "The data is not an Invoisy data object.",

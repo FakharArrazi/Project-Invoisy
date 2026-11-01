@@ -850,12 +850,13 @@ input:disabled, select:disabled, textarea:disabled { background: #f1f3f6; color:
 /* The right column is as wide as the logo square or the title, whichever is wider; the other one is centred on it. */
 .inv-head-side { display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .inv-head-side .inv-title { text-align: center; line-height: 1.15; }
-/* The logo square has a fixed physical size, so what is printed never depends on the picture: a physical unit (cm) is used on screen
+/* The logo box has a fixed physical size (Settings -> Store logo: width and height in cm for A4 and for A5, applied by script.js as --logo-w and
+   --logo-h for the paper size in use; 3 x 3 cm on A4 and 2.5 x 2.5 cm on A5 until they are changed), so what is printed never depends on the picture: a physical unit (cm) is used on screen
    as well, which keeps the preview in the right proportion to the page. The border is part of the size (border-box); the picture is
    scaled to fit inside, never stretched, whatever its own width, height or resolution. */
-.inv-logo-box { box-sizing: border-box; width: 3cm; height: 3cm; padding: 1mm; border: 1px solid #b5b5b5; overflow: hidden; }
+.inv-logo-box { box-sizing: border-box; width: var(--logo-w, 3cm); height: var(--logo-h, 3cm); padding: 1mm; border: 1px solid #b5b5b5; overflow: hidden; }
 .inv-logo-box img { display: block; width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; }
-html[data-paper="a5"] .inv-logo-box { width: 2.5cm; height: 2.5cm; }
+html[data-paper="a5"] .inv-logo-box { width: var(--logo-w, 2.5cm); height: var(--logo-h, 2.5cm); }
 .inv-staff { margin-top: 8px; }
 .inv-staff-line { line-height: 1.4; overflow-wrap: anywhere; }
 .inv-staff-name { font-weight: 700; }

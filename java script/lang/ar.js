@@ -269,7 +269,11 @@ I18n.register("ar", "العربية", {
   "settings.logo": "شعار المتجر",
   "settings.chooseLogo": "اختيار الشعار",
   "settings.removeLogo": "إزالة الشعار",
-  "settings.logoNote": "صورة بصيغة PNG. يتم تغيير حجمها لتناسب مربعًا ثابتًا في أعلى وسط الفاتورة (3 × 3 سم في A4، و2.5 × 2.5 سم في A5).",
+  "settings.logoNote": "صورة بصيغة PNG. يتم تغيير حجمها لتناسب إطار الشعار في أعلى الفاتورة، وحجمه هو المحدد أعلاه لحجم الورق المختار.",
+  "settings.logoSizeTitle": "حجم الشعار لفواتير {paper}",
+  "settings.logoWidth": "عرض الشعار (سم)",
+  "settings.logoHeight": "ارتفاع الشعار (سم)",
+  "settings.logoSizeHint": "لكل من A4 وA5 حجمه الخاص. الأرقام العشرية مسموحة (1.5) ويمكن أن يكون الشعار مستطيلًا (4 × 3).",
   "settings.demo": "بيانات تجريبية",
   "settings.demoNote": "أضف بضعة منتجات تجريبية لتجربة التطبيق. المنتجات الموجودة لديك تبقى كما هي.",
   "settings.loadDemo": "تحميل البيانات التجريبية",
@@ -279,6 +283,7 @@ I18n.register("ar", "العربية", {
   "logo.removed": "تمت إزالة الشعار.",
   "logo.pickPng": "يرجى اختيار صورة بصيغة PNG.",
   "logo.badPng": "هذا الملف ليس صورة PNG صالحة.",
+  "logo.sizeInvalid": "أدخل عرضًا وارتفاعًا بين {min} و{max} سم، مثلًا 2.5.",
 
   // ----- Demo products (names, descriptions and categories are saved in the language that is active) -----
   "demo.COCA33.name": "كوكا كولا 33 سل",
@@ -599,6 +604,7 @@ I18n.register("ar", "العربية", {
   "problem.badSellerName": "اسم البائع غير صالح",
   "problem.setting": "الإعداد «{key}» غير صالح.",
   "problem.paper": "يجب أن يكون حجم الورق A4 أو A5.",
+  "problem.logoSize": "يجب أن يكون حجم الشعار كائنًا يحتوي على حجم A4 وحجم A5.",
   "problem.currencyUnit": "يجب أن يكون عرض العملة بالدينار أو بالسنتيم.",
   "problem.logo": "الشعار ليس بيانات صورة صالحة.",
   "data.notObject": "البيانات ليست كائن بيانات Invoisy.",

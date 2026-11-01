@@ -62,7 +62,7 @@ function loadApp(options) {
     document: {
       getElementById: element,
       querySelectorAll: () => [],
-      documentElement: { style: { setProperty() {} }, dataset: {} },
+      documentElement: { style: { setProperty(name, value) { this[name] = value; } }, dataset: {} },   // keeps the css variables the app sets, so tests can read them
       body: { appendChild() {} },
       title: "Invoisy",
       createElement: () => ({
@@ -104,6 +104,8 @@ function loadApp(options) {
     revoked,
     confirms,
     indexedDB: context.indexedDB,
+    // The css variables the app has set on the page (for example --logo-w).
+    documentStyle: () => context.document.documentElement.style,
     // The text of the n-th (or last) downloaded file.
     async downloadedText(index) {
       const entry = downloads[index === undefined ? downloads.length - 1 : index];

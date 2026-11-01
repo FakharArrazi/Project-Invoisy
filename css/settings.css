@@ -72,6 +72,13 @@
 #view-settings #logoPreview { min-width: 140px; min-height: 90px; border-radius: 6px; background: #fafbfc; }
 #view-settings .logo-setting .actions { margin-top: 0; }
 
+/* The logo size: the two numbers side by side under the preview and the buttons */
+#view-settings .logo-size { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+#view-settings .logo-size-title { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
+#view-settings .logo-size-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 160px)); column-gap: 16px; }
+#view-settings .logo-size .field { margin-bottom: 8px; }
+#view-settings .logo-size + .muted { margin-top: 12px; }
+
 /* ---------- Smaller screens ---------- */
 
 @media (max-width: 1100px) {

@@ -273,7 +273,11 @@
     "settings.logo": "Logo du magasin",
     "settings.chooseLogo": "Choisir un logo",
     "settings.removeLogo": "Supprimer le logo",
-    "settings.logoNote": "Image PNG. Elle est redimensionnée pour tenir dans un carré de taille fixe, en haut au centre des factures (3 × 3 cm en A4, 2,5 × 2,5 cm en A5).",
+    "settings.logoNote": "Image PNG. Elle est redimensionnée pour tenir dans le cadre du logo en haut des factures, dont la taille est réglée ci-dessus pour le format de papier choisi.",
+    "settings.logoSizeTitle": "Taille du logo pour les factures {paper}",
+    "settings.logoWidth": "Largeur du logo (cm)",
+    "settings.logoHeight": "Hauteur du logo (cm)",
+    "settings.logoSizeHint": "A4 et A5 gardent chacun leur propre taille. Les décimales sont permises (1,5) et le logo peut être un rectangle (4 × 3).",
     "settings.demo": "Données de démonstration",
     "settings.demoNote": "Ajoutez quelques produits d’exemple pour essayer l’application. Vos produits existants sont conservés.",
     "settings.loadDemo": "Charger les données de démonstration",
@@ -283,6 +287,7 @@
     "logo.removed": "Logo supprimé.",
     "logo.pickPng": "Veuillez choisir une image PNG.",
     "logo.badPng": "Ce fichier n’est pas une image PNG valide.",
+    "logo.sizeInvalid": "Saisissez une largeur et une hauteur comprises entre {min} et {max} cm, par exemple 2,5.",
 
     // ----- Demo products -----
     "demo.COCA33.name": "Coca Cola 33cl",
@@ -589,6 +594,7 @@
     "problem.badSellerName": "nom du vendeur non valide",
     "problem.setting": "Le paramètre « {key} » n’est pas valide.",
     "problem.paper": "Le format de papier doit être A4 ou A5.",
+    "problem.logoSize": "La taille du logo doit être un objet contenant une taille A4 et une taille A5.",
     "problem.currencyUnit": "L’affichage de la devise doit être dinars ou centimes.",
     "problem.logo": "Le logo n’est pas une image valide.",
     "data.notObject": "Ces données ne sont pas un objet de données Invoisy.",

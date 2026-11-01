@@ -160,7 +160,8 @@ function staffPhonesHtml(phones) {
 //   left column:  business name, then the phone and email it always had, then the staff contacts (one person per line), then the address
 //                 - the staff and the address print nothing at all when there are none
 //   right column: the logo square (fixed size), with the invoice title directly under it, centred on it
-// The logo square is always drawn, empty or not. Its size is set in css (3 x 3 cm on A4, 2.5 x 2.5 cm on A5), never by the image.
+// The logo box is always drawn, empty or not. Its size is set in css from the width and height saved in Settings for the paper size in use
+// (applyLogoSize: 3 x 3 cm on A4 and 2.5 x 2.5 cm on A5 until they are changed), never by the image.
 function invoiceHeadHtml(biz, logoSrc) {
   const staff = Validation.businessStaff(biz).filter((c) => c.phones.length);
   const staffHtml = staff.length
@@ -3188,6 +3189,96 @@ function chooseLogo(file) {
   reader.readAsDataURL(file);
 }
 
+/* ---- Logo size: the width and height (cm) of the logo box, saved separately for A4 and for A5 ----
+   The two fields in Settings show the size of the paper size chosen under "Invoice paper size"; choosing the other paper size shows its
+   size instead. What is saved is   settings.logoSize = { A4: { width, height }, A5: { width, height } }   (see Validation.logoSizeOf).
+   The invoice (live preview and print) takes the size from two css variables, so both always show the same size, in real centimetres. */
+
+// Tells the stylesheet the logo size of the paper size in use.
+function applyLogoSize() {
+  const size = Validation.logoSizeOf(state.settings, state.settings.paper);
+  setLogoBoxCss(size);
+}
+
+function setLogoBoxCss(size) {
+  const style = document.documentElement.style;
+  style.setProperty("--logo-w", size.width + "cm");
+  style.setProperty("--logo-h", size.height + "cm");
+}
+
+// Shows the saved size of the paper size in use in the two fields. A field that is being typed in is left alone (unless `force`).
+function renderLogoSizeSetting(force) {
+  const paper = state.settings.paper;
+  const size = Validation.logoSizeOf(state.settings, paper);
+  $("logoSizeTitle").textContent = t("settings.logoSizeTitle", { paper });
+  for (const [id, value] of [["logoWidth", size.width], ["logoHeight", size.height]]) {
+    if (!force && document.activeElement === $(id)) continue;
+    $(id).value = String(value);
+  }
+}
+
+// What the two fields hold now: { width, height }, or null when either is empty, not a number or outside the limits.
+function readLogoSizeFields() {
+  const width = Validation.parseLogoLength($("logoWidth").value);
+  const height = Validation.parseLogoLength($("logoHeight").value);
+  return width === null || height === null ? null : { width, height };
+}
+
+// Saves the size of ONE paper size (the other one is carried over untouched) with the other settings.
+async function saveLogoSize(paper, size) {
+  const r = await commit((d) => {
+    const sizes = Validation.cleanLogoSizes(d.settings.logoSize);
+    if (sizes[paper].width === size.width && sizes[paper].height === size.height) return { skip: true };
+    d.settings.logoSize = { ...sizes, [paper]: { width: size.width, height: size.height } };
+  });
+  if (r.error) {
+    showError("logoError", r.error);
+    notify(r.error, "error");
+    applyLogoSize();
+    renderLogoSizeSetting(true);
+    return;
+  }
+  applyLogoSize();
+  renderInvoice();   // the preview (and so the page layout of the print) uses the new size at once
+}
+
+// A size typed but not saved yet (it is saved a moment after the last key, or at once when the field is left).
+let logoSizePending = null;
+let logoSizeTimer = null;
+function flushLogoSize() {
+  if (logoSizeTimer) { clearTimeout(logoSizeTimer); logoSizeTimer = null; }
+  const pending = logoSizePending;
+  logoSizePending = null;
+  return pending ? saveLogoSize(pending.paper, pending.size) : Promise.resolve();
+}
+
+// Typing: a usable size is shown at once and saved shortly after; while the text is not (yet) a usable size nothing happens.
+function onLogoSizeInput() {
+  showError("logoError", "");
+  const size = readLogoSizeFields();
+  if (!size) return;
+  logoSizePending = { paper: state.settings.paper, size };
+  setLogoBoxCss(size);
+  if (logoSizeTimer) clearTimeout(logoSizeTimer);
+  logoSizeTimer = setTimeout(() => { logoSizeTimer = null; flushLogoSize(); }, 300);
+}
+
+// A field was left (or Enter / the arrows were used): a usable size is saved now; anything else is refused and the saved size comes back.
+function onLogoSizeChange() {
+  const size = readLogoSizeFields();
+  if (!size) {
+    logoSizePending = null;
+    if (logoSizeTimer) { clearTimeout(logoSizeTimer); logoSizeTimer = null; }
+    showError("logoError", t("logo.sizeInvalid", { min: Validation.LOGO_SIZE_MIN, max: Validation.LOGO_SIZE_MAX }));
+    applyLogoSize();
+    renderLogoSizeSetting(true);
+    return Promise.resolve();
+  }
+  showError("logoError", "");
+  logoSizePending = { paper: state.settings.paper, size };
+  return flushLogoSize();
+}
+
 function stockBadge(stock) {
   if (stock <= 0) return ` <span class="badge out">${esc(t("stock.out"))}</span>`;
   if (stock <= LOW_STOCK) return ` <span class="badge low">${esc(t("stock.low"))}</span>`;
@@ -4312,6 +4403,7 @@ function fillSettingsForm(options) {
   renderPhoneRows();   // from what is typed (state.phoneRows), in the current language
   renderStaffRows();
   renderLogoSetting();
+  renderLogoSizeSetting();
   renderLanguageSetting();
 }
 
@@ -4358,12 +4450,16 @@ function applyPaperSize() {
   $("paperStyle").textContent = `@page { size: ${paper}; }`;
   document.documentElement.dataset.paper = paper.toLowerCase();
   $("paper" + paper).checked = true;
+  applyLogoSize();   // each paper size has its own logo size
+  renderLogoSizeSetting();
 }
 
 async function savePaper(paper) {
+  await flushLogoSize();   // a logo size typed for the paper size being left is saved for that one first
   const r = await commit((d) => { d.settings.paper = paper; });
   if (r.error) notify(r.error, "error");
   applyPaperSize();
+  renderInvoice();   // the logo box of the other paper size
 }
 
 // Shows the saved Currency display choice in Settings and tells the stylesheet (long centime amounts must wrap, never overlap).
@@ -5700,6 +5796,10 @@ function bindEvents() {
   $("chooseLogo").addEventListener("click", () => $("logoFile").click());
   $("logoFile").addEventListener("change", (e) => { chooseLogo(e.target.files[0]); e.target.value = ""; });
   $("removeLogo").addEventListener("click", () => saveLogo(""));
+  for (const id of ["logoWidth", "logoHeight"]) {
+    $(id).addEventListener("input", onLogoSizeInput);
+    $(id).addEventListener("change", onLogoSizeChange);
+  }
   document.querySelectorAll('input[name="paper"]').forEach((r) => r.addEventListener("change", () => savePaper(r.value)));
   document.querySelectorAll('input[name="currencyUnit"]').forEach((r) => r.addEventListener("change", () => saveCurrencyUnit(r.value)));
 }
@@ -5836,6 +5936,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     saleDoneAction, openSaleDoneDialog, getSaleDone: () => state.saleDone, printInvoice,
     restoreSaleDone, rememberedSaleDone, reloadedRightAfterSave, markCommit, hasUnsavedWork,
     backupShouldWait, resumeBackup, notify, saveLanguage, savePaper, saveCurrencyUnit, applyCurrencyUnit, currencyUnit, displayAmount, displayCurrency, invoiceMoney,
+    applyLogoSize, renderLogoSizeSetting, readLogoSizeFields, saveLogoSize, flushLogoSize, onLogoSizeInput, onLogoSizeChange, saveLogo,
     markSettingsTouched: () => { settingsTouched = true; },
     touchProductForm: () => { productFormTouched = true; },
     addProductAsNew, guard, t,

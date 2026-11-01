@@ -446,7 +446,22 @@
             <button type="button" class="btn danger" id="removeLogo" data-i18n="settings.removeLogo">Remove Logo</button>
           </div>
         </div>
-        <p class="muted small" data-i18n="settings.logoNote">PNG image. It is resized to fit a fixed square at the top center of invoices (3 × 3 cm on A4, 2.5 × 2.5 cm on A5).</p>
+        <!-- The size of the logo box on the invoice: its own width and height for the paper size chosen under "Invoice paper size". -->
+        <div class="logo-size" role="group" aria-labelledby="logoSizeTitle">
+          <h3 id="logoSizeTitle" class="logo-size-title">Logo size for A4 invoices</h3>
+          <div class="logo-size-fields">
+            <div class="field">
+              <label for="logoWidth" data-i18n="settings.logoWidth">Logo width (cm)</label>
+              <input type="number" id="logoWidth" dir="ltr" min="0.5" max="10" step="0.1" inputmode="decimal" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="logoHeight" data-i18n="settings.logoHeight">Logo height (cm)</label>
+              <input type="number" id="logoHeight" dir="ltr" min="0.5" max="10" step="0.1" inputmode="decimal" autocomplete="off">
+            </div>
+          </div>
+          <p class="muted small" data-i18n="settings.logoSizeHint">A4 and A5 each keep their own size. Decimals are allowed (1.5) and the logo can be a rectangle (4 × 3).</p>
+        </div>
+        <p class="muted small" data-i18n="settings.logoNote">PNG image. It is resized to fit the logo box at the top of invoices, which has the size set above for the chosen paper size.</p>
         <p class="error" id="logoError" role="alert"></p>
       </div>
         <!-- How the app and the invoices look -->

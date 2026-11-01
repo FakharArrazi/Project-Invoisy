@@ -804,6 +804,50 @@
     return cleanStaff((source || {}).staff);
   }
 
+  /* ---------- The logo size (Settings -> Store logo) ----------
+     The logo square printed at the top right of an invoice has its own width and height (in cm, decimals allowed, so it can be
+     a rectangle) for each paper size. They are saved as   logoSize: { A4: { width, height }, A5: { width, height } }
+     It is only present in the settings once it was saved: settings saved before it existed keep their shape and simply use the
+     defaults below (3 x 3 cm on A4, 2.5 x 2.5 cm on A5), which are the sizes the square always had. */
+
+  const LOGO_SIZE_DEFAULTS = { A4: { width: 3, height: 3 }, A5: { width: 2.5, height: 2.5 } };
+  const LOGO_SIZE_MIN = 0.5;    // cm: smaller than this is not a logo any more
+  const LOGO_SIZE_MAX = 10;     // cm: more would push the business name off an A5 sheet (14.8 cm wide)
+  const LOGO_PAPERS = Object.keys(LOGO_SIZE_DEFAULTS);
+
+  // A length typed or stored (a number, or text such as "1.5" or "1,5") as a number of cm rounded to 0.01, or null when it is
+  // empty, not a number, or outside the limits.
+  function parseLogoLength(value) {
+    let n = value;
+    if (isStr(value)) {
+      const text = value.trim().replace(",", ".");
+      if (!/^\d*\.?\d+$|^\d+\.$/.test(text)) return null;
+      n = Number(text);
+    }
+    if (!isNum(n)) return null;
+    n = Math.round(n * 100) / 100;
+    return n >= LOGO_SIZE_MIN && n <= LOGO_SIZE_MAX ? n : null;
+  }
+
+  const logoPaper = (paper) => (LOGO_PAPERS.includes(paper) ? paper : LOGO_PAPERS[0]);
+
+  // The logo size { width, height } (cm) of one paper size: what was saved, or the default for whatever is missing or not usable.
+  function logoSizeOf(settings, paper) {
+    const key = logoPaper(paper);
+    const saved = isObj(settings && settings.logoSize) && isObj(settings.logoSize[key]) ? settings.logoSize[key] : {};
+    const fallback = LOGO_SIZE_DEFAULTS[key];
+    const width = parseLogoLength(saved.width);
+    const height = parseLogoLength(saved.height);
+    return { width: width === null ? fallback.width : width, height: height === null ? fallback.height : height };
+  }
+
+  // Both paper sizes in the shape they are saved in. Anything missing or not usable becomes the default of that paper.
+  function cleanLogoSizes(stored) {
+    const out = {};
+    for (const key of LOGO_PAPERS) out[key] = logoSizeOf({ logoSize: stored }, key);
+    return out;
+  }
+
   // The business details an invoice keeps as they were when it was made. With one number (or none) and no staff it has exactly
   // the shape it always had; the list of numbers and the staff are only added when there is something to print.
   function businessSnapshot(settings) {
@@ -835,6 +879,9 @@
       if (Array.isArray(stored.phones)) settings.phones = cleanPhoneList(stored.phones.filter(isStr)).slice(0, MAX_BUSINESS_PHONES);
       // The staff contacts (a list of people), likewise only present when saved.
       if (Array.isArray(stored.staff)) settings.staff = cleanStaff(stored.staff);
+      // The logo size of each paper size, likewise only present when saved. Not an object: never carried over (older files use the defaults).
+      if (isObj(stored.logoSize)) settings.logoSize = cleanLogoSizes(stored.logoSize);
+      else delete settings.logoSize;
       // The product types the product form offers (Settings -> Product types), likewise only present when saved. An empty list is
       // kept as it is: it means "no type is offered", which is different from never having changed the list.
       if (Array.isArray(stored.productTypes)) settings.productTypes = cleanProductTypes(stored.productTypes);
@@ -1150,6 +1197,7 @@
         || !Array.isArray(c.phones) || c.phones.length > MAX_BUSINESS_PHONES || c.phones.some((p) => !isStr(p) || p.length > MAX_PHONE_LENGTH);
       if (!Array.isArray(s.staff) || s.staff.length > MAX_STAFF || s.staff.some(badPerson)) return t("problem.staff", { max: MAX_STAFF });
     }
+    if (s.logoSize !== undefined && !isObj(s.logoSize)) return t("problem.logoSize");
     if (s.productTypes !== undefined) {
       if (!Array.isArray(s.productTypes) || s.productTypes.length > MAX_PRODUCT_TYPES
         || s.productTypes.some((x) => !isStr(x) || cleanProductTypeName(x).length > MAX_PRODUCT_TYPE_LENGTH)) return t("problem.productTypes", { max: MAX_PRODUCT_TYPES });
@@ -1683,6 +1731,7 @@
     transferProblem, ledgerProblems,
     MAX_BUSINESS_PHONES, MAX_PHONE_LENGTH, cleanPhoneList, businessPhones, businessSnapshot,
     MAX_STAFF, MAX_STAFF_NAME_LENGTH, cleanStaff, businessStaff,
+    LOGO_SIZE_DEFAULTS, LOGO_SIZE_MIN, LOGO_SIZE_MAX, LOGO_PAPERS, parseLogoLength, logoSizeOf, cleanLogoSizes,
     isTileSize, normalizeTileSize, normalizeProduct, readProductInput, findDuplicateProduct, findSimilarProducts, suggestProducts, normalizeInvoice, normalizeSettings, paymentSummary, paymentDetail, stripDerived,
     productProblem, invoiceProblem, invoiceWarnings, settingsProblem, legacyProductIssue, legacyInvoiceIssue,
     buildData, hasMeaningfulData, countsOf, buildBackup, prepareBackupFile, parseBackup, backupFileName,
