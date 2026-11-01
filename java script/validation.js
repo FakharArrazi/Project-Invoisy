@@ -33,6 +33,7 @@
   const DATA_VERSION = 1;                // version of the old invoisy-data.json file format
   const BACKUP_FORMAT_VERSION = 2;       // version of the backup file made by Export Backup (1 = before suppliers and purchases; still readable)
   const P = globalThis.Purchases;        // suppliers, purchases and supplier payments (purchases.js)
+  const W = globalThis.Workers;          // workers and their payroll transactions (workers.js)
   const MIRROR_KEY = "invoisy-data";     // browser copy written by the previous (data file) version
   const LEGACY_KEYS = ["products", "invoices", "settings", "invoiceCounter"];
   // Calculated from the payments, the carried-forward lines and the debt transfers, never trusted when read back.
@@ -49,6 +50,9 @@
   // Optional lists of the supplier side (like debtTransfers): written to a backup only when there is something in them, so
   // a backup of data without deposits keeps its exact shape, and an older backup that has none restores as "no deposits".
   const OPTIONAL_SUPPLIER_LISTS = ["supplierDeposits", "advanceAllocations"];
+  // The payroll lists (workers.js), optional in exactly the same way: a backup of data without workers keeps its exact shape,
+  // and a file made before workers existed restores as "no workers".
+  const WORKER_LISTS = ["workers", "workerTransactions"];
 
   const DEFAULT_SETTINGS = {
     businessName: "My Store",
@@ -1354,6 +1358,11 @@
     }
     const supplierDeposits = collect(raw.supplierDeposits || [], "supplierDeposit", t("problem.label.supplierDeposit"), none, P.depositProblem, P.normalizeDeposit);
     const advanceAllocations = collect(raw.advanceAllocations || [], "advanceAllocation", t("problem.label.advanceAllocation"), none, P.allocationProblem, P.normalizeAllocation);
+    for (const key of WORKER_LISTS) {
+      if (raw[key] !== undefined && !Array.isArray(raw[key])) return { error: t("data.badList", { list: key }) };
+    }
+    const workers = collect(raw.workers || [], "worker", t("problem.label.worker"), none, W.workerProblem, W.normalizeWorker);
+    const workerTransactions = collect(raw.workerTransactions || [], "workerTransaction", t("problem.label.workerTransaction"), none, W.transactionProblem, W.normalizeTransaction);
 
     if (lenient) {
       // Old data may repeat an id. The first entry is kept and the repeat is set aside, never merged.
@@ -1371,12 +1380,13 @@
       if (dupInvoice) return { error: t("data.dupInvoice", { id: dupInvoice }) };
       const dupNumber = firstDuplicate(invoices.map((i) => i.invoiceNumber));
       if (dupNumber) return { error: t("data.dupNumber", { number: dupNumber }) };
-      for (const [list, kind] of [[suppliers, "supplier"], [purchases, "purchase"], [supplierPayments, "supplier payment"], [attachments, "attachment"], [supplierDeposits, "supplier deposit"], [advanceAllocations, "advance allocation"]]) {
+      for (const [list, kind] of [[suppliers, "supplier"], [purchases, "purchase"], [supplierPayments, "supplier payment"], [attachments, "attachment"], [supplierDeposits, "supplier deposit"], [advanceAllocations, "advance allocation"], [workers, "worker"], [workerTransactions, "worker transaction"]]) {
         const dup = firstDuplicate(list.map((r) => r.id));
         if (dup) return { error: t("data.dupRecord", { kind, id: dup }) };
       }
       // Every link must point at something that is in the file, and no number may be used twice.
       problems.push(...P.linkProblems({ suppliers, purchases, supplierPayments, attachments, supplierDeposits, advanceAllocations }));
+      problems.push(...W.linkProblems({ workers, workerTransactions }));
     }
 
     // The debt-transfer ledger. Optional: data saved before debt could be carried forward has none. Whatever is
@@ -1422,6 +1432,9 @@
         // Only present when there are any, so data without deposits keeps its exact shape (the same as debtTransfers).
         ...(supplierDeposits.length ? { supplierDeposits } : {}),
         ...(advanceAllocations.length ? { advanceAllocations } : {}),
+        // Payroll: only present when there are any, so data without workers keeps its exact shape.
+        ...(workers.length ? { workers } : {}),
+        ...(workerTransactions.length ? { workerTransactions } : {}),
         // The purchase reference counter never goes backwards either.
         purchaseCounter: Math.max(Math.max(0, Math.floor(toNumber(raw.purchaseCounter))), P.highestReference(purchases)),
       },
@@ -1437,6 +1450,7 @@
       (data.purchases && data.purchases.length > 0) ||
       (data.supplierPayments && data.supplierPayments.length > 0) ||
       (data.supplierDeposits && data.supplierDeposits.length > 0) ||
+      (data.workers && data.workers.length > 0) ||
       toNumber(data.counter) > 0 ||
       toNumber(data.purchaseCounter) > 0 ||
       (!!data.settings && !sameValue(normalizeSettings(data.settings), DEFAULT_SETTINGS));
@@ -1476,6 +1490,8 @@
       // Only listed when there are any, like the lists themselves: the counts of data without deposits keep their shape.
       ...((data.supplierDeposits || []).length ? { supplierDeposits: data.supplierDeposits.length } : {}),
       ...((data.advanceAllocations || []).length ? { advanceAllocations: data.advanceAllocations.length } : {}),
+      ...((data.workers || []).length ? { workers: data.workers.length } : {}),
+      ...((data.workerTransactions || []).length ? { workerTransactions: data.workerTransactions.length } : {}),
     };
   }
 
@@ -1509,6 +1525,8 @@
         attachments: snapshot.attachments || [],
         ...((snapshot.supplierDeposits || []).length ? { supplierDeposits: snapshot.supplierDeposits } : {}),
         ...((snapshot.advanceAllocations || []).length ? { advanceAllocations: snapshot.advanceAllocations } : {}),
+        ...((snapshot.workers || []).length ? { workers: snapshot.workers } : {}),
+        ...((snapshot.workerTransactions || []).length ? { workerTransactions: snapshot.workerTransactions } : {}),
         purchaseCounter: snapshot.purchaseCounter || 0,
       },
     };
@@ -1564,6 +1582,7 @@
         suppliers: raw.data.suppliers, purchases: raw.data.purchases, supplierPayments: raw.data.supplierPayments, attachments: raw.data.attachments,
         purchaseCounter: raw.data.purchaseCounter, debtTransfers: raw.data.debtTransfers,
         supplierDeposits: raw.data.supplierDeposits, advanceAllocations: raw.data.advanceAllocations,
+        workers: raw.data.workers, workerTransactions: raw.data.workerTransactions,
       };
       format = "backup";
       exportedAt = isDate(raw.exportedAt) ? raw.exportedAt : "";
@@ -1583,7 +1602,7 @@
     if (counts) {
       const actual = countsOf(built.data);
       const wrong = counts.products !== actual.products || counts.invoices !== actual.invoices ||
-        ["suppliers", "purchases", "supplierPayments", "attachments", "supplierDeposits", "advanceAllocations"].some((key) => counts[key] !== undefined && counts[key] !== actual[key]);
+        ["suppliers", "purchases", "supplierPayments", "attachments", "supplierDeposits", "advanceAllocations", "workers", "workerTransactions"].some((key) => counts[key] !== undefined && counts[key] !== actual[key]);
       if (wrong) return { error: t("backup.countsMismatch") };
     }
     const warnings = [...built.warnings];

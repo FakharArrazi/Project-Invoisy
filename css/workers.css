@@ -1,0 +1,41 @@
+/* Workers (payroll). Uses the same panels, tables, stat cards and buttons as Stock, Invoices and Suppliers;
+   only what is specific to this page is here. */
+
+.badge.w-advance { color: #8a5a00; }
+.badge.w-payment { color: #1b6e3c; }
+.badge.w-adjustment { color: var(--muted); }
+.badge.w-recovery { color: #5b3fa0; }
+.badge.wp-pending { color: var(--muted); }
+.badge.wp-partial { color: #8a5a00; }
+.badge.wp-paid { color: #1b6e3c; }
+.badge.wp-debt { color: var(--danger); background: #fdecea; }
+
+.workers-table td.owed, .w-tx-table td.owed, .w-period-table td.owed, .w-formula tr.w-debt td { color: var(--danger); font-weight: 600; }
+.workers-table .name-cell { font-weight: 600; }
+
+.w-info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 24px; margin: 0; }
+.w-info-row { min-width: 0; }
+.w-info-row dt { font-size: 12px; color: var(--muted); }
+.w-info-row dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+
+.w-panel { border-color: var(--accent); }
+.w-panel h3 { margin: 0 0 8px; }
+.w-payable { font-size: 16px; margin: 4px 0 2px; }
+.w-confirm { margin-bottom: 14px; }
+.w-confirm .actions { margin-top: 8px; }
+.btn.danger { color: var(--danger); border-color: var(--danger); }
+
+.w-tx-toolbar .list-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.w-date-filter input { min-width: 140px; }
+.w-desc { max-width: 280px; overflow-wrap: anywhere; }
+.w-actions { white-space: nowrap; }
+.w-formula { max-width: 520px; }
+.w-formula tr.w-total td { font-weight: 700; border-top: 1px solid var(--border-strong); }
+
+@media (max-width: 700px) {
+  .w-info-grid { grid-template-columns: 1fr 1fr; }
+  .w-actions { white-space: normal; }
+}
+
+.workers-table .phone-cell { white-space: nowrap; }
+.workers-table th, .workers-table td { padding-left: 8px; padding-right: 8px; }

@@ -1,5 +1,21 @@
 "use strict";
 
+// Safety net: if the two Workers files (java script/workers.js and java script/workers-ui.js) were not copied next to this file,
+// the rest of Invoisy must still start and work. The Workers page then only explains what is missing.
+if (typeof globalThis.WorkersUI === "undefined" || typeof globalThis.Workers === "undefined") {
+  globalThis.WorkersUI = {
+    init() {}, bind() {}, reset() {}, home() {},
+    render() {
+      const root = document.getElementById("workersRoot");
+      if (root && document.getElementById("view-workers") && !document.getElementById("view-workers").hidden) {
+        root.textContent = "The Workers page needs these two files in the \"java script\" folder: workers.js and workers-ui.js.";
+      }
+    },
+  };
+  console.warn("Invoisy: workers.js / workers-ui.js are missing, so the Workers page is switched off.");
+}
+
+
 /* ==========================================================================
    Simple Invoice - products, stock, sales and invoices in the browser.
    Data is saved in the browser's IndexedDB database (database.js); backups are JSON files.
@@ -298,6 +314,8 @@ const state = {
   supplierPayments: [],   // money paid to suppliers for ONE purchase, one record per payment
   supplierDeposits: [],   // money given to suppliers without naming an invoice (deposits / advances) and refunds back
   advanceAllocations: [], // the part of a deposit applied to a purchase; the deposit itself is never changed
+  workers: [],            // the people the shop pays (workers.js); payroll is never mixed with sales, purchases or suppliers
+  workerTransactions: [], // their salary advances, salary payments, adjustments and debt recoveries; balances are worked out from these
   purchaseCounter: 0,     // numbers the internal purchase references (PUR-000001), never goes backwards
   lastSaved: "",          // when the data in the database was last changed
   revision: 0,            // the database revision this page has loaded; every save has to start from it
@@ -330,6 +348,8 @@ function applyData(d) {
   state.supplierPayments = d.supplierPayments || [];
   state.supplierDeposits = d.supplierDeposits || [];
   state.advanceAllocations = d.advanceAllocations || [];
+  state.workers = d.workers || [];
+  state.workerTransactions = d.workerTransactions || [];
   state.purchaseCounter = d.purchaseCounter || 0;
   state.lastSaved = d.lastSaved || "";
   if (d.revision !== undefined) state.revision = d.revision;
@@ -342,6 +362,7 @@ function draftFromState() {
     products: state.products, invoices: state.invoices, debtTransfers: state.debtTransfers, settings: state.settings, counter: state.counter,
     suppliers: state.suppliers, purchases: state.purchases, supplierPayments: state.supplierPayments, purchaseCounter: state.purchaseCounter,
     supplierDeposits: state.supplierDeposits, advanceAllocations: state.advanceAllocations,
+    workers: state.workers, workerTransactions: state.workerTransactions,
   });
   // Scanned supplier invoices are not kept in memory. A change that adds or removes one lists it here, and
   // it is saved in the same transaction as the purchase it belongs to.
@@ -431,6 +452,7 @@ async function persistData(draft) {
       products: state.products, invoices: state.invoices, debtTransfers: state.debtTransfers, settings: state.settings, counter: state.counter,
       suppliers: state.suppliers, purchases: state.purchases, supplierPayments: state.supplierPayments, purchaseCounter: state.purchaseCounter,
       supplierDeposits: state.supplierDeposits, advanceAllocations: state.advanceAllocations,
+      workers: state.workers, workerTransactions: state.workerTransactions,
     },
     draft
   );
@@ -721,6 +743,7 @@ function importBackup(file) {
     });
     if (outcome.error) { reportDataProblem(outcome.error); return; }
     PurchasesUI.reset();   // an open supplier, purchase or form may point at data the backup replaced
+    WorkersUI.reset();     // the same for an open worker
     settingsTouched = false;   // a restore replaces everything, including business details that were being typed
     refreshAfterLoad();
     notify(t("storage.restored", { counts: describeData(outcome.done.counts) }) + (outcome.safetyName ? " " + t("storage.restoredSafety", { name: outcome.safetyName }) : ""));
@@ -736,6 +759,7 @@ function sameBackupData(a, b) {
     suppliers: d.suppliers || [], purchases: d.purchases || [], supplierPayments: d.supplierPayments || [],
     attachments: d.attachments || [], purchaseCounter: d.purchaseCounter || 0,
     supplierDeposits: d.supplierDeposits || [], advanceAllocations: d.advanceAllocations || [],
+    workers: d.workers || [], workerTransactions: d.workerTransactions || [],
   });
   return Validation.sameValue(pick(a), pick(b));
 }
@@ -4765,6 +4789,7 @@ function renderEverything() {
   renderInvoices();
   renderInvoice();
   PurchasesUI.render();
+  WorkersUI.render();
   Dashboard.render();
   renderDebtUi();
 }
@@ -5266,7 +5291,7 @@ function bindEvents() {
 
   // Navigation and shared buttons
   document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => {
-    if (b.dataset.view === state.view) PurchasesUI.home(b.dataset.view);   // the menu button of the open page returns to its list
+    if (b.dataset.view === state.view) { PurchasesUI.home(b.dataset.view); if (b.dataset.view === "workers") WorkersUI.home(); }   // the menu button of the open page returns to its list
     showView(b.dataset.view);
   }));
   $("brand").addEventListener("click", () => showView("dashboard"));
@@ -5278,6 +5303,7 @@ function bindEvents() {
   });
 
   PurchasesUI.bind();
+  WorkersUI.bind();
   Dashboard.bind();
 
   // Product picker
@@ -5829,6 +5855,13 @@ PurchasesUI.init({
   downloadText, showView, openProductInStock,
 });
 
+// The Workers screens (workers-ui.js) work on this page's data and save through the same commit(). Amounts are shown in the chosen
+// currency unit (dinars or centimes), like the amounts on invoices.
+WorkersUI.init({
+  state, commit, guard, $, t, tn, esc, money, invoiceMoney, numberFormat, notify, ltr, formatDateTime, showView,
+  now: () => new Date(),
+});
+
 // The Dashboard (dashboard.js) draws figures calculated by analytics.js from this page's data. It never saves anything.
 Dashboard.init({
   state, $, t, tn, esc, money, numberFormat, formatTileSize, ltr, formatDateTime, showView, openProductInStock, viewInvoice, showInvoicesFor,
@@ -5933,6 +5966,8 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     customerLabel,
     describeData,
     PurchasesUI,
+    WorkersUI,
+    Workers,
     Dashboard,
     Purchases,
     normalizeSettings: Validation.normalizeSettings,

@@ -464,7 +464,7 @@ test("upgrade 4 -> 5: every record is kept exactly, the two new stores start emp
 
   const db = newDb({ indexedDB: factory, name: "legacy4" });
   const info = await db.initDatabase();
-  assert.equal(info.version, 5);
+  assert.equal(info.version, 6);
   const all = await db.loadAll();
   assert.equal(all.products.length, 1);
   assert.equal(all.products[0].id, "p-tile");

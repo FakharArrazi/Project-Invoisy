@@ -8,7 +8,7 @@
    to localStorage only to READ data an older version left there (migration).
    Loaded after validation.js and before script.js.
 
-   Stores (database "invoisy", versions 1 to 5)
+   Stores (database "invoisy", versions 1 to 6)
      products   one record per product            key: id
      invoices   one record per invoice            key: id   index: invoiceNumber (unique), date
                 (customer, items and payments are saved inside the invoice, as before)
@@ -35,6 +35,12 @@
                         purchase, so the original deposit is never edited or counted twice
                         key: id   index: supplierId, purchaseId, depositId
                         Nothing here stores a balance: every balance is worked out from these records (Purchases.supplierSummary).
+
+   Added in version 6 (the shop's workers and their payroll; never mixed with sales, purchases or suppliers)
+     workers            one record per worker, with the salary of every period as it was (salaryHistory)   key: id   index: name
+     workerTransactions one record per salary advance, salary payment, salary adjustment or debt recovery  key: id   index: workerId, date
+                        Nothing here stores a balance or a salary period: they are worked out from these records (Workers.compute).
+                        A worker is never deleted (set inactive instead), so payroll history can not be lost.
 
    Rules this file enforces
      - A change touching several records is ONE transaction: it is saved completely or not at all.
@@ -66,10 +72,11 @@
 (function () {
   const V = globalThis.Validation;
   const P = globalThis.Purchases;
+  const W = globalThis.Workers;
   const t = (key, params) => I18n.t(key, params);
 
   const DB_NAME = "invoisy";
-  const DB_VERSION = 5;
+  const DB_VERSION = 6;
   const PRODUCTS = "products";
   const INVOICES = "invoices";
   const DEBT_TRANSFERS = "debtTransfers";
@@ -82,9 +89,11 @@
   const ATTACHMENTS = "attachments";
   const SUPPLIER_DEPOSITS = "supplierDeposits";
   const ADVANCE_ALLOCATIONS = "advanceAllocations";
+  const WORKERS = "workers";
+  const WORKER_TRANSACTIONS = "workerTransactions";
   const LEGACY_FILE_STORE = "kv";
   const DATA_STORES = [PRODUCTS, INVOICES, DEBT_TRANSFERS, SETTINGS, COUNTERS];
-  const ALL_STORES = [PRODUCTS, INVOICES, SETTINGS, COUNTERS, META, SUPPLIERS, PURCHASES, SUPPLIER_PAYMENTS, ATTACHMENTS, DEBT_TRANSFERS, SUPPLIER_DEPOSITS, ADVANCE_ALLOCATIONS];
+  const ALL_STORES = [PRODUCTS, INVOICES, SETTINGS, COUNTERS, META, SUPPLIERS, PURCHASES, SUPPLIER_PAYMENTS, ATTACHMENTS, DEBT_TRANSFERS, SUPPLIER_DEPOSITS, ADVANCE_ALLOCATIONS, WORKERS, WORKER_TRANSACTIONS];
   const SETTINGS_KEY = "app";
   const COUNTER_NAME = "invoice";
   const PURCHASE_COUNTER_NAME = "purchase";
@@ -223,7 +232,17 @@
       allocations.createIndex("purchaseId", "purchaseId");
       allocations.createIndex("depositId", "depositId");
     }
-    // Later versions: add `if (oldVersion < 6) { ... }` here. Never delete or rewrite existing stores in place.
+    if (oldVersion < 6) {
+      // Workers and their payroll transactions. Two new, empty stores: nothing already saved is read, changed or moved, so a
+      // database made by an earlier version upgrades without touching a single product, invoice, supplier or purchase.
+      // Data saved before workers existed simply has none.
+      const workers = db.createObjectStore(WORKERS, { keyPath: "id" });
+      workers.createIndex("name", "name");
+      const workerTransactions = db.createObjectStore(WORKER_TRANSACTIONS, { keyPath: "id" });
+      workerTransactions.createIndex("workerId", "workerId");
+      workerTransactions.createIndex("date", "date");
+    }
+    // Later versions: add `if (oldVersion < 7) { ... }` here. Never delete or rewrite existing stores in place.
   }
 
   /* ---------- Validation of what is about to be written ---------- */
@@ -260,6 +279,8 @@
       [x.attachments, P.attachmentProblem, "Attachment"],
       [x.supplierDeposits, P.depositProblem, "Supplier deposit"],
       [x.advanceAllocations, P.allocationProblem, "Advance allocation"],
+      [x.workers, W.workerProblem, "Worker"],
+      [x.workerTransactions, W.transactionProblem, "Worker transaction"],
     ];
     for (const [list, check, kind] of kinds) {
       const seen = new Set();
@@ -294,6 +315,7 @@
     const problems = validateRecords(c.products && c.products.put, c.invoices && c.invoices.put, c.settings, {
       suppliers: putsOf(c, "suppliers"), purchases: putsOf(c, "purchases"), supplierPayments: putsOf(c, "supplierPayments"), attachments: putsOf(c, "attachments"),
       supplierDeposits: putsOf(c, "supplierDeposits"), advanceAllocations: putsOf(c, "advanceAllocations"),
+      workers: putsOf(c, "workers"), workerTransactions: putsOf(c, "workerTransactions"),
     });
     problems.push(...validateTransfers(c.debtTransfers && c.debtTransfers.put));
     if (c.counter && (!Number.isInteger(c.counter.next) || c.counter.next < 0)) problems.push(t("data.badCounter"));
@@ -321,7 +343,7 @@
   }
 
   // What changed between two copies of { products, invoices, debtTransfers, settings, counter, suppliers,
-  // purchases, supplierPayments, supplierDeposits, advanceAllocations, purchaseCounter }. Only this is written. The supplier lists and debtTransfers may be missing (older callers): they then count as empty.
+  // purchases, supplierPayments, supplierDeposits, advanceAllocations, workers, workerTransactions, purchaseCounter }. Only this is written. The supplier lists and debtTransfers may be missing (older callers): they then count as empty.
   // Attached files are not compared (they are not kept in memory): the caller passes them in `after.attachments`
   // as { put: [records], remove: [ids] } and they are written as given.
   function diff(before, after) {
@@ -337,6 +359,8 @@
       supplierPayments: diffList(before.supplierPayments || [], after.supplierPayments || []),
       supplierDeposits: diffList(before.supplierDeposits || [], after.supplierDeposits || []),
       advanceAllocations: diffList(before.advanceAllocations || [], after.advanceAllocations || []),
+      workers: diffList(before.workers || [], after.workers || []),
+      workerTransactions: diffList(before.workerTransactions || [], after.workerTransactions || []),
       attachments: { put: att.put || [], remove: att.remove || [] },
       purchaseCounter: (after.purchaseCounter || 0) === (before.purchaseCounter || 0) ? null : { next: after.purchaseCounter || 0 },
     };
@@ -345,7 +369,7 @@
   function isEmptyChange(c) {
     const none = (x) => !x || (!(x.put && x.put.length) && !(x.remove && x.remove.length));
     return none(c.products) && none(c.invoices) && !c.settings && !c.counter &&
-      none(c.debtTransfers) && none(c.suppliers) && none(c.purchases) && none(c.supplierPayments) && none(c.attachments) && none(c.supplierDeposits) && none(c.advanceAllocations) && !c.purchaseCounter;
+      none(c.debtTransfers) && none(c.suppliers) && none(c.purchases) && none(c.supplierPayments) && none(c.attachments) && none(c.supplierDeposits) && none(c.advanceAllocations) && none(c.workers) && none(c.workerTransactions) && !c.purchaseCounter;
   }
 
   /* ---------- The database ---------- */
@@ -509,6 +533,9 @@
         // Deposits and allocations in the order they were made, so a statement reads the same every time.
         supplierDeposits: [...(side.supplierDeposits || [])].sort(byCreated),
         advanceAllocations: [...(side.advanceAllocations || [])].sort(byCreated),
+        // Workers in the order they were registered, their transactions in the order they happened. Older data has none.
+        workers: [...(side.workers || [])].sort(byCreated),
+        workerTransactions: [...(side.workerTransactions || [])].sort((a, b) => String(a.date).localeCompare(String(b.date)) || byCreated(a, b)),
         purchaseCounter: Math.max(side.purchaseCounter || 0, P.highestReference(side.purchases || [])),
       };
     }
@@ -520,7 +547,7 @@
     async function loadAll(loadOptions) {
       const withAttachments = Boolean(loadOptions && loadOptions.withAttachments);
       return withTx(ALL_STORES, "readonly", async (tx) => {
-        const [products, invoices, settingsRecord, counterRecord, stateRecord, suppliers, purchases, supplierPayments, purchaseCounterRecord, attachments, transfers, supplierDeposits, advanceAllocations] = await Promise.all([
+        const [products, invoices, settingsRecord, counterRecord, stateRecord, suppliers, purchases, supplierPayments, purchaseCounterRecord, attachments, transfers, supplierDeposits, advanceAllocations, workers, workerTransactions] = await Promise.all([
           req(tx.objectStore(PRODUCTS).getAll()),
           req(tx.objectStore(INVOICES).getAll()),
           req(tx.objectStore(SETTINGS).get(SETTINGS_KEY)),
@@ -534,9 +561,11 @@
           req(tx.objectStore(DEBT_TRANSFERS).getAll()),
           req(tx.objectStore(SUPPLIER_DEPOSITS).getAll()),
           req(tx.objectStore(ADVANCE_ALLOCATIONS).getAll()),
+          req(tx.objectStore(WORKERS).getAll()),
+          req(tx.objectStore(WORKER_TRANSACTIONS).getAll()),
         ]);
         const all = assemble(products, invoices, settingsRecord, counterRecord, stateRecord, {
-          suppliers, purchases, supplierPayments, supplierDeposits, advanceAllocations, purchaseCounter: purchaseCounterRecord ? purchaseCounterRecord.value : 0,
+          suppliers, purchases, supplierPayments, supplierDeposits, advanceAllocations, workers, workerTransactions, purchaseCounter: purchaseCounterRecord ? purchaseCounterRecord.value : 0,
         }, transfers);
         if (attachments) all.attachments = attachments;
         return all;
@@ -615,12 +644,16 @@
       const depositChanges = changes.supplierDeposits || {};
       const allocationChanges = changes.advanceAllocations || {};
       const attachmentChanges = changes.attachments || {};
+      const workerChanges = changes.workers || {};
+      const workerTxChanges = changes.workerTransactions || {};
       const products = tx.objectStore(PRODUCTS);
       const invoices = tx.objectStore(INVOICES);
       const transferChanges = changes.debtTransfers || {};
       const transfers = tx.objectStore(DEBT_TRANSFERS);
 
       await guardSupplierSide(tx, { supplierChanges, purchaseChanges, paymentChanges, depositChanges, allocationChanges });
+      // A worker is never deleted (the history of what the shop paid and advanced can not be lost): it is set inactive.
+      if ((workerChanges.remove || []).length) throw invalid([t("db.cannotDeleteWorker")]);
 
       // While an invoice STAYS, its delivery log (goods handed over in several steps) only ever grows, an invoice can not
       // become "partly delivered" after it was sold, and a cancelled sale saved by an earlier version can not be changed back,
@@ -654,6 +687,15 @@
         for (const key of keys) tx.objectStore(ATTACHMENTS).delete(key);
       }
       await checkSupplierLinks(tx, { supplierChanges, purchaseChanges, paymentChanges, depositChanges, allocationChanges, attachmentChanges });
+      // Payroll: transactions are written after their worker, and each one must point at a worker that exists.
+      const workerStore = tx.objectStore(WORKERS);
+      const workerTxStore = tx.objectStore(WORKER_TRANSACTIONS);
+      for (const w of workerChanges.put || []) workerStore.put(w);
+      for (const id of workerTxChanges.remove || []) workerTxStore.delete(id);
+      for (const x of workerTxChanges.put || []) {
+        if (!(await req(workerStore.getKey(x.workerId)))) throw invalid([`Worker transaction "${x.id}" ${t("problem.badWorkerLink")}.`]);
+        workerTxStore.put(x);
+      }
       // The nothing-owed-twice check. It runs on the data as it will be AFTER this change, inside the same transaction,
       // so a payment recorded in another window a moment ago, or a second carry of the same balance, is caught here.
       const touchesLedger = (invoiceChanges.put || []).length || (invoiceChanges.remove || []).length || (transferChanges.put || []).length || (transferChanges.remove || []).length;
@@ -949,7 +991,11 @@
       const attachments = tx.objectStore(ATTACHMENTS);
       const depositStore = tx.objectStore(SUPPLIER_DEPOSITS);
       const allocationStore = tx.objectStore(ADVANCE_ALLOCATIONS);
-      for (const store of [suppliers, purchases, payments, attachments, depositStore, allocationStore]) store.clear();
+      const workerStore = tx.objectStore(WORKERS);
+      const workerTxStore = tx.objectStore(WORKER_TRANSACTIONS);
+      for (const store of [suppliers, purchases, payments, attachments, depositStore, allocationStore, workerStore, workerTxStore]) store.clear();
+      for (const w of data.workers || []) workerStore.put(w);
+      for (const x of data.workerTransactions || []) workerTxStore.put(x);
       for (const s of data.suppliers || []) suppliers.put(s);
       for (const p of (data.purchases || []).map(P.withKeys)) purchases.put(p);
       for (const pay of data.supplierPayments || []) payments.put(pay);
@@ -962,7 +1008,7 @@
     // Reads back, inside the same transaction, what was just written. If anything differs the
     // transaction is aborted by the caller, so a bad write never commits.
     async function verifyDataset(tx, data, counter, purchaseCounter) {
-      const [products, invoices, settingsRecord, counterRecord, suppliers, purchases, payments, attachments, purchaseCounterRecord, transfers, deposits, allocations] = await Promise.all([
+      const [products, invoices, settingsRecord, counterRecord, suppliers, purchases, payments, attachments, purchaseCounterRecord, transfers, deposits, allocations, workers, workerTransactions] = await Promise.all([
         req(tx.objectStore(PRODUCTS).getAll()),
         req(tx.objectStore(INVOICES).getAll()),
         req(tx.objectStore(SETTINGS).get(SETTINGS_KEY)),
@@ -975,6 +1021,8 @@
         req(tx.objectStore(DEBT_TRANSFERS).getAll()),
         req(tx.objectStore(SUPPLIER_DEPOSITS).getAll()),
         req(tx.objectStore(ADVANCE_ALLOCATIONS).getAll()),
+        req(tx.objectStore(WORKERS).getAll()),
+        req(tx.objectStore(WORKER_TRANSACTIONS).getAll()),
       ]);
       const fail = (what) => new DbError("VERIFY", t("db.verifyFailed", { what: t("db.what." + what) }));
       if (products.length !== data.products.length) throw fail("products");
@@ -996,6 +1044,8 @@
         ["supplierPayments", payments, data.supplierPayments || [], (x) => x],
         ["supplierDeposits", deposits, data.supplierDeposits || [], (x) => x],
         ["advanceAllocations", allocations, data.advanceAllocations || [], (x) => x],
+        ["workers", workers, data.workers || [], (x) => x],
+        ["workerTransactions", workerTransactions, data.workerTransactions || [], (x) => x],
         ["attachments", attachments, data.attachments || [], (x) => x],
       ];
       for (const [what, stored, wanted, clean] of sides) {
@@ -1015,10 +1065,12 @@
       const extra = {
         suppliers: data.suppliers, purchases: data.purchases, supplierPayments: data.supplierPayments, attachments: data.attachments,
         supplierDeposits: data.supplierDeposits, advanceAllocations: data.advanceAllocations,
+        workers: data.workers, workerTransactions: data.workerTransactions,
       };
       const problems = validateRecords(data.products, data.invoices, data.settings, extra);
       problems.push(...validateTransfers(data.debtTransfers));
       if (!problems.length) problems.push(...P.linkProblems(extra, { checkAttachmentData: true }));
+      if (!problems.length) problems.push(...W.linkProblems(extra));
       // The ledger has to agree with the invoices it points at, or a balance could be owed twice after the restore.
       if (!problems.length) problems.push(...V.ledgerProblems(data.invoices, data.debtTransfers || []));
       if (problems.length) throw invalid(problems);
@@ -1043,7 +1095,8 @@
       const same = after.products.length === data.products.length && after.invoices.length === data.invoices.length && after.debtTransfers.length === (data.debtTransfers || []).length && after.counter === result.counter &&
         after.suppliers.length === (data.suppliers || []).length && after.purchases.length === (data.purchases || []).length &&
         after.supplierPayments.length === (data.supplierPayments || []).length && after.attachments.length === (data.attachments || []).length &&
-        after.supplierDeposits.length === (data.supplierDeposits || []).length && after.advanceAllocations.length === (data.advanceAllocations || []).length;
+        after.supplierDeposits.length === (data.supplierDeposits || []).length && after.advanceAllocations.length === (data.advanceAllocations || []).length &&
+        after.workers.length === (data.workers || []).length && after.workerTransactions.length === (data.workerTransactions || []).length;
       if (!same) throw new DbError("VERIFY", t("db.restoreVerify"));
       announce(result.revision);
       return {
@@ -1053,6 +1106,8 @@
           purchases: after.purchases.length, supplierPayments: after.supplierPayments.length, attachments: after.attachments.length,
           ...(after.supplierDeposits.length ? { supplierDeposits: after.supplierDeposits.length } : {}),
           ...(after.advanceAllocations.length ? { advanceAllocations: after.advanceAllocations.length } : {}),
+          ...(after.workers.length ? { workers: after.workers.length } : {}),
+          ...(after.workerTransactions.length ? { workerTransactions: after.workerTransactions.length } : {}),
         },
       };
     }
@@ -1164,7 +1219,7 @@
           return { status: record.status, record };
         }
 
-        const [stateRecord, productCount, invoiceCount, settingsRecord, counterRecord, supplierCount, purchaseCount, paymentCount, depositCount] = await Promise.all([
+        const [stateRecord, productCount, invoiceCount, settingsRecord, counterRecord, supplierCount, purchaseCount, paymentCount, depositCount, workerCount] = await Promise.all([
           req(tx.objectStore(META).get(STATE_KEY)),
           req(tx.objectStore(PRODUCTS).count()),
           req(tx.objectStore(INVOICES).count()),
@@ -1174,6 +1229,7 @@
           req(tx.objectStore(PURCHASES).count()),
           req(tx.objectStore(SUPPLIER_PAYMENTS).count()),
           req(tx.objectStore(SUPPLIER_DEPOSITS).count()),
+          req(tx.objectStore(WORKERS).count()),
         ]);
         const current = {
           products: new Array(productCount),
@@ -1182,6 +1238,7 @@
           purchases: new Array(purchaseCount),
           supplierPayments: new Array(paymentCount),
           supplierDeposits: new Array(depositCount),
+          workers: new Array(workerCount),
           settings: settingsRecord ? settingsRecord.value : null,
           counter: counterRecord ? counterRecord.value : 0,
         };
@@ -1261,7 +1318,7 @@
   }
 
   globalThis.InvoisyDB = {
-    DB_NAME, DB_VERSION, STORES: { PRODUCTS, INVOICES, SETTINGS, COUNTERS, META, SUPPLIERS, PURCHASES, SUPPLIER_PAYMENTS, ATTACHMENTS, DEBT_TRANSFERS, SUPPLIER_DEPOSITS, ADVANCE_ALLOCATIONS }, DATA_STORES, ALL_STORES,
+    DB_NAME, DB_VERSION, STORES: { PRODUCTS, INVOICES, SETTINGS, COUNTERS, META, SUPPLIERS, PURCHASES, SUPPLIER_PAYMENTS, ATTACHMENTS, DEBT_TRANSFERS, SUPPLIER_DEPOSITS, ADVANCE_ALLOCATIONS, WORKERS, WORKER_TRANSACTIONS }, DATA_STORES, ALL_STORES,
     DbError, MSG, create, diff, isEmptyChange, validateChanges,
   };
 })();
