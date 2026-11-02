@@ -56,3 +56,24 @@ Example: purchases 100,000 and a deposit of 150,000 give net −50,000, owed 0, 
 
 `tests/supplier-deposits.test.js` (rules, storage, backup, upgrade 4 → 5), `tests/supplier-deposits-screens.test.js` (the screens),
 and the optional real-browser check `tests/e2e/supplier_deposits_check.py`.
+
+## Unified supplier payments and automatic allocation
+
+Paying a supplier is one experience: the **Payments** tab of the supplier profile (the separate Deposits tab is gone).
+The form either pays a named invoice (a direct payment, never above that invoice's balance) or pays the supplier
+(an advance), and offers "refund received" while the supplier holds credit.
+
+* **One payment, one record.** An advance is ONE `supplierDeposits` record in the history. Allocations (`advanceAllocations`)
+  are accounting movements and are listed inside the advance they came from, never as extra payments.
+* **Automatic allocation** (`settleSupplierCredit`): the supplier's unapplied credit is spread over its confirmed invoices
+  that still need money, ordered by invoice date, then confirmation time, then reference; each gets `min(needed, credit left)`.
+  What no invoice needs stays as credit. Drafts and cancelled purchases never take credit.
+* **When it runs** (always inside the same transaction as the change that caused it): recording or editing an advance,
+  confirming a purchase (after its initial payment, so cash and credit never pay the same part twice), voiding an advance
+  or a direct payment, lowering a payment, cancelling or deleting a purchase. A manual "Release" of one allocation is the only
+  thing that leaves credit idle next to open invoices; the supplier then shows "Apply credit", and any later trigger above also
+  re-applies it.
+* **Edit / void an advance**: making it smaller than what was applied, or voiding it, reverses its allocations (kept as
+  history, status `reversed`) and the new amount is spread again. It is refused, changing nothing, if refunds depend on the money.
+* **Payment method** is now optional on direct payments too (`method`, absent on older records).
+* Invariant: net balance = outstanding invoices - unapplied credit; paid = direct payments + advances - refunds.

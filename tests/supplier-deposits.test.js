@@ -63,9 +63,12 @@ test("2 and 8. a deposit larger than all purchases is accepted: owed 0, advance 
   const s = sum(d);
   assert.deepEqual([s.total, s.paid, s.net, s.owed, s.advance], [100000, 150000, -50000, 0, 50000]);
   assert.equal(d.purchases.length, 1, "no fake purchase or invoice was created");
-  assert.equal(s.unapplied, 150000);
+  // The deposit is spread over the open invoice by itself: 100,000 settles it, 50,000 stays as credit.
+  assert.equal(s.unapplied, 50000);
   assert.equal(s.net, s.outstanding - s.unapplied, "net balance = open invoices - unapplied deposits");
-  assert.equal(summaryOf(d, id).outstanding, 100000, "the invoice itself is untouched");
+  assert.equal(summaryOf(d, id).outstanding, 0, "the invoice was settled by the deposit");
+  assert.equal(summaryOf(d, id).paymentStatus, "paid");
+  assert.equal(d.supplierDeposits.length, 1, "still ONE payment record");
 });
 
 test("5. an invoice-specific payment of 40,000 leaves 60,000 outstanding on that invoice", () => {
@@ -77,15 +80,16 @@ test("5. an invoice-specific payment of 40,000 leaves 60,000 outstanding on that
   assert.equal(sum(d).net, 60000);
 });
 
-test("6. a general deposit of 40,000 makes the net balance 60,000 but does not change the invoice status", () => {
+test("6. a general deposit of 40,000 makes the net balance 60,000 and is applied to the open invoice by itself (partially paid)", () => {
   const d = draft();
   const { id } = confirmed(d, 100);
   const before = summaryOf(d, id);
+  assert.equal(before.paymentStatus, "unpaid");
   deposit(d, 40000);
   const after = summaryOf(d, id);
   assert.equal(sum(d).net, 60000);
-  assert.deepEqual([after.paid, after.outstanding, after.paymentStatus], [before.paid, before.outstanding, before.paymentStatus]);
-  assert.equal(after.paymentStatus, "unpaid");
+  assert.deepEqual([after.paid, after.outstanding, after.paymentStatus], [40000, 60000, "partial"]);
+  assert.equal(sum(d).unapplied, 0);
 });
 
 test("7. a general deposit can be recorded before any purchase invoice exists, with no invoice named", () => {
@@ -143,11 +147,14 @@ test("an advance can not be applied for more than the unapplied deposits, nor th
   assert.ok(refused.error, "only 10,000 is available");
   assert.equal(d.advanceAllocations.length, 0);
   const done = confirmed(d, 5, {});
+  assert.equal(summaryOf(d, done.id).advanceApplied, 5000, "confirming used the credit by itself");
+  assert.ok(P.applyAdvance(d, done.id, "1").error, "now it is fully settled");
+  // Released on purpose, the credit is back and can be applied by hand, within both limits.
+  assert.ok(P.reverseAllocation(d, d.advanceAllocations[0].id, "test").allocation);
   const r = P.applyAdvance(d, done.id, "6000");
   assert.ok(r.error, "the purchase only needs 5,000");
   const ok = P.applyAdvance(d, done.id, "5000");
   assert.equal(ok.amount, 5000);
-  assert.ok(P.applyAdvance(d, done.id, "1").error, "now it is fully settled");
 });
 
 test("an allocation draws from the oldest deposits first and records one allocation per deposit used", () => {
@@ -230,20 +237,31 @@ test("16. a refund is its own record that lowers the advance; it can not exceed 
   assert.deepEqual([s.paid, s.net, s.unapplied], [50000, -50000, 50000]);
 });
 
-test("a deposit that was applied can not be voided or lowered below what was applied; once reversed it can", () => {
+test("a deposit that was applied: lowering it below what was applied or voiding it reverses its allocations (history kept)", () => {
   const d = draft();
   const x = deposit(d, 50000);
-  confirmed(d, 30, { advanceApply: "30000" });
-  assert.ok(P.voidDeposit(d, x.id, "mistake").error, "applied to a purchase");
-  assert.ok(P.updateDeposit(d, x.id, { amount: "20000", date: x.date }).error, "30,000 of it was applied");
+  const { id } = confirmed(d, 30, {});
+  assert.equal(summaryOf(d, id).advanceApplied, 30000);
+  // 35,000 still covers the 30,000 already applied: nothing moves.
   const ok = P.updateDeposit(d, x.id, { amount: "35000", date: x.date, note: "corrected" });
   assert.ok(ok.deposit, ok.error);
   assert.equal(ok.deposit.history.length, 1, "the old values stay in its history");
   assert.equal(ok.deposit.history[0].amount, 50000);
-  P.reverseAllocation(d, d.advanceAllocations[0].id, "undo");
+  assert.equal(d.advanceAllocations.length, 1, "no allocation was touched");
+  // 20,000 is less than the 30,000 applied: the allocation is reversed and the new amount is spread again.
+  const low = P.updateDeposit(d, x.id, { amount: "20000", date: x.date });
+  assert.ok(low.deposit, low.error);
+  assert.deepEqual(d.advanceAllocations.map((a) => [a.status, a.amount]), [["reversed", 30000], ["applied", 20000]]);
+  assert.deepEqual([summaryOf(d, id).paid, summaryOf(d, id).outstanding, summaryOf(d, id).paymentStatus], [20000, 10000, "partial"]);
+  assert.equal(sum(d).unapplied, 0);
+  // Voiding reverses what is left and the invoice is unpaid again; nothing is deleted.
   const v = P.voidDeposit(d, x.id, "paid twice");
   assert.ok(v.deposit, v.error);
   assert.equal(sum(d).paid, 0);
+  assert.deepEqual([summaryOf(d, id).paid, summaryOf(d, id).outstanding, summaryOf(d, id).paymentStatus], [0, 30000, "unpaid"]);
+  assert.equal(d.advanceAllocations.length, 2);
+  assert.ok(d.advanceAllocations.every((a) => a.status === "reversed"));
+  assert.deepEqual(links(d), []);
 });
 
 test("a deposit can not be voided while refunds depend on it", () => {
@@ -371,7 +389,7 @@ test("deposits and allocations persist, reload and keep their order after a reop
 test("the database refuses to delete a deposit, to apply more than a deposit holds, or to overpay an invoice", async () => {
   const db = await seeded();
   await change(db, (d) => { P.recordDeposit(d, { id: "dep-1", supplierId: d.suppliers[0].id, amount: "10000", date: day(0) }); });
-  await change(db, (d) => { confirmed(d, 10, {}); });
+  await change(db, (d) => { confirmed(d, 20, {}); });   // 20,000 invoice: the 10,000 deposit is applied to it by itself
 
   await assert.rejects(change(db, (d) => { d.supplierDeposits = []; }), /deposit/i, "a deposit is never deleted");
 
@@ -379,9 +397,8 @@ test("the database refuses to delete a deposit, to apply more than a deposit hol
     const p = d.purchases[0];
     d.advanceAllocations.push(P.normalizeAllocation({ id: "a-x", depositId: "dep-1", purchaseId: p.id, supplierId: p.supplierId, amount, date: day(0), status: "applied", createdAt: new Date().toISOString() }));
   };
-  await assert.rejects(change(db, forged(10001)), "more than the deposit holds");
-  const ok = await change(db, forged(10000));
-  assert.ok(ok.saved, "exactly what the deposit holds is fine");
+  assert.equal((await db.loadAll()).advanceAllocations.length, 1, "the deposit was applied by confirming the purchase");
+  await assert.rejects(change(db, forged(1)), "the deposit holds nothing more: applying more is refused");
   await assert.rejects(change(db, (d) => { d.advanceAllocations = []; }), "an allocation is only removed with its purchase");
   await assert.rejects(change(db, (d) => { d.supplierDeposits[0].status = "voided"; d.supplierDeposits[0].voidedAt = new Date().toISOString(); d.supplierDeposits[0].voidReason = "x"; }), "a voided deposit can not have applied allocations");
   await assert.rejects(change(db, (d) => { d.suppliers = []; }));

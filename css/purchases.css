@@ -49,3 +49,8 @@
 /* Filters flow in one row (the app's selects and dates are full width by default). */
 .list-filters select, .list-filters input[type="date"] { width: auto; min-width: 150px; max-width: 100%; }
 .stock-table td:first-child .link { white-space: nowrap; }
+
+/* The unified supplier payment form: the kind of payment is chosen with two or three plain radio buttons. */
+.pay-mode { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 6px 0; }
+.alloc-audit > summary, .alloc-detail > summary { cursor: pointer; }
+.alloc-detail { margin-top: 4px; }

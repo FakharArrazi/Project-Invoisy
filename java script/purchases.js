@@ -858,6 +858,8 @@
       purchaseId: text(raw.purchaseId), supplierId: text(raw.supplierId),
       amount: toNumber(raw.amount), date: text(raw.date),
       reference: text(raw.reference).trim(), note: text(raw.note).trim(),
+      // The method is optional and older payments have none: the key only exists when a method was chosen.
+      ...(text(raw.method).trim() ? { method: text(raw.method).trim() } : {}),
       status: raw.status === "voided" ? "voided" : "recorded",
       createdAt: text(raw.createdAt), updatedAt: text(raw.updatedAt),
       history: Array.isArray(raw.history) ? raw.history.map((h) => ({ ...h })) : [],
@@ -871,6 +873,7 @@
     if (!isNum(p.amount) || p.amount <= 0) return t("problem.badPayment");
     if (!isDay(p.date)) return t("problem.badDate");
     if (!PAYMENT_STATUSES.includes(p.status)) return t("problem.badStatus");
+    if (p.method !== undefined && p.method !== "" && !PAYMENT_METHODS.includes(p.method)) return t("problem.badField", { field: "method" });
     for (const key of ["reference", "note"]) {
       if (p[key] !== undefined && (!isStr(p[key]) || p[key].length > MAX_TEXT)) return t("problem.badField", { field: key });
     }
@@ -993,10 +996,12 @@
     const date = isBlank(input.date) ? ctx.today : text(input.date).trim();
     if (!isDay(date)) return fail("date", t("spay.err.date"));
     if (date > ctx.today) return fail("date", t("spay.err.future"));
+    const method = text(input.method).trim();
+    if (method && !PAYMENT_METHODS.includes(method)) return fail("method", t("dep.err.method"));
     const reference = text(input.reference).trim();
     const note = text(input.note).trim();
     if (reference.length > 200 || note.length > MAX_TEXT) return fail("note", t("sup.err.tooLong"));
-    return { values: { amount: round2(amount.value), date, reference, note } };
+    return { values: { amount: round2(amount.value), date, ...(method ? { method } : {}), reference, note } };
   }
 
   // Records a payment against ONE confirmed purchase. A payment can never be more than what is still owed.
@@ -1021,6 +1026,9 @@
   }
 
   // Changes a payment. The old values stay in its history, and the balance is worked out again from the payments.
+  // The room for the new amount is what the invoice needs after its OTHER payments and the advance applied to it, so a
+  // payment and an allocation can never pay the same part of an invoice twice. If the change leaves the invoice open
+  // while the supplier holds unapplied credit, that credit is applied to it (see settleSupplierCredit).
   function updatePayment(d, paymentId, input, options) {
     const ctx = ctxOf(d, options);
     const payment = ctx.payments.find((p) => p.id === paymentId);
@@ -1031,16 +1039,22 @@
     const read = readPaymentInput(input || {}, ctx);
     if (read.error) return read;
     const others = round2(activePayments(ctx.payments).filter((p) => p.purchaseId === purchase.id && p.id !== payment.id).reduce((s, p) => s + toNumber(p.amount), 0));
-    const room = Math.max(0, round2(toNumber(purchase.total) - others));
+    const advance = round2(activeAllocations(ctx.allocations).filter((a) => a.purchaseId === purchase.id).reduce((s, a) => s + toNumber(a.amount), 0));
+    const room = Math.max(0, round2(toNumber(purchase.total) - others - advance));
     if (read.values.amount > room + 1e-9) return { error: t("spay.err.tooMuch", { max: String(room) }), field: "amount" };
-    const before = { at: isoOf(ctx), amount: payment.amount, date: payment.date, reference: payment.reference, note: payment.note };
-    if (before.amount === read.values.amount && before.date === read.values.date && before.reference === read.values.reference && before.note === read.values.note) return { skip: true, payment };
-    payment.history = [...(payment.history || []), before];
-    Object.assign(payment, read.values, { updatedAt: isoOf(ctx) });
-    return { payment };
+    const before = { at: isoOf(ctx), amount: payment.amount, date: payment.date, method: payment.method || "", reference: payment.reference, note: payment.note };
+    if (before.amount === read.values.amount && before.date === read.values.date && before.method === (read.values.method || "") && before.reference === read.values.reference && before.note === read.values.note) return { skip: true, payment };
+    return allOrNothing(d, () => {
+      payment.history = [...(payment.history || []), before];
+      delete payment.method;
+      Object.assign(payment, read.values, { updatedAt: isoOf(ctx) });
+      const settled = settleSupplierCredit(d, payment.supplierId, options);
+      return { payment, allocations: settled.allocations };
+    });
   }
 
-  // A payment is never deleted. Voiding keeps it, with the reason, and takes it out of every balance.
+  // A payment is never deleted. Voiding keeps it, with the reason, and takes it out of every balance. The invoice is
+  // open again for that amount; credit the supplier holds is applied to it like to any other open invoice.
   function voidPayment(d, paymentId, reason, options) {
     const ctx = ctxOf(d, options);
     const payment = ctx.payments.find((p) => p.id === paymentId);
@@ -1053,7 +1067,8 @@
     payment.voidedAt = isoOf(ctx);
     payment.voidReason = why;
     payment.updatedAt = isoOf(ctx);
-    return { payment };
+    const settled = settleSupplierCredit(d, payment.supplierId, options);
+    return { payment, allocations: settled.allocations };
   }
 
   /* ==========================================================================
@@ -1150,6 +1165,9 @@
   // back out of the unapplied deposits). `input.id` makes the save repeatable: the form makes it once, so a second
   // click or a retry finds the record and reports it instead of recording the money twice.
   //   input: { id?, supplierId, kind?: "deposit" | "refund", amount, date, method, reference, note }
+  // A deposit is ONE payment record. Right after it is recorded it is spread over the supplier's open invoices, oldest
+  // first (settleSupplierCredit); what no invoice needs stays as unapplied credit. The result lists what was covered:
+  //   { deposit, allocations, covered, credit }
   function recordDeposit(d, input, options) {
     const ctx = ctxOf(d, options);
     const inp = input || {};
@@ -1167,18 +1185,23 @@
       const pool = advanceTotals(supplier.id, ctx.deposits, ctx.allocations).unapplied;
       if (read.values.amount > pool + 1e-9) return { error: t("dep.err.refundTooMuch", { max: String(Math.max(0, pool)) }), field: "amount" };
     }
-    const at = isoOf(ctx);
-    const deposit = normalizeDeposit({
-      id: isStr(inp.id) && inp.id ? inp.id : uid(), supplierId: supplier.id, kind, ...read.values,
-      status: "recorded", createdAt: at, updatedAt: at, history: [],
+    return allOrNothing(d, () => {
+      const at = isoOf(ctx);
+      const deposit = normalizeDeposit({
+        id: isStr(inp.id) && inp.id ? inp.id : uid(), supplierId: supplier.id, kind, ...read.values,
+        status: "recorded", createdAt: at, updatedAt: at, history: [],
+      });
+      if (!d.supplierDeposits) d.supplierDeposits = [];
+      d.supplierDeposits.push(deposit);
+      const settled = settleSupplierCredit(d, supplier.id, options);
+      return { deposit, ...creditReport(d, supplier.id, settled.allocations) };
     });
-    if (!d.supplierDeposits) d.supplierDeposits = [];
-    d.supplierDeposits.push(deposit);
-    return { deposit };
   }
 
-  // Changes a deposit or refund. The old values stay in its history. The amount can not go below what was already applied
-  // from it, and the supplier's unapplied deposits can never end below zero.
+  // Changes a deposit or refund. The old values stay in its history. The supplier's unapplied deposits can never end
+  // below zero. When a deposit is made smaller than what was already applied from it, its allocations are reversed
+  // (they stay as history) and the new amount is spread again over the open invoices, oldest first; a larger amount is
+  // spread the same way. Changing only the date, method, reference or note never moves any money.
   function updateDeposit(d, id, input, options) {
     const ctx = ctxOf(d, options);
     const deposit = ctx.deposits.find((x) => x.id === id);
@@ -1186,24 +1209,40 @@
     if (deposit.status === "voided") return { error: t("dep.err.voided") };
     const read = readDepositInput(input || {}, ctx);
     if (read.error) return read;
-    const totals = advanceTotals(deposit.supplierId, ctx.deposits, ctx.allocations);
-    if (deposit.kind === "refund") {
-      if (read.values.amount > round2(totals.unapplied + deposit.amount) + 1e-9) return { error: t("dep.err.refundTooMuch", { max: String(round2(totals.unapplied + deposit.amount)) }), field: "amount" };
-    } else {
-      const usedFromThis = round2(activeAllocations(ctx.allocations).filter((a) => a.depositId === deposit.id).reduce((s, a) => s + toNumber(a.amount), 0));
-      if (read.values.amount < usedFromThis - 1e-9) return { error: t("dep.err.belowApplied", { applied: String(usedFromThis) }), field: "amount" };
-      if (round2(totals.unapplied - deposit.amount + read.values.amount) < -1e-9) return { error: t("dep.err.refundsDepend"), field: "amount" };
-    }
     const before = { at: isoOf(ctx), amount: deposit.amount, date: deposit.date, method: deposit.method || "", reference: deposit.reference, note: deposit.note };
     if (before.amount === read.values.amount && before.date === read.values.date && before.method === read.values.method && before.reference === read.values.reference && before.note === read.values.note) return { skip: true, deposit };
-    deposit.history = [...(deposit.history || []), before];
-    Object.assign(deposit, read.values, { updatedAt: isoOf(ctx) });
-    return { deposit };
+    return allOrNothing(d, () => {
+      const at = isoOf(ctx);
+      const reversed = [];
+      if (deposit.kind !== "refund") {
+        const mine = activeAllocations(d.advanceAllocations || []).filter((a) => a.depositId === deposit.id);
+        const usedFromThis = round2(mine.reduce((s, a) => s + toNumber(a.amount), 0));
+        if (read.values.amount < usedFromThis - 1e-9) {
+          for (const a of mine) {
+            a.status = "reversed"; a.reversedAt = at; a.reverseReason = t("adv.reason.depositEdited");
+            reversed.push(a);
+            const purchase = ctx.purchases.find((p) => p.id === a.purchaseId);
+            if (purchase) { touch(purchase, ctx); logEvent(purchase, "advanceReversed", ctx, { amount: a.amount, note: t("adv.reason.depositEdited") }); }
+          }
+        }
+      }
+      const totals = advanceTotals(deposit.supplierId, d.supplierDeposits || [], d.advanceAllocations || []);
+      if (deposit.kind === "refund") {
+        if (read.values.amount > round2(totals.unapplied + deposit.amount) + 1e-9) return { error: t("dep.err.refundTooMuch", { max: String(round2(totals.unapplied + deposit.amount)) }), field: "amount" };
+      } else if (round2(totals.unapplied - deposit.amount + read.values.amount) < -1e-9) {
+        return { error: t("dep.err.refundsDepend"), field: "amount" };
+      }
+      deposit.history = [...(deposit.history || []), before];
+      Object.assign(deposit, read.values, { updatedAt: at });
+      const settled = settleSupplierCredit(d, deposit.supplierId, options);
+      return { deposit, reversed, ...creditReport(d, deposit.supplierId, settled.allocations) };
+    });
   }
 
-  // A deposit is never deleted: voiding keeps it, with the reason, and takes it out of every balance. A deposit that
-  // was applied to a purchase can not be voided until those allocations are reversed, so no allocation is left pointing
-  // at money that is gone. Voiding a deposit is also refused while refunds depend on it.
+  // A deposit is never deleted: voiding keeps it, with the reason, and takes it out of every balance. What was applied
+  // from it to invoices is reversed first (each allocation stays as history, marked reversed) so those invoices are open
+  // again for exactly that amount; other credit the supplier holds is then applied to them, oldest first. Voiding is
+  // refused, changing nothing, while refunds depend on the money (the supplier's unapplied deposits would go below zero).
   function voidDeposit(d, id, reason, options) {
     const ctx = ctxOf(d, options);
     const deposit = ctx.deposits.find((x) => x.id === id);
@@ -1212,17 +1251,116 @@
     const why = text(reason).trim();
     if (!why) return { error: t("spay.err.reason"), field: "reason" };
     if (why.length > MAX_TEXT) return { error: t("sup.err.tooLong"), field: "reason" };
-    if (deposit.kind !== "refund") {
-      const used = activeAllocations(ctx.allocations).filter((a) => a.depositId === deposit.id);
-      if (used.length) return { error: t("dep.err.hasAllocations", { n: used.length }) };
-      const totals = advanceTotals(deposit.supplierId, ctx.deposits, ctx.allocations);
-      if (round2(totals.unapplied - deposit.amount) < -1e-9) return { error: t("dep.err.refundsDepend") };
+    return allOrNothing(d, () => {
+      const at = isoOf(ctx);
+      const reversed = [];
+      if (deposit.kind !== "refund") {
+        for (const a of activeAllocations(d.advanceAllocations || []).filter((x) => x.depositId === deposit.id)) {
+          a.status = "reversed"; a.reversedAt = at; a.reverseReason = t("adv.reason.depositVoided", { reason: why });
+          reversed.push(a);
+          const purchase = ctx.purchases.find((p) => p.id === a.purchaseId);
+          if (purchase) { touch(purchase, ctx); logEvent(purchase, "advanceReversed", ctx, { amount: a.amount, note: why }); }
+        }
+        const totals = advanceTotals(deposit.supplierId, d.supplierDeposits || [], d.advanceAllocations || []);
+        if (round2(totals.unapplied - deposit.amount) < -1e-9) return { error: t("dep.err.refundsDepend") };
+      }
+      deposit.status = "voided";
+      deposit.voidedAt = at;
+      deposit.voidReason = why;
+      deposit.updatedAt = at;
+      const settled = settleSupplierCredit(d, deposit.supplierId, options);
+      return { deposit, reversed, ...creditReport(d, deposit.supplierId, settled.allocations) };
+    });
+  }
+
+  /* ---------- Automatic allocation ----------
+     The supplier's unapplied deposits (the "credit") are always used on the supplier's open invoices, oldest first:
+       1. open invoice = a CONFIRMED purchase of the supplier that still needs money
+          (total - payments - allocations applied to it). Drafts and cancelled purchases never take credit.
+       2. order = invoice date (oldest first), then the time it was confirmed, then its reference.
+       3. each invoice gets min(what it still needs, credit left); an invoice never gets more than it needs.
+       4. what no invoice needs stays as unapplied credit, to be used by the next invoice that is confirmed.
+     The money itself is never copied: each step only writes allocation records that point at the deposit (or
+     deposits, oldest first) it was drawn from and at the invoice, so the original payment is counted once. */
+
+  // The supplier's open invoices in allocation order: [{ purchase, outstanding }].
+  function openInvoices(d, supplierId, today) {
+    const ctx = ctxOf(d, { today });
+    return ctx.purchases
+      .filter((p) => p.supplierId === supplierId && p.status === "confirmed")
+      .map((purchase) => ({ purchase, outstanding: purchaseSummary(purchase, ctx.payments, ctx.today, ctx.allocations).outstanding }))
+      .filter((x) => x.outstanding > 0)
+      .sort((a, b) => text(a.purchase.invoiceDate).localeCompare(text(b.purchase.invoiceDate))
+        || text(a.purchase.confirmedAt || a.purchase.createdAt).localeCompare(text(b.purchase.confirmedAt || b.purchase.createdAt))
+        || text(a.purchase.reference).localeCompare(text(b.purchase.reference))
+        || a.purchase.id.localeCompare(b.purchase.id));
+  }
+
+  // What spreading `amount` would do to the supplier's open invoices, without changing anything. Used by the form to show
+  // the result before it is saved:  { rows: [{ purchaseId, reference, outstanding, allocated, remaining }], allocated, credit }
+  function previewAllocation(d, supplierId, amount, options) {
+    const ctx = ctxOf(d, options);
+    let left = Math.max(0, round2(toNumber(amount)));
+    const rows = [];
+    for (const { purchase, outstanding } of openInvoices(d, supplierId, ctx.today)) {
+      const take = round2(Math.min(left, outstanding));
+      rows.push({ purchaseId: purchase.id, reference: purchase.reference, supplierInvoiceNumber: purchase.supplierInvoiceNumber || "", invoiceDate: purchase.invoiceDate, outstanding, allocated: take, remaining: round2(outstanding - take) });
+      left = round2(left - take);
     }
-    deposit.status = "voided";
-    deposit.voidedAt = isoOf(ctx);
-    deposit.voidReason = why;
-    deposit.updatedAt = isoOf(ctx);
-    return { deposit };
+    return { rows, allocated: round2(round2(toNumber(amount)) - left), credit: left };
+  }
+
+  // Uses the supplier's unapplied credit on its open invoices (see above). Safe to call at any time and as often as you
+  // like: with no credit, or no open invoice, it changes nothing. Called by every operation that can create credit or open
+  // an invoice, on the same data draft, so it is saved in the same transaction as the change that caused it.
+  //   returns { allocations: [the records made], amount }
+  function settleSupplierCredit(d, supplierId, options) {
+    const made = [];
+    let amount = 0;
+    const ctx = ctxOf(d, options);
+    for (const { purchase, outstanding } of openInvoices(d, supplierId, ctx.today)) {
+      const pool = advanceTotals(supplierId, d.supplierDeposits || [], d.advanceAllocations || []).unapplied;
+      if (pool <= 0) break;
+      const take = round2(Math.min(pool, outstanding));
+      if (take <= 0) continue;
+      const done = allocateAdvance(d, purchase, take, ctxOf(d, options));
+      if (done.error) break;
+      made.push(...done.allocations);
+      amount = round2(amount + take);
+      touch(purchase, ctx);
+      logEvent(purchase, "advanceApplied", ctx, { amount: take, auto: true });
+    }
+    return { allocations: made, amount };
+  }
+
+  // The same, on request: for a supplier whose credit is sitting next to open invoices (for example after an allocation
+  // was released on purpose).
+  function applyCredit(d, supplierId, options) {
+    const ctx = ctxOf(d, options);
+    if (!ctx.suppliers.some((s) => s.id === supplierId)) return { error: t("dep.err.chooseSupplier"), field: "supplierId" };
+    const pool = advanceTotals(supplierId, ctx.deposits, ctx.allocations).unapplied;
+    if (pool <= 0) return { error: t("adv.err.noCredit") };
+    if (!openInvoices(d, supplierId, ctx.today).length) return { error: t("adv.err.noOpenInvoices") };
+    return allOrNothing(d, () => {
+      const settled = settleSupplierCredit(d, supplierId, options);
+      return { ...creditReport(d, supplierId, settled.allocations) };
+    });
+  }
+
+  // What a change did to the supplier's credit: the invoices covered (one row per invoice), the total applied and the
+  // credit left.
+  function creditReport(d, supplierId, allocations) {
+    const byPurchase = new Map();
+    for (const a of allocations || []) byPurchase.set(a.purchaseId, round2((byPurchase.get(a.purchaseId) || 0) + toNumber(a.amount)));
+    const covered = [...byPurchase].map(([purchaseId, amount]) => {
+      const purchase = (d.purchases || []).find((p) => p.id === purchaseId);
+      return { purchaseId, reference: purchase ? purchase.reference : "", amount };
+    });
+    return {
+      allocations: allocations || [], covered,
+      allocated: round2(covered.reduce((s, c) => s + c.amount, 0)),
+      credit: advanceTotals(supplierId, d.supplierDeposits || [], d.advanceAllocations || []).unapplied,
+    };
   }
 
   // Draws `amount` from the supplier's deposits, oldest first, and records one allocation per deposit used. The deposits
@@ -1325,6 +1463,65 @@
     let balance = 0;
     for (const r of rows) { balance = round2(balance + r.effect); r.balance = balance; }
     return rows;
+  }
+
+  // The money given to one supplier as ONE list, newest first: payments made for a specific invoice, advances (a deposit
+  // is ONE row however many invoices it covers) and refunds received. An allocation is not a row of its own: it is listed
+  // inside the advance it was drawn from (`allocations`), so it can be audited without looking like more cash.
+  //   row: { kind: "invoice" | "advance" | "refund", id, date, createdAt, amount, method, reference, note, status,
+  //          history, voidReason, purchaseId, purchaseRef,
+  //          allocations: [{ id, purchaseId, ref, amount, date, status, reverseReason }]   (advances only)
+  //          allocated, unapplied }                                                         (advances only)
+  function supplierPaymentHistory(d, supplierId) {
+    const byId = new Map((d.purchases || []).map((p) => [p.id, p]));
+    const left = depositRemaining(supplierId, d.supplierDeposits || [], d.advanceAllocations || []);
+    const rows = [];
+    for (const x of d.supplierPayments || []) {
+      if (x.supplierId !== supplierId) continue;
+      const p = byId.get(x.purchaseId);
+      rows.push({
+        kind: "invoice", id: x.id, date: x.date, createdAt: x.createdAt || "", amount: toNumber(x.amount), method: x.method || "",
+        reference: x.reference || "", note: x.note || "", status: x.status === "voided" ? "voided" : "recorded", history: x.history || [],
+        voidReason: x.voidReason || "", purchaseId: x.purchaseId, purchaseRef: p ? p.reference : "", purchaseInvoiceNumber: p ? (p.supplierInvoiceNumber || "") : "",
+      });
+    }
+    for (const x of d.supplierDeposits || []) {
+      if (x.supplierId !== supplierId) continue;
+      const voided = x.status === "voided";
+      const row = {
+        kind: x.kind === "refund" ? "refund" : "advance", id: x.id, date: x.date, createdAt: x.createdAt || "", amount: toNumber(x.amount), method: x.method || "",
+        reference: x.reference || "", note: x.note || "", status: voided ? "voided" : "recorded", history: x.history || [],
+        voidReason: x.voidReason || "", purchaseId: "", purchaseRef: "", purchaseInvoiceNumber: "",
+      };
+      if (x.kind !== "refund") {
+        row.allocations = (d.advanceAllocations || []).filter((a) => a.depositId === x.id)
+          .sort((a, b) => text(a.date).localeCompare(text(b.date)) || text(a.createdAt).localeCompare(text(b.createdAt)))
+          .map((a) => {
+            const p = byId.get(a.purchaseId);
+            return { id: a.id, purchaseId: a.purchaseId, ref: p ? p.reference : "", invoiceNumber: p ? (p.supplierInvoiceNumber || "") : "", amount: toNumber(a.amount), date: a.date, status: a.status, reverseReason: a.reverseReason || "" };
+          });
+        row.allocated = voided ? 0 : round2(row.allocations.filter((a) => a.status !== "reversed").reduce((s, a) => s + a.amount, 0));
+        row.unapplied = voided ? 0 : Math.max(0, round2(left.get(x.id) || 0));
+      }
+      rows.push(row);
+    }
+    return rows.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+  }
+
+  // One purchase's payment picture: which payments and which advances paid it, and when (for the invoice page).
+  //   [{ source: "payment" | "advance", id, date, amount, method, reference, status, depositId?, depositAmount? }], oldest first
+  function purchasePaymentSources(d, purchaseId) {
+    const rows = [];
+    for (const x of d.supplierPayments || []) {
+      if (x.purchaseId !== purchaseId) continue;
+      rows.push({ source: "payment", id: x.id, date: x.date, createdAt: x.createdAt || "", amount: toNumber(x.amount), method: x.method || "", reference: x.reference || "", note: x.note || "", status: x.status === "voided" ? "voided" : "active", depositId: "", depositAmount: 0 });
+    }
+    for (const a of d.advanceAllocations || []) {
+      if (a.purchaseId !== purchaseId) continue;
+      const dep = (d.supplierDeposits || []).find((x) => x.id === a.depositId);
+      rows.push({ source: "advance", id: a.id, date: a.date, createdAt: a.createdAt || "", amount: toNumber(a.amount), method: dep ? dep.method || "" : "", reference: dep ? dep.reference || "" : "", note: a.reverseReason || "", status: a.status === "reversed" ? "voided" : "active", depositId: a.depositId, depositAmount: dep ? toNumber(dep.amount) : 0, depositDate: dep ? dep.date : "" });
+    }
+    return rows.sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
 
   /* ==========================================================================
@@ -1538,7 +1735,12 @@
         allocations = done.allocations;
         logEvent(purchase, "advanceApplied", ctx, { amount: next.advanceApply });
       }
-      return { purchase, receipt, payment, allocations, createdProducts: created.map((l) => l.productId) };
+      // Then whatever credit the supplier still holds is used on the invoices that are open, oldest first. This purchase is
+      // confirmed now, so it takes part; its initial payment has already been recorded above, so the money is not counted
+      // twice. A draft never gets here, so a draft never uses credit.
+      const settled = settleSupplierCredit(d, purchase.supplierId, opts);
+      allocations = [...allocations, ...settled.allocations];
+      return { purchase, receipt, payment, allocations, ...creditReport(d, purchase.supplierId, allocations), createdProducts: created.map((l) => l.productId) };
     });
   }
 
@@ -1654,7 +1856,9 @@
     purchase.initialPayment = null;
     logEvent(purchase, "cancelled", ctx, { note: why });
     touch(purchase, ctx);
-    return { purchase };
+    // The credit that came back is used on the supplier's other open invoices; the rest stays as unapplied credit.
+    const settled = purchase.supplierId ? settleSupplierCredit(d, purchase.supplierId, options) : { allocations: [] };
+    return { purchase, allocations: settled.allocations };
   }
 
   // What deleting a purchase would take out, for the question asked before it is done. Nothing is changed.
@@ -1707,7 +1911,9 @@
       d.purchases = d.purchases.filter((p) => p.id !== id);
       if (!d.attachments) d.attachments = { put: [], remove: [] };
       for (const a of purchase.attachments || []) d.attachments.remove.push(a.id);
-      return { purchase, removedPayments, removedAllocations };
+      // The credit that was applied to it is unapplied again and goes to the supplier's other open invoices.
+      const settled = settleSupplierCredit(d, purchase.supplierId, options);
+      return { purchase, removedPayments, removedAllocations, allocations: settled.allocations };
     });
   }
 
@@ -2184,6 +2390,7 @@
     DEPOSIT_KINDS, DEPOSIT_STATUSES, ALLOCATION_STATUSES, PAYMENT_METHODS,
     normalizeDeposit, depositProblem, normalizeAllocation, allocationProblem, advanceTotals, depositRemaining,
     recordDeposit, updateDeposit, voidDeposit, applyAdvance, reverseAllocation, supplierLedger, moneyOutReport,
+    openInvoices, previewAllocation, settleSupplierCredit, applyCredit, supplierPaymentHistory, purchasePaymentSources,
     saveDraft, deleteDraft, confirmPurchase, creditCheck, receiveDelivery, reverseReceipt, cancelPurchase, deletePurchase, deletionPreview, updatePurchaseDetails, setAttachmentMeta,
     recordPayment, updatePayment, voidPayment,
     linkProblems,

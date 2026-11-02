@@ -30,9 +30,20 @@ const ui = (app) => app.api.PurchasesUI;
 const sid = (app) => state(app).suppliers[0].id;
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
+// The unified payment form of the Payments tab. With no radio checked it is a supplier payment (an advance).
 function fillDeposit(app, values) {
   const v = { type: "deposit", amount: "", date: day(0), method: "", reference: "", note: "", ...values };
-  app.field("dpType").value = v.type;
+  app.field("spMode-refund").checked = v.type === "refund";
+  app.field("spAmount").value = v.amount;
+  app.field("spDate").value = v.date;
+  app.field("spMethod").value = v.method;
+  app.field("spRef").value = v.reference;
+  app.field("spNote").value = v.note;
+}
+
+// The edit form of an advance (dpAmount ...).
+function fillDepositEdit(app, values) {
+  const v = { amount: "", date: day(0), method: "", reference: "", note: "", ...values };
   app.field("dpAmount").value = v.amount;
   app.field("dpDate").value = v.date;
   app.field("dpMethod").value = v.method;
@@ -57,10 +68,10 @@ const buy = (app, boxes, extra) => app.api.commit((d) => {
 
 test("the deposit form records a deposit with no invoice, and pressing save twice records it once", async () => {
   const app = await shop();
-  await openTab(app, "deposits");
+  await openTab(app, "payments");
   fillDeposit(app, { amount: "150000", method: "bank", reference: "VIR-9", note: "autumn order" });
-  const first = ui(app).forms["sup-deposit"]();
-  const second = ui(app).forms["sup-deposit"]();   // a second click while the first is still saving
+  const first = ui(app).forms["sup-pay"]();
+  const second = ui(app).forms["sup-pay"]();   // a second click while the first is still saving
   await Promise.all([first, second]);
   await settle();
   const deposits = state(app).supplierDeposits;
@@ -72,46 +83,48 @@ test("the deposit form records a deposit with no invoice, and pressing save twic
 
 test("a retry of the same form after a hiccup finds the first deposit instead of adding a second", async () => {
   const app = await shop();
-  await openTab(app, "deposits");
+  await openTab(app, "payments");
   fillDeposit(app, { amount: "5000" });
   const nonce = () => ui(app).state.sup.depositNonce;
-  await ui(app).forms["sup-deposit"]();
+  await ui(app).forms["sup-pay"]();
   assert.equal(state(app).supplierDeposits.length, 1);
   // The page forgot that it had finished (as after a crash between the save and the redraw): same form, same id.
   const id = state(app).supplierDeposits[0].id;
   ui(app).state.sup.depositNonce = id;
   fillDeposit(app, { amount: "5000" });
-  await ui(app).forms["sup-deposit"]();
+  await ui(app).forms["sup-pay"]();
   assert.equal(state(app).supplierDeposits.length, 1, "still one deposit");
   assert.ok(nonce() === "" || nonce() === id);
 });
 
 test("the form refuses a zero amount and shows why, without saving anything", async () => {
   const app = await shop();
-  await openTab(app, "deposits");
+  await openTab(app, "payments");
   fillDeposit(app, { amount: "0" });
-  await ui(app).forms["sup-deposit"]();
-  assert.match(app.errorText("dpError"), /amount/i);
+  await ui(app).forms["sup-pay"]();
+  assert.match(app.errorText("spError"), /amount/i);
   assert.equal(state(app).supplierDeposits.length, 0);
 });
 
 test("a deposit larger than all purchases shows owed 0, advance, prepaid and net balance on the supplier screens", async () => {
   const app = await shop();
   assert.equal((await buy(app, 100)).error, undefined);   // 100,000 DA
-  await openTab(app, "deposits");
+  await openTab(app, "payments");
   fillDeposit(app, { amount: "150000" });
-  await ui(app).forms["sup-deposit"]();
+  await ui(app).forms["sup-pay"]();
   await settle();
 
   const sum = P.supplierPayable(state(app), sid(app), day(0));
-  assert.deepEqual([sum.net, sum.owed, sum.advance, sum.unapplied, sum.outstanding], [-50000, 0, 50000, 150000, 100000]);
+  // The 150,000 deposit settled the 100,000 invoice by itself; the other 50,000 is credit for the next invoice.
+  assert.deepEqual([sum.net, sum.owed, sum.advance, sum.unapplied, sum.outstanding], [-50000, 0, 50000, 50000, 0]);
 
   const overview = await openTab(app, "overview");
   assert.match(overview, /Net balance/);
   assert.match(overview, /Prepaid/);
-  assert.match(overview, /Available advance/);
+  assert.match(overview, /Unapplied credit/);
+  assert.match(overview, /Allocated to invoices/);
   assert.match(overview, /50,000/);
-  assert.match(overview, /not applied to any invoice yet/, "it says the open invoice still shows unpaid until the advance is applied");
+  assert.match(overview, /applied automatically when it is confirmed/, "it says the credit waits for the next invoice");
 
   state(app).view = "suppliers";
   ui(app).reset();
@@ -132,13 +145,13 @@ test("the statement lists the deposit and the purchase with a running balance, a
   assert.match(statement, /Advance applied/);
   assert.match(statement, /No change to the balance/);
   assert.match(statement, /R-1/);
-  const deposits = await openTab(app, "deposits");
+  const deposits = await openTab(app, "payments");
   assert.match(deposits, /Cash/);
   assert.match(deposits, /20,000 DA still unapplied/);
   assert.match(deposits, /Advance applied to invoices/);
 });
 
-test("confirming a draft can use part of the advance; the invoice and the supplier then reconcile", async () => {
+test("confirming a draft uses the supplier's credit by itself; the invoice and the supplier then reconcile", async () => {
   const app = await shop();
   await app.api.commit((d) => P.recordDeposit(d, { supplierId: d.suppliers[0].id, amount: "20000", date: day(0) }));
   const drafted = await app.api.commit((d) => P.saveDraft(d, { supplierId: d.suppliers[0].id, supplierInvoiceNumber: "FA-7", invoiceDate: day(0), lines: [{ productId: "p-tile", unit: "box", qty: "35", unitPrice: "1000" }] }));
@@ -148,15 +161,14 @@ test("confirming a draft can use part of the advance; the invoice and the suppli
   ui(app).state.pur.open = "confirm";
   app.api.renderAll();
   const panel = app.field("purchasesRoot").innerHTML;
-  assert.match(panel, /id="dc-advance"/, "the advance is offered because the supplier has unapplied deposits");
-  assert.match(panel, /Unapplied deposits with this supplier: 20,000 DA/);
+  assert.ok(!/id="dc-advance"/.test(panel), "there is nothing to choose: the credit is used by itself");
+  assert.match(panel, /holds 20,000 DA of credit\. 20,000 DA is applied to this purchase automatically/);
 
   app.field("dc-receive").checked = true;
   app.field("dc-rdate").value = day(0);
   app.field("dc-pamount").value = "";
   app.field("dc-pdate").value = day(0);
   app.field("dc-pref").value = "";
-  app.field("dc-advance").value = "20000";
   await ui(app).forms["pur-confirm"]();
   await settle();
   const sum = P.supplierPayable(state(app), sid(app), day(0));
@@ -174,7 +186,7 @@ test("a normal supplier with no deposits sees no advance control in the confirm 
   assert.ok(!/dc-advance/.test(app.field("purchasesRoot").innerHTML), "no extra step for the normal workflow");
 });
 
-test("an open invoice can be settled from the supplier's deposits, then released again", async () => {
+test("a deposit settles the open invoice by itself; it can then be released and applied again by hand", async () => {
   const app = await shop();
   const bought = await buy(app, 40);
   const id = bought.purchase.id;
@@ -182,16 +194,10 @@ test("an open invoice can be settled from the supplier's deposits, then released
   state(app).view = "purchases";
   ui(app).openPurchase(id);
   app.api.renderAll();
-  assert.match(app.field("purchasesRoot").innerHTML, /Apply advance/);
-
-  ui(app).state.pur.open = "applyAdv";
-  app.api.renderAll();
-  app.field("da-amount").value = "15000";
-  await ui(app).forms["pur-applyadv"]();
-  await settle();
   let sum = P.purchaseSummary(state(app).purchases[0], state(app).supplierPayments, day(0), state(app).advanceAllocations);
-  assert.deepEqual([sum.paid, sum.outstanding, sum.advanceApplied], [15000, 25000, 15000]);
-  assert.match(app.field("purchasesRoot").innerHTML, /15,000 DA from advance/);
+  assert.deepEqual([sum.paid, sum.outstanding, sum.advanceApplied, sum.paymentStatus], [40000, 0, 40000, "paid"]);
+  assert.match(app.field("purchasesRoot").innerHTML, /40,000 DA from advance/);
+  assert.ok(!/Apply advance/.test(app.field("purchasesRoot").innerHTML), "nothing left to apply to a paid invoice");
 
   const allocation = state(app).advanceAllocations[0];
   ui(app).state.pur.open = "releaseAdv:" + allocation.id;
@@ -202,15 +208,25 @@ test("an open invoice can be settled from the supplier's deposits, then released
   sum = P.purchaseSummary(state(app).purchases[0], state(app).supplierPayments, day(0), state(app).advanceAllocations);
   assert.deepEqual([sum.paid, sum.outstanding], [0, 40000]);
   assert.equal(P.advanceTotals(sid(app), state(app).supplierDeposits, state(app).advanceAllocations).unapplied, 100000);
+
+  app.api.renderAll();
+  assert.match(app.field("purchasesRoot").innerHTML, /Apply advance/, "a released allocation can be applied again by hand");
+  ui(app).state.pur.open = "applyAdv";
+  app.api.renderAll();
+  app.field("da-amount").value = "15000";
+  await ui(app).forms["pur-applyadv"]();
+  await settle();
+  sum = P.purchaseSummary(state(app).purchases[0], state(app).supplierPayments, day(0), state(app).advanceAllocations);
+  assert.deepEqual([sum.paid, sum.outstanding, sum.advanceApplied], [15000, 25000, 15000]);
 });
 
 test("a deposit can be corrected and voided from the Deposits tab; the history keeps both", async () => {
   const app = await shop();
   await app.api.commit((d) => P.recordDeposit(d, { id: "dep-1", supplierId: d.suppliers[0].id, amount: "10000", date: day(-1) }));
-  await openTab(app, "deposits");
+  await openTab(app, "payments");
   ui(app).state.sup.editDepositId = "dep-1";
   app.api.renderAll();
-  fillDeposit(app, { amount: "12000", date: day(-1), note: "corrected" });
+  fillDepositEdit(app, { amount: "12000", date: day(-1), note: "corrected" });
   await ui(app).forms["sup-deposit"]();
   await settle();
   assert.equal(state(app).supplierDeposits[0].amount, 12000);
@@ -223,7 +239,7 @@ test("a deposit can be corrected and voided from the Deposits tab; the history k
   await settle();
   assert.equal(state(app).supplierDeposits[0].status, "voided");
   assert.equal(P.supplierPayable(state(app), sid(app), day(0)).paid, 0);
-  assert.match(await openTab(app, "deposits"), /paid twice/);
+  assert.match(await openTab(app, "payments"), /paid twice/);
 });
 
 test("the purchases page shows the cards, filters by date, and sorts by a column", async () => {
@@ -260,7 +276,7 @@ test("every new screen is drawn in French and Arabic with no missing text", asyn
   await buy(app, 30, { advanceApply: "30000" });
   for (const language of ["fr", "ar"]) {
     await app.api.commit((d) => { d.settings.language = language; });
-    for (const tab of ["overview", "deposits", "statement"]) {
+    for (const tab of ["overview", "payments", "statement"]) {
       const html = await openTab(app, tab);
       assert.ok(html.length > 200);
       assert.ok(!/\b(?:fin|dep|adv|led|sup|pur|spay)\.[a-z]+(?:\.[A-Za-z]+)*\b/.test(html.replace(/data-[a-z-]+="[^"]*"/g, "").replace(/id="[^"]*"/g, "")), `${language}/${tab}: a text key was shown instead of text`);

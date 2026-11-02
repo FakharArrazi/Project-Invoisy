@@ -28,7 +28,7 @@
   const PAY_FILTERS = ["all", "unpaid", "partial", "paid", "overdue"];
 
   const ui = {
-    sup: { screen: "list", q: "", status: "active", sortKey: "name", sortDir: 1, editingId: null, profileId: null, tab: "overview", formReady: false, formLang: "", contactRows: [], depositNonce: "", editDepositId: "", voidDepositId: "" },
+    sup: { screen: "list", q: "", status: "active", sortKey: "name", sortDir: 1, editingId: null, profileId: null, tab: "overview", formReady: false, formLang: "", contactRows: [], depositNonce: "", editDepositId: "", voidDepositId: "", payMode: "advance" },
     pur: {
       screen: "list", tab: "list", q: "", status: "all", pay: "all", supplierId: "", from: "", to: "", sortKey: "date", sortDir: -1,
       detailId: null, open: "", form: null, formLang: "",
@@ -469,7 +469,7 @@
 
   /* ---------- Supplier profile ---------- */
 
-  const PROFILE_TABS = ["overview", "purchases", "payments", "deposits", "statement", "products", "documents"];
+  const PROFILE_TABS = ["overview", "purchases", "payments", "statement", "products", "documents"];
 
   function purchaseRowsHtml(purchases, options) {
     const opts = options || {};
@@ -534,7 +534,7 @@
         ${stat(t("fin.totalPurchases"), esc(money(sum.total)))}${stat(t("fin.paidToSupplier"), esc(money(sum.paid)))}
         ${stat(t("fin.outstandingInvoices"), esc(money(sum.outstanding)) + `<span class="state">${esc(t("fin.openCount", { n: sum.openInvoices }))}</span>`, sum.outstanding > 0 ? "warn" : "")}
         ${stat(t("fin.netBalance"), esc(money(sum.net)) + `<span class="state">${esc(t("fin.state." + balanceState(sum.net)))}</span>`, sum.net > 0 ? "warn" : sum.net < 0 ? "credit" : "")}
-        ${stat(t("fin.availableAdvance"), esc(money(sum.advance)), sum.advance > 0 ? "credit" : "")}
+        ${stat(t("fin.allocated"), esc(money(sum.applied)))}${stat(t("fin.unappliedCredit"), esc(money(sum.unapplied)), sum.unapplied > 0 ? "credit" : "")}
         ${sum.overdueTotal > 0 ? stat(t("sup.stat.overdueAmount"), esc(money(sum.overdueTotal)), "bad") : ""}
       </div>
       <p class="muted balance-note">${esc(t("fin.formulaNote"))}</p>
@@ -553,30 +553,143 @@
       </div>`;
   }
 
-  function profilePayments(sp) {
-    const open = S().purchases
-      .filter((p) => p.supplierId === sp.id && p.status === "confirmed")
-      .map((p) => ({ p, sum: summaryOf(p) }))
-      .filter((x) => x.sum.outstanding > 0)
-      .sort((a, b) => a.p.dueDate.localeCompare(b.p.dueDate));
-    const form = open.length
-      ? `<form id="supPayForm" data-form="sup-pay" novalidate>
-          <h3>${esc(t("spay.record"))}</h3>
+  // The Payments tab: ONE place to pay a supplier. Either an invoice is named (a direct payment, never more than that
+  // invoice still needs) or it is not (a supplier payment: it is spread over the oldest unpaid invoices by itself and any
+  // rest stays as credit). Below it, one list of everything paid to the supplier; an advance is ONE row however many
+  // invoices it covers, with its allocations inside it for auditing.
+  function profilePayments(sp, sum) {
+    const open = P.openInvoices(S(), sp.id, today());
+    const editing = ui.sup.editDepositId ? S().supplierDeposits.find((x) => x.id === ui.sup.editDepositId && x.status === "recorded" && x.supplierId === sp.id) : null;
+    const mode = open.length || ui.sup.payMode !== "invoice" ? ui.sup.payMode : "advance";
+    const radio = (value, label) => `<label class="check"><input type="radio" name="spMode" id="spMode-${value}" value="${value}"${mode === value ? " checked" : ""}> ${esc(label)}</label>`;
+    const invoiceRows = open.map(({ purchase: p, outstanding }, i) => {
+      const paid = round(toNum(p.total) - outstanding);
+      return `<tr><td><input type="radio" name="spInvoice" id="spInv-${esc(p.id)}" value="${esc(p.id)}" aria-label="${esc(p.reference)}"${i === 0 ? " checked" : ""}></td>
+        <td>${esc(p.reference)}</td><td>${esc(p.noSupplierInvoice ? t("pur.noInvoiceShort") : p.supplierInvoiceNumber)}</td><td>${esc(fmtDay(p.invoiceDate))}</td>
+        <td class="num">${esc(money(p.total))}</td><td class="num">${esc(money(paid))}</td><td class="num">${esc(money(outstanding))}</td></tr>`;
+    }).join("");
+    const form = editing
+      ? `<div class="panel">${depositFormHtml(editing)}</div>`
+      : `<div class="panel"><form id="supPayForm" data-form="sup-pay" novalidate>
+          <h3>${esc(t("spay.title"))}</h3>
+          <div class="pay-mode">${radio("invoice", t("spay.mode.invoice"))}${radio("advance", t("spay.mode.advance"))}${sum.unapplied > 0 ? radio("refund", t("spay.mode.refund")) : ""}</div>
+          <p class="muted small" id="spModeHelp"></p>
+          <div id="spInvoiceBox"${mode === "invoice" ? "" : " hidden"}>
+            ${open.length ? `<div class="table-wrap"><table class="table"><thead><tr><th></th><th>${esc(t("pur.col.reference"))}</th><th>${esc(t("pur.col.invoiceNo"))}</th><th>${esc(t("pur.col.date"))}</th>
+              <th class="num">${esc(t("col.total"))}</th><th class="num">${esc(t("col.paid"))}</th><th class="num">${esc(t("pur.col.outstanding"))}</th></tr></thead><tbody>${invoiceRows}</tbody></table></div>`
+              : `<p class="muted">${esc(t("spay.noOpenInvoices"))}</p>`}
+          </div>
           <div class="grid-4">
-            ${field("spPurchase", esc(t("spay.forPurchase")), `<select id="spPurchase">${open.map(({ p, sum }) => option(p.id, `${p.reference} · ${p.noSupplierInvoice ? t("pur.noInvoiceShort") : p.supplierInvoiceNumber} · ${t("spay.owing", { amount: money(sum.outstanding) })}`, false)).join("")}</select>`)}
-            ${field("spAmount", esc(t("spay.amount")), `<input type="number" id="spAmount" min="0" step="any" placeholder="${esc(t("spay.amountHint"))}">`)}
+            ${field("spAmount", esc(t("spay.amount")), `<input type="number" id="spAmount" min="0" step="any" placeholder="0">`)}
             ${field("spDate", esc(t("spay.date")), `<input type="date" id="spDate" value="${today()}" max="${today()}">`)}
+            ${field("spMethod", esc(t("dep.method")), `<select id="spMethod">${option("", t("dep.method.none"), true)}${P.PAYMENT_METHODS.map((m) => option(m, methodName(m), false)).join("")}</select>`)}
             ${field("spRef", esc(t("spay.reference")), `<input type="text" id="spRef" autocomplete="off">`)}
           </div>
           ${field("spNote", esc(t("spay.note")), `<input type="text" id="spNote" autocomplete="off">`)}
+          <div class="subpanel muted small" id="spPreview" aria-live="polite"></div>
           <p class="error" id="spError" role="alert"></p>
-          <div class="actions left"><button type="submit" class="btn primary">${esc(t("spay.recordBtn"))}</button></div>
-        </form>`
-      : `<p class="muted">${esc(t("spay.nothingOwed"))}</p>`;
-    return `<div class="panel">${form}</div>
+          <div class="actions left"><button type="submit" class="btn primary">${esc(t("spay.recordBtn"))}</button>
+            <button type="button" class="btn" id="spFull" data-act="sup-pay-full" hidden>${esc(t("spay.payFullShort"))}</button></div>
+        </form></div>`;
+    const history = S().supplierDeposits.length || S().supplierPayments.length ? P.supplierPaymentHistory(S(), sp.id) : [];
+    const body = history.map((x) => historyRowHtml(x, sp)).join("");
+    const allocs = S().advanceAllocations.filter((a) => a.supplierId === sp.id)
+      .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+    const allocBody = allocs.map((a) => {
+      const purchase = purchaseById(a.purchaseId);
+      const from = S().supplierDeposits.find((x) => x.id === a.depositId);
+      return `<tr${a.status === "reversed" ? ' class="voided"' : ""}><td>${esc(fmtDay(a.date))}</td>
+        <td>${purchase ? `<button type="button" class="link" data-act="pur-open" data-id="${esc(purchase.id)}">${esc(purchase.reference)}</button>` : ""}</td>
+        <td class="num">${esc(money(a.amount))}</td><td>${from ? esc(t("dep.fromDeposit", { date: fmtDay(from.date), amount: money(from.amount) })) : ""}</td>
+        <td>${a.status === "reversed" ? badge("st-cancelled", t("adv.reversed")) + `<div class="small">${esc(t("spay.voidedBecause", { reason: a.reverseReason }))}</div>` : ""}</td></tr>`;
+    }).join("");
+    return `<div class="stat-strip small">${stat(t("fin.paidToSupplier"), esc(money(sum.paid)))}${stat(t("fin.allocated"), esc(money(sum.applied)))}
+        ${stat(t("fin.outstandingInvoices"), esc(money(sum.outstanding)), sum.outstanding > 0 ? "warn" : "")}${stat(t("fin.unappliedCredit"), esc(money(sum.unapplied)), sum.unapplied > 0 ? "credit" : "")}</div>
+      ${sum.unapplied > 0 && sum.openInvoices > 0 ? `<p class="notice">${esc(t("fin.unappliedOpen", { amount: money(sum.unapplied) }))} <button type="button" class="btn small" data-act="sup-apply-credit" data-id="${esc(sp.id)}">${esc(t("adv.applyCredit"))}</button></p>` : ""}
+      ${form}
       <div class="panel"><h2>${esc(t("spay.history"))}</h2>
-        <div class="table-wrap"><table class="table"><thead><tr><th>${esc(t("spay.date"))}</th><th>${esc(t("pur.col.reference"))}</th><th class="num">${esc(t("spay.amount"))}</th><th>${esc(t("spay.reference"))}</th><th></th></tr></thead>
-        <tbody>${paymentRowsHtml(supplierPaymentRows(sp.id))}</tbody></table></div></div>`;
+        <div class="table-wrap stock-table-wrap"><table class="table stock-table"><thead><tr><th>${esc(t("spay.date"))}</th><th>${esc(t("spay.col.for"))}</th><th class="num">${esc(t("spay.amount"))}</th><th>${esc(t("dep.method"))}</th><th>${esc(t("spay.reference"))}</th><th>${esc(t("spay.col.details"))}</th><th></th></tr></thead>
+        <tbody>${body || `<tr class="empty-row"><td colspan="7">${esc(t("spay.none"))}</td></tr>`}</tbody></table></div></div>
+      ${allocs.length ? `<details class="panel alloc-audit"><summary>${esc(t("adv.history"))}</summary><p class="muted small">${esc(t("adv.historyNote"))}</p>
+        <div class="table-wrap stock-table-wrap"><table class="table stock-table"><thead><tr><th>${esc(t("spay.date"))}</th><th>${esc(t("pur.col.reference"))}</th><th class="num">${esc(t("spay.amount"))}</th><th>${esc(t("adv.from"))}</th><th></th></tr></thead><tbody>${allocBody}</tbody></table></div></details>` : ""}`;
+  }
+
+  const toNum = (v) => Calc.toNumber(v);
+
+  // One row of the payment history: a payment for an invoice, an advance (with the invoices it covered) or a refund.
+  function historyRowHtml(x, sp) {
+    const voided = x.status === "voided";
+    if (ui.sup.voidDepositId === x.id) {
+      const reversing = x.kind === "advance" && x.allocated > 0 ? `<p class="notice">${esc(t("dep.voidAllocNote", { amount: money(x.allocated) }))}</p>` : "";
+      return `<tr><td colspan="7"><form data-form="sup-dep-void" novalidate>
+        <p>${esc(t("dep.voidAsk", { amount: money(x.amount), date: fmtDay(x.date) }))}</p>${reversing}
+        ${field("dvReason", esc(t("spay.voidReason")), `<input type="text" id="dvReason" autocomplete="off">`)}
+        <p class="error" id="dvError" role="alert"></p>
+        <div class="actions left"><button type="submit" class="btn danger">${esc(t("dep.voidBtn"))}</button><button type="button" class="btn" data-act="sup-dep-cancel">${esc(t("common.cancel"))}</button></div></form></td></tr>`;
+    }
+    const was = (x.history || []).map((hh) => `<div class="muted small">${esc(t("spay.was", { amount: money(hh.amount), date: fmtDay(hh.date) }))}</div>`).join("");
+    let forWhat, details = "", actions = "";
+    if (x.kind === "invoice") {
+      forWhat = x.purchaseId ? `<button type="button" class="link" data-act="pur-open" data-id="${esc(x.purchaseId)}">${esc(x.purchaseRef)}</button>${x.purchaseInvoiceNumber ? `<div class="muted small">${esc(x.purchaseInvoiceNumber)}</div>` : ""}` : "";
+    } else if (x.kind === "refund") {
+      forWhat = badge("dep-refund", t("spay.for.refund"));
+    } else {
+      forWhat = badge("dep-deposit", t("spay.for.advance"));
+      const live = x.allocations.filter((a) => a.status !== "reversed");
+      if (!voided) {
+        details = `<div>${esc(live.length ? t("spay.covered", { n: live.length, amount: money(x.allocated) }) : t("spay.coveredNone"))}</div>`
+          + (x.unapplied > 0 ? `<div class="muted small">${esc(t("dep.stillUnapplied", { amount: money(x.unapplied) }))}</div>` : "");
+      }
+      if (x.allocations.length) {
+        details += `<details class="alloc-detail"><summary class="small">${esc(t("spay.allocDetails"))}</summary>${x.allocations.map((a) =>
+          `<div class="small${a.status === "reversed" ? " voided" : ""}">${esc(fmtDay(a.date))} · ${a.purchaseId ? `<button type="button" class="link" data-act="pur-open" data-id="${esc(a.purchaseId)}">${esc(a.ref)}</button>` : ""} · ${esc(money(a.amount))}${a.status === "reversed" ? " · " + esc(t("adv.reversed")) : ""}</div>`).join("")}</details>`;
+      }
+    }
+    if (x.kind !== "invoice" && !voided) {
+      actions = `<div class="row-actions"><button type="button" class="btn small" data-act="sup-dep-edit" data-id="${esc(x.id)}">${esc(t("common.edit"))}</button>
+        <button type="button" class="btn small danger" data-act="sup-dep-void" data-id="${esc(x.id)}">${esc(t("spay.void"))}</button></div>`;
+    }
+    const state = voided ? badge("st-cancelled", t("spay.voided")) : "";
+    return `<tr${voided ? ' class="voided"' : ""}>
+      <td>${esc(fmtDay(x.date))}</td><td>${forWhat}</td>
+      <td class="num">${esc((x.kind === "refund" ? "− " : "") + money(x.amount))}</td>
+      <td>${esc(x.method ? methodName(x.method) : "")}</td>
+      <td>${esc(x.reference)}${x.note ? `<div class="muted small">${esc(x.note)}</div>` : ""}${was}${voided ? `<div class="small">${esc(t("spay.voidedBecause", { reason: x.voidReason }))}</div>` : ""}</td>
+      <td>${state}${details}</td><td class="num">${actions}</td></tr>`;
+  }
+
+  // What is chosen in the payment form: the kind of payment, and for a payment on an invoice, which invoice (and what it still needs).
+  function payChoice(sp) {
+    const mode = ["invoice", "advance", "refund"].find((m) => $("spMode-" + m) && $("spMode-" + m).checked) || "advance";
+    const pick = mode === "invoice" ? P.openInvoices(S(), sp.id, today()).find((x) => $("spInv-" + x.purchase.id) && $("spInv-" + x.purchase.id).checked) : null;
+    return { mode, purchaseId: pick ? pick.purchase.id : "", outstanding: pick ? pick.outstanding : 0 };
+  }
+
+  // Keeps the payment form honest while it is filled in: shows the right part for the chosen kind of payment and, before
+  // anything is saved, what the payment would do to the supplier's invoices.
+  function updatePayForm() {
+    const sp = supplierById(ui.sup.profileId);
+    if (!$("supPayForm") || !sp) return;
+    const choice = payChoice(sp);
+    const mode = choice.mode;
+    ui.sup.payMode = mode;
+    $("spInvoiceBox").hidden = mode !== "invoice";
+    $("spModeHelp").textContent = t("spay.mode." + mode + "Help");
+    const amount = Math.max(0, Calc.toNumber($("spAmount").value));
+    const preview = $("spPreview");
+    $("spFull").hidden = mode !== "invoice";
+    if (mode === "invoice") {
+      const left = choice.outstanding;
+      $("spAmount").placeholder = choice.purchaseId ? t("spay.max", { max: num(left) }) : "0";
+      preview.textContent = choice.purchaseId && amount > 0 ? (amount > left + 1e-9 ? t("spay.err.tooMuch", { max: String(left) }) : t("spay.afterInvoice", { amount: money(round(left - amount)) })) : "";
+      return;
+    }
+    $("spAmount").placeholder = "0";
+    if (mode === "refund") { preview.textContent = t("spay.refundNote", { amount: money(P.advanceTotals(sp.id, S().supplierDeposits, S().advanceAllocations).unapplied) }); return; }
+    if (!(amount > 0)) { preview.textContent = ""; return; }
+    const plan = P.previewAllocation(S(), sp.id, amount);
+    const rows = plan.rows.filter((r) => r.allocated > 0).map((r) => `<div>${esc(r.reference)}${r.supplierInvoiceNumber ? " · " + esc(r.supplierInvoiceNumber) : ""}: ${esc(money(r.allocated))} → ${esc(t(r.remaining > 0 ? "pur.pay.partial" : "pur.pay.paid"))}${r.remaining > 0 ? " (" + esc(t("spay.remainingShort", { amount: money(r.remaining) })) + ")" : ""}</div>`).join("");
+    preview.innerHTML = `<strong>${esc(t("spay.preview.title"))}</strong>${rows || `<div>${esc(t("spay.preview.none"))}</div>`}${plan.credit > 0 ? `<div>${esc(t("spay.preview.credit", { amount: money(plan.credit) }))}</div>` : ""}`;
   }
 
   function profileProducts(sp) {
@@ -637,51 +750,6 @@
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
   }
 
-  function profileDeposits(sp, sum) {
-    const rows = supplierDepositRows(sp.id);
-    const editing = ui.sup.editDepositId ? rows.find((x) => x.id === ui.sup.editDepositId && x.status === "recorded") : null;
-    const left = P.depositRemaining(sp.id, S().supplierDeposits, S().advanceAllocations);
-    const body = rows.map((x) => {
-      if (ui.sup.voidDepositId === x.id) {
-        return `<tr><td colspan="7"><form data-form="sup-dep-void" novalidate>
-          <p>${esc(t("dep.voidAsk", { amount: money(x.amount), date: fmtDay(x.date) }))}</p>
-          ${field("dvReason", esc(t("spay.voidReason")), `<input type="text" id="dvReason" autocomplete="off">`)}
-          <p class="error" id="dvError" role="alert"></p>
-          <div class="actions left"><button type="submit" class="btn danger">${esc(t("dep.voidBtn"))}</button><button type="button" class="btn" data-act="sup-dep-cancel">${esc(t("common.cancel"))}</button></div></form></td></tr>`;
-      }
-      const applied = x.kind === "refund" || x.status === "voided" ? "" : `${esc(money(round(x.amount - (left.get(x.id) || 0))))}<div class="muted small">${esc(t("dep.stillUnapplied", { amount: money(left.get(x.id) || 0) }))}</div>`;
-      const was = (x.history || []).map((hh) => `<div class="muted small">${esc(t("spay.was", { amount: money(hh.amount), date: fmtDay(hh.date) }))}</div>`).join("");
-      return `<tr${x.status === "voided" ? ' class="voided"' : ""}>
-        <td>${esc(fmtDay(x.date))}</td>
-        <td>${badge("dep-" + x.kind, t("dep.kind." + x.kind))}</td>
-        <td class="num">${esc(money(x.amount))}</td>
-        <td>${esc(x.method ? methodName(x.method) : "")}</td>
-        <td>${esc(x.reference)}${x.note ? `<div class="muted small">${esc(x.note)}</div>` : ""}${was}${x.status === "voided" ? `<div class="small">${esc(t("spay.voidedBecause", { reason: x.voidReason }))}</div>` : ""}</td>
-        <td class="num">${applied}</td>
-        <td class="num">${x.status === "voided" ? badge("st-cancelled", t("spay.voided")) : `<div class="row-actions"><button type="button" class="btn small" data-act="sup-dep-edit" data-id="${esc(x.id)}">${esc(t("common.edit"))}</button>
-          <button type="button" class="btn small danger" data-act="sup-dep-void" data-id="${esc(x.id)}">${esc(t("spay.void"))}</button></div>`}</td>
-      </tr>`;
-    }).join("");
-    const allocs = S().advanceAllocations.filter((a) => a.supplierId === sp.id)
-      .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
-    const allocBody = allocs.map((a) => {
-      const purchase = purchaseById(a.purchaseId);
-      const from = S().supplierDeposits.find((x) => x.id === a.depositId);
-      return `<tr${a.status === "reversed" ? ' class="voided"' : ""}><td>${esc(fmtDay(a.date))}</td>
-        <td>${purchase ? `<button type="button" class="link" data-act="pur-open" data-id="${esc(purchase.id)}">${esc(purchase.reference)}</button>` : ""}</td>
-        <td class="num">${esc(money(a.amount))}</td><td>${from ? esc(t("dep.fromDeposit", { date: fmtDay(from.date), amount: money(from.amount) })) : ""}</td>
-        <td>${a.status === "reversed" ? badge("st-cancelled", t("adv.reversed")) + `<div class="small">${esc(t("spay.voidedBecause", { reason: a.reverseReason }))}</div>` : ""}</td></tr>`;
-    }).join("");
-    return `<div class="stat-strip small">${stat(t("dep.stat.deposited"), esc(money(sum.deposited)))}${stat(t("dep.stat.refunded"), esc(money(sum.refunded)))}
-        ${stat(t("dep.stat.applied"), esc(money(sum.applied)))}${stat(t("fin.unapplied"), esc(money(sum.unapplied)), sum.unapplied > 0 ? "credit" : "")}</div>
-      <div class="panel">${depositFormHtml(editing)}</div>
-      <div class="panel"><h2>${esc(t("dep.history"))}</h2>
-        <div class="table-wrap stock-table-wrap"><table class="table stock-table"><thead><tr><th>${esc(t("spay.date"))}</th><th>${esc(t("dep.type"))}</th><th class="num">${esc(t("spay.amount"))}</th><th>${esc(t("dep.method"))}</th><th>${esc(t("spay.reference"))}</th><th class="num">${esc(t("dep.appliedCol"))}</th><th></th></tr></thead>
-        <tbody>${body || `<tr class="empty-row"><td colspan="7">${esc(t("dep.none"))}</td></tr>`}</tbody></table></div></div>
-      ${allocs.length ? `<div class="panel"><h2>${esc(t("adv.history"))}</h2><p class="muted small">${esc(t("adv.historyNote"))}</p>
-        <div class="table-wrap stock-table-wrap"><table class="table stock-table"><thead><tr><th>${esc(t("spay.date"))}</th><th>${esc(t("pur.col.reference"))}</th><th class="num">${esc(t("spay.amount"))}</th><th>${esc(t("adv.from"))}</th><th></th></tr></thead><tbody>${allocBody}</tbody></table></div></div>` : ""}`;
-  }
-
   // Everything that moved money with this supplier, oldest first, with the net balance after each line.
   function ledgerRowsHtml(rows) {
     if (!rows.length) return `<tr class="empty-row"><td colspan="5">${esc(t("led.none"))}</td></tr>`;
@@ -712,12 +780,11 @@
     const sum = P.supplierSummary(sp, S().purchases, S().supplierPayments, today(), S().supplierDeposits, S().advanceAllocations);
     const mine = S().purchases.filter((p) => p.supplierId === sp.id);
     const hasHistory = P.supplierHasHistory(S(), sp.id);
-    const tabs = PROFILE_TABS.map((k) => `<button type="button" class="tab" role="tab" aria-selected="${ui.sup.tab === k}" data-act="sup-tab" data-tab="${k}">${esc(t("sup.tab." + k))}</button>`).join("");
+    const tabs = PROFILE_TABS.map((k) => `<button type="button" class="tab" role="tab" aria-selected="${(ui.sup.tab === "deposits" ? "payments" : ui.sup.tab) === k}" data-act="sup-tab" data-tab="${k}">${esc(t("sup.tab." + k))}</button>`).join("");
     let body = "";
     if (ui.sup.tab === "overview") body = profileOverview(sp, sum);
     else if (ui.sup.tab === "purchases") body = `<div class="panel"><div class="table-wrap"><table class="table">${purchaseTableHead(false)}<tbody>${purchaseRowsHtml(mine)}</tbody></table></div></div>`;
-    else if (ui.sup.tab === "payments") body = profilePayments(sp);
-    else if (ui.sup.tab === "deposits") body = profileDeposits(sp, sum);
+    else if (ui.sup.tab === "payments" || ui.sup.tab === "deposits") body = profilePayments(sp, sum);   // "deposits" was a tab of its own; it is the Payments tab now
     else if (ui.sup.tab === "statement") body = profileStatement(sp);
     else if (ui.sup.tab === "products") body = profileProducts(sp);
     else body = profileDocuments(sp);
@@ -726,7 +793,6 @@
           <h2>${esc(sp.name)} ${sp.archived ? badge("st-cancelled", t("sup.status.archived")) : ""}</h2></div>
         <div class="actions wrap">
           ${sp.archived ? "" : `<button type="button" class="btn primary" data-act="pur-new" data-id="${esc(sp.id)}">${esc(t("sup.newPurchase"))}</button>`}
-          ${sp.archived ? "" : `<button type="button" class="btn" data-act="sup-tab" data-tab="deposits">${esc(t("dep.short"))}</button>`}
           <button type="button" class="btn" data-act="sup-tab" data-tab="payments">${esc(t("spay.recordShort"))}</button>
           <button type="button" class="btn" data-act="sup-edit" data-id="${esc(sp.id)}">${esc(t("common.edit"))}</button>
           <button type="button" class="btn" data-act="sup-csv" data-id="${esc(sp.id)}">${esc(t("sup.exportCsv"))}</button>
@@ -818,6 +884,12 @@
     }
     s.formReady = false;
     root.innerHTML = s.screen === "profile" ? supplierProfileHtml(supplierById(s.profileId)) : supplierListHtml();
+    updatePayFormSoon();
+  }
+
+  // The payment form (when the Payments tab is open) shows its hint and preview as soon as it is drawn.
+  function updatePayFormSoon() {
+    if (ui.sup.screen === "profile" && $("supPayForm")) updatePayForm();
   }
 
   function openSupplier(id, tab) {
@@ -828,36 +900,51 @@
     else renderSuppliers();
   }
 
+  // One form, three kinds of payment: for a named invoice (a direct payment), for the supplier (an advance, spread over the
+  // oldest unpaid invoices by recordDeposit), or a refund received. Everything is saved in one transaction.
   function submitSupplierPayment() {
-    const purchaseId = $("spPurchase").value;
-    const input = { amount: $("spAmount").value, date: $("spDate").value, reference: $("spRef").value, note: $("spNote").value };
+    const sp = supplierById(ui.sup.profileId);
+    if (!sp) return;
+    const choice = payChoice(sp);
+    const mode = choice.mode;
+    const input = { amount: $("spAmount").value, date: $("spDate").value, method: $("spMethod").value, reference: $("spRef").value, note: $("spNote").value };
+    const fieldMap = { amount: "spAmount", date: "spDate", method: "spMethod", reference: "spRef", note: "spNote" };
     showErr("spError", "");
-    return act((d) => P.recordPayment(d, purchaseId, input), {
-      errorId: "spError", fieldPrefix: "sp",
-      done: () => { h.notify(t("spay.recorded")); renderSuppliers(); },
+    if (mode === "invoice") {
+      if (!choice.purchaseId) { showErr("spError", t("spay.pickInvoice")); return; }
+      return act((d) => P.recordPayment(d, choice.purchaseId, input), {
+        errorId: "spError", fieldMap,
+        done: () => { h.notify(t("spay.recorded")); renderSuppliers(); },
+      });
+    }
+    // One id per form: pressing the button twice, or retrying after a hiccup, finds the first record instead of adding a second.
+    if (!ui.sup.depositNonce) ui.sup.depositNonce = Validation.uid();
+    const deposit = { ...input, id: ui.sup.depositNonce, supplierId: sp.id, kind: mode === "refund" ? "refund" : "deposit" };
+    return act((d) => P.recordDeposit(d, deposit), {
+      errorId: "spError", fieldMap,
+      done: (r) => {
+        ui.sup.depositNonce = "";
+        if (r.already) h.notify(t("dep.alreadyRecorded"));
+        else if (mode === "refund") h.notify(t("dep.refundRecorded"));
+        else h.notify(t(r.covered && r.covered.length ? "spay.advanceDone" : "spay.advanceDoneNone", { n: r.covered ? r.covered.length : 0, allocated: money(r.allocated || 0), credit: money(r.credit || 0) }));
+        renderSuppliers();
+      },
     });
   }
 
+  // Editing an advance or a refund (making one is done by the payment form above the history). Making an advance smaller
+  // than what was applied from it reverses those allocations and spreads the new amount again; recordDeposit/updateDeposit
+  // do that in one transaction.
   function submitDeposit() {
     const sp = supplierById(ui.sup.profileId);
-    if (!sp) return;
     const editId = ui.sup.editDepositId;
+    if (!sp || !editId) return;
     const input = { supplierId: sp.id, amount: $("dpAmount").value, date: $("dpDate").value, method: $("dpMethod").value, reference: $("dpRef").value, note: $("dpNote").value };
     const fieldMap = { amount: "dpAmount", date: "dpDate", method: "dpMethod", reference: "dpRef", note: "dpNote" };
     showErr("dpError", "");
-    if (editId) {
-      return act((d) => P.updateDeposit(d, editId, input), {
-        errorId: "dpError", fieldMap,
-        done: () => { h.notify(t("dep.changed")); ui.sup.editDepositId = ""; renderSuppliers(); },
-      });
-    }
-    input.kind = $("dpType").value;
-    // One id per form: pressing the button twice, or retrying after a hiccup, finds the first record instead of adding a second.
-    if (!ui.sup.depositNonce) ui.sup.depositNonce = Validation.uid();
-    input.id = ui.sup.depositNonce;
-    return act((d) => P.recordDeposit(d, input), {
+    return act((d) => P.updateDeposit(d, editId, input), {
       errorId: "dpError", fieldMap,
-      done: (r) => { h.notify(t(r.already ? "dep.alreadyRecorded" : input.kind === "refund" ? "dep.refundRecorded" : "dep.recorded")); ui.sup.depositNonce = ""; renderSuppliers(); },
+      done: () => { h.notify(t("dep.changed")); ui.sup.editDepositId = ""; renderSuppliers(); },
     });
   }
 
@@ -1501,13 +1588,7 @@
             ${field("pf-payDate", esc(t("spay.date")), `<input type="date" id="pf-payDate" value="${esc(ip.date)}" max="${today()}">`)}
             ${field("pf-payRef", esc(t("spay.reference")), `<input type="text" id="pf-payRef" value="${esc(ip.reference)}" autocomplete="off">`)}
           </div>
-          <div id="pf-advRow" hidden>
-            <div class="grid-3">
-              ${field("pf-advance", esc(t("adv.useLabel")), `<input type="number" id="pf-advance" min="0" step="any" value="${esc(v.advanceApply || "")}" placeholder="0">`)}
-              <div class="field"><span class="label-spacer">&nbsp;</span><button type="button" class="btn" id="pf-advMax" data-act="pur-adv-max"></button></div>
-            </div>
-            <p class="muted small" id="pf-advHint"></p>
-          </div>
+          <div id="pf-advRow" hidden><p class="notice small" id="pf-advHint"></p></div>
         </fieldset>
         <fieldset><legend>${esc(t("pur.deliveryNow"))}</legend>
           <label class="check"><input type="checkbox" id="pf-receive"${v.receiveNow ? " checked" : ""}> ${esc(t("pur.receiveNow"))}</label>
@@ -1552,7 +1633,6 @@
       discountType: $("pf-discountType").value, discountValue: $("pf-discount").value, taxType: $("pf-taxType").value, taxValue: $("pf-tax").value,
       taxMode: $("pf-taxMode").value, delivery: $("pf-delivery").value, otherCosts: $("pf-other").value,
       initialPayment: { amount: $("pf-payAmount").value, date: $("pf-payDate").value, reference: $("pf-payRef").value },
-      advanceApply: $("pf-advance") ? $("pf-advance").value : "",
       receiveNow: $("pf-receive").checked, receiptDate: $("pf-receiptDate").value,
     };
   }
@@ -1608,12 +1688,10 @@
     const paidNow = Math.min(loose(v.initialPayment.amount), totals.total);
     // The supplier's unapplied deposits, offered only when there are some (a normal purchase gets no extra step).
     const pool = supplier ? P.advanceTotals(supplier.id, S().supplierDeposits, S().advanceAllocations).unapplied : 0;
-    const advMax = Math.max(0, Math.min(pool, round(totals.total - paidNow)));
-    const advance = Math.min(loose(v.advanceApply), advMax);
-    $("pf-advRow").hidden = !(pool > 0 || loose(v.advanceApply) > 0);
-    $("pf-advHint").textContent = t("adv.available", { amount: money(Math.max(0, pool)) });
-    $("pf-advMax").textContent = t("adv.useMax", { amount: money(advMax) });
-    $("pf-advMax").disabled = advMax <= 0;
+    // Credit is used by itself when the purchase is confirmed: the most it can cover is what is left after the payment made now.
+    const advance = Math.max(0, Math.min(pool, round(totals.total - paidNow)));
+    $("pf-advRow").hidden = !(pool > 0);
+    $("pf-advHint").textContent = t("adv.autoNote", { amount: money(Math.max(0, pool)), use: money(advance) });
     const row = (label, value, cls) => `<div${cls ? ` class="${cls}"` : ""}><span>${esc(label)}</span><span>${esc(value)}</span></div>`;
     $("pfTotals").innerHTML = row(t("inv.subtotal"), money(totals.subtotal))
       + (totals.discount ? row(t("inv.discount"), "− " + money(totals.discount)) : "")
@@ -1621,7 +1699,7 @@
       + (totals.delivery ? row(t("pur.f.delivery"), money(totals.delivery)) : "")
       + (totals.otherCosts ? row(t("pur.f.otherCosts"), money(totals.otherCosts)) : "")
       + row(t("inv.grandTotal"), money(totals.total), "grand")
-      + (advance > 0 ? row(t("adv.appliedRow"), money(advance)) : "")
+      + (advance > 0 ? row(t("adv.autoRow"), money(advance)) : "")
       + (paidNow > 0 ? row(t("pur.paidNow"), money(paidNow)) : "")
       + (paidNow > 0 || advance > 0 ? row(t("pur.owedAfter"), money(Math.max(0, totals.total - paidNow - advance)), "due") + (advance > 0 ? row(t("adv.remainingAfter"), money(Math.max(0, pool - advance))) : "") : "");
     $("pf-supplierInfo").textContent = supplier ? supplierInfoText(supplier) : "";
@@ -1686,7 +1764,7 @@
   // Maps an error field of purchases.js to the box that shows it.
   function formFieldId(field) {
     const map = {
-      advanceApply: "pf-advance", supplierId: "pf-supplier", supplierInvoiceNumber: "pf-invoiceNo", invoiceDate: "pf-date", dueDate: "pf-due", reference: "pf-reference", notes: "pf-notes",
+      supplierId: "pf-supplier", supplierInvoiceNumber: "pf-invoiceNo", invoiceDate: "pf-date", dueDate: "pf-due", reference: "pf-reference", notes: "pf-notes",
       discountValue: "pf-discount", taxValue: "pf-tax", delivery: "pf-delivery", otherCosts: "pf-other",
       "initialPayment.amount": "pf-payAmount", "initialPayment.date": "pf-payDate", lines: "pf-lines-error", attachments: "pf-att-error",
     };
@@ -1801,7 +1879,7 @@
       const was = (x.history || []).map((hh) => `<div class="muted small">${esc(t("spay.was", { amount: money(hh.amount), date: fmtDay(hh.date) }))}</div>`).join("");
       return `<tr${x.status === "voided" ? ' class="voided"' : ""}>
         <td>${esc(fmtDay(x.date))}</td><td class="num">${esc(money(x.amount))}</td>
-        <td>${esc(x.reference)}${x.note ? `<div class="muted small">${esc(x.note)}</div>` : ""}${was}${x.status === "voided" ? `<div class="small">${esc(t("spay.voidedBecause", { reason: x.voidReason }))}</div>` : ""}</td>
+        <td>${esc([x.method ? methodName(x.method) : "", x.reference].filter(Boolean).join(" · "))}${x.note ? `<div class="muted small">${esc(x.note)}</div>` : ""}${was}${x.status === "voided" ? `<div class="small">${esc(t("spay.voidedBecause", { reason: x.voidReason }))}</div>` : ""}</td>
         <td>${x.status === "voided" ? badge("st-cancelled", t("spay.voided")) : ""}</td>
         <td class="num">${x.status === "recorded" && p.status === "confirmed" ? `<div class="row-actions"><button type="button" class="btn small" data-act="pur-panel" data-panel="editPay:${esc(x.id)}">${esc(t("common.edit"))}</button>
           <button type="button" class="btn small danger" data-act="pur-panel" data-panel="voidPay:${esc(x.id)}">${esc(t("spay.void"))}</button></div>` : ""}</td></tr>`;
@@ -1819,7 +1897,7 @@
       }
       const from = S().supplierDeposits.find((x) => x.id === a.depositId);
       return `<tr${a.status === "reversed" ? ' class="voided"' : ""}><td>${esc(fmtDay(a.date))}</td><td class="num">${esc(money(a.amount))}</td>
-        <td>${esc(from ? t("dep.fromDeposit", { date: fmtDay(from.date), amount: money(from.amount) }) : "")}${a.status === "reversed" ? `<div class="small">${esc(t("spay.voidedBecause", { reason: a.reverseReason }))}</div>` : ""}</td>
+        <td>${esc(from ? t("dep.fromDeposit", { date: fmtDay(from.date), amount: money(from.amount) }) : "")}${from && (from.method || from.reference) ? `<div class="muted small">${esc([from.method ? methodName(from.method) : "", from.reference].filter(Boolean).join(" · "))}</div>` : ""}${a.status === "reversed" ? `<div class="small">${esc(t("spay.voidedBecause", { reason: a.reverseReason }))}</div>` : ""}</td>
         <td class="num">${a.status === "reversed" ? badge("st-cancelled", t("adv.reversed")) : p.status === "confirmed" ? `<button type="button" class="btn small danger" data-act="pur-panel" data-panel="releaseAdv:${esc(a.id)}">${esc(t("adv.release"))}</button>` : ""}</td></tr>`;
     }).join("");
     const advForm = open === "applyAdv" ? `<div class="subpanel"><form data-form="pur-applyadv" novalidate>
@@ -1846,6 +1924,7 @@
       <div class="grid-4">
         ${field("dp-amount", esc(t("spay.amount")), `<input type="number" id="dp-amount" min="0" step="any" value="${payment ? esc(x.amount) : ""}" placeholder="${sum ? esc(t("spay.max", { max: num(sum.outstanding) })) : ""}">`)}
         ${field("dp-date", esc(t("spay.date")), `<input type="date" id="dp-date" value="${esc(payment ? x.date : today())}" max="${today()}">`)}
+        ${field("dp-method", esc(t("dep.method")), `<select id="dp-method">${option("", t("dep.method.none"), !x.method)}${P.PAYMENT_METHODS.map((m) => option(m, methodName(m), x.method === m)).join("")}</select>`)}
         ${field("dp-ref", esc(t("spay.reference")), `<input type="text" id="dp-ref" value="${esc(x.reference || "")}" autocomplete="off">`)}
         ${field("dp-note", esc(t("spay.note")), `<input type="text" id="dp-note" value="${esc(x.note || "")}" autocomplete="off">`)}
       </div>
@@ -1902,16 +1981,12 @@
       <p class="muted small">${esc(t("pur.att.note"))}</p></div>`;
   }
 
-  // The supplier's unapplied deposits, offered when confirming a draft: an optional amount, never all of it by force.
+  // The supplier's credit is used by itself when a draft is confirmed (never by a draft); this only says so beforehand.
   function advanceChoiceHtml(p, ip) {
     const pool = P.advanceTotals(p.supplierId, S().supplierDeposits, S().advanceAllocations).unapplied;
     if (!(pool > 0)) return "";
-    const max = Math.max(0, Math.min(pool, round(p.total - (ip && ip.amount ? Number(ip.amount) : 0))));
-    return `<div class="grid-3">
-        ${field("dc-advance", esc(t("adv.useLabel")), `<input type="number" id="dc-advance" min="0" step="any" value="${p.advanceApply ? esc(p.advanceApply) : ""}" placeholder="0">`)}
-        <div class="field"><span class="label-spacer">&nbsp;</span><button type="button" class="btn" data-act="pur-adv-fill" data-target="dc-advance" data-max="${max}">${esc(t("adv.useMax", { amount: money(max) }))}</button></div>
-      </div>
-      <p class="muted small">${esc(t("adv.available", { amount: money(pool) }))}</p>`;
+    const use = Math.max(0, Math.min(pool, round(p.total - (ip && ip.amount ? Number(ip.amount) : 0))));
+    return `<p class="notice">${esc(t("adv.autoNote", { amount: money(pool), use: money(use) }))}</p>`;
   }
 
   function panelHtml(p, sum) {
@@ -2061,14 +2136,13 @@
       const p = purchaseById(id);
       const ip = { amount: formValue("dc-pamount"), date: formValue("dc-pdate"), reference: formValue("dc-pref") };
       const receive = $("dc-receive").checked;
-      const advanceApply = $("dc-advance") ? formValue("dc-advance") : undefined;
-      const preview = P.previewPurchase(S(), { ...P.purchaseToInput(p), initialPayment: ip, ...(advanceApply !== undefined ? { advanceApply } : {}) }, "confirm");
+      const preview = P.previewPurchase(S(), { ...P.purchaseToInput(p), initialPayment: ip }, "confirm");
       if (!preview.errors.length) {
         const warn = creditWarning(p.supplierId, p.total, preview.purchase.initialPayment ? preview.purchase.initialPayment.amount : 0);
         const supplier = supplierById(p.supplierId);
         if (!confirm(t("pur.confirmAsk", { supplier: supplier ? supplier.name : "", total: money(p.total), stock: t(receive ? "pur.confirmStockNow" : "pur.confirmStockLater") }) + (warn ? "\n\n" + warn : ""))) return;
       }
-      return act((d) => P.confirmPurchase(d, id, { receive: receive ? undefined : {}, receiptDate: formValue("dc-rdate"), initialPayment: ip, advanceApply }), {
+      return act((d) => P.confirmPurchase(d, id, { receive: receive ? undefined : {}, receiptDate: formValue("dc-rdate"), initialPayment: ip }), {
         errorId: "dc-error",
         done: (r) => { h.notify(t(r.already ? "pur.alreadyConfirmed" : "pur.confirmed", { ref: p.reference })); ui.pur.open = ""; renderPurchases(); },
       });
@@ -2085,12 +2159,12 @@
     },
     "pur-pay"() {
       const id = ui.pur.detailId;
-      const input = { amount: formValue("dp-amount"), date: formValue("dp-date"), reference: formValue("dp-ref"), note: formValue("dp-note") };
+      const input = { amount: formValue("dp-amount"), date: formValue("dp-date"), method: formValue("dp-method"), reference: formValue("dp-ref"), note: formValue("dp-note") };
       return act((d) => P.recordPayment(d, id, input), { errorId: "dp-error", done: () => { h.notify(t("spay.recorded")); ui.pur.open = ""; renderPurchases(); } });
     },
     "pur-editpay"() {
       const payId = ui.pur.open.slice("editPay:".length);
-      const input = { amount: formValue("dp-amount"), date: formValue("dp-date"), reference: formValue("dp-ref"), note: formValue("dp-note") };
+      const input = { amount: formValue("dp-amount"), date: formValue("dp-date"), method: formValue("dp-method"), reference: formValue("dp-ref"), note: formValue("dp-note") };
       return act((d) => P.updatePayment(d, payId, input), { errorId: "dp-error", done: () => { h.notify(t("spay.changed")); ui.pur.open = ""; renderPurchases(); } });
     },
     "pur-voidpay"() {
@@ -2178,7 +2252,15 @@
       renderSuppliers();
     },
     "sup-tab"(el) { ui.sup.tab = el.dataset.tab; ui.sup.editDepositId = ""; ui.sup.voidDepositId = ""; renderSuppliers(); },
-    "sup-deposit"(el) { openSupplier(el.dataset.id, "deposits"); },
+    "sup-deposit"(el) { ui.sup.payMode = "advance"; openSupplier(el.dataset.id, "payments"); },
+    "sup-pay-full"() {
+      const sp = supplierById(ui.sup.profileId);
+      const choice = sp ? payChoice(sp) : null;
+      if (choice && choice.purchaseId) { $("spAmount").value = choice.outstanding; updatePayForm(); }
+    },
+    "sup-apply-credit"(el) {
+      return act((d) => P.applyCredit(d, el.dataset.id), { done: (r) => { h.notify(t("adv.creditApplied", { allocated: money(r.allocated || 0), credit: money(r.credit || 0) })); renderSuppliers(); } });
+    },
     "sup-dep-edit"(el) { ui.sup.editDepositId = el.dataset.id; ui.sup.voidDepositId = ""; renderSuppliers(); },
     "sup-dep-void"(el) { ui.sup.voidDepositId = el.dataset.id; ui.sup.editDepositId = ""; renderSuppliers(); },
     "sup-dep-cancel"() { ui.sup.editDepositId = ""; ui.sup.voidDepositId = ""; renderSuppliers(); },
@@ -2210,16 +2292,6 @@
     "pur-edit"() { editDraft(ui.pur.detailId); },
     "pur-panel"(el) { setPanel(el.dataset.panel); },
     "pur-close-panel"() { ui.pur.open = ""; renderPurchases(); },
-    "pur-adv-max"() {
-      const v = readPurchaseForm();
-      const supplier = supplierById(v.supplierId);
-      const read = P.previewPurchase(S(), v, "draft");
-      const pool = supplier ? P.advanceTotals(supplier.id, S().supplierDeposits, S().advanceAllocations).unapplied : 0;
-      const total = read.purchase ? read.purchase.total : 0;
-      const paid = read.purchase && read.purchase.initialPayment ? read.purchase.initialPayment.amount : 0;
-      $("pf-advance").value = Math.max(0, Math.min(pool, round(total - paid)));
-      updatePurchasePreview();
-    },
     "pur-adv-fill"(el) { const box = $(el.dataset.target); if (box) box.value = el.dataset.max; },
     "pur-pay-full"() {
       const p = purchaseById(ui.pur.detailId);
@@ -2343,6 +2415,7 @@
     const el = e.target;
     const id = el.id || "";
     if (el.closest && el.closest("#purProductDialog")) { ProductForm.route(e); return; }   // typing in the product dialog
+    if (el.closest && el.closest("#supPayForm")) { updatePayForm(); return; }                // the supplier payment form
     if (el.classList && el.classList.contains("combo-input")) {                              // typing in a line's product search
       const lineId = el.closest(".combo").dataset.combo;
       combo.lineId = lineId; combo.typed = true; combo.index = 0;
@@ -2371,6 +2444,7 @@
     const el = e.target;
     const id = el.id || "";
     if (el.closest && el.closest("#purProductDialog")) { ProductForm.route(e); return; }
+    if (el.closest && el.closest("#supPayForm")) { updatePayForm(); return; }
     if (el.classList && el.classList.contains("combo-input")) return;   // the product search only acts while it is typed in
     if (id === "supStatus") { ui.sup.status = el.value; refreshSupplierRows(); }
     else if (id === "sf-terms") { $("sf-termsCustom").disabled = el.value !== "custom"; if (el.value !== "custom") $("sf-termsCustom").value = ""; }
