@@ -35,7 +35,8 @@ test("the payment status is inside the financial summary block, whatever the pay
   for (const [payments, status] of [[[], "UNPAID"], [[{ amount: 500, timestamp: "2026-10-17T14:00:00.000Z" }], "PARTIALLY PAID"], [[{ amount: 5900, timestamp: "2026-10-17T14:00:00.000Z" }], "PAID"]]) {
     const parts = api.invoiceParts(invoice({ payments }));
     assert.match(parts.summary, /^<div class="inv-summary">/);
-    for (const label of ["Subtotal", "Discount", "Tax", "TOTAL", "Total Paid", "Remaining"]) assert.ok(parts.summary.includes(label), `${status}: ${label} is in the summary`);
+    for (const label of ["Subtotal", "Discount", "TOTAL", "Total Paid", "Remaining"]) assert.ok(parts.summary.includes(label), `${status}: ${label} is in the summary`);
+    assert.ok(!parts.summary.includes("Tax"), `${status}: no tax line on an invoice without tax`);
     assert.ok(parts.summary.includes("STATUS: " + status), `${status}: the status is in the summary`);
     assert.ok(parts.summary.indexOf("inv-totals") < parts.summary.indexOf("inv-status"), "the status follows the totals");
     assert.equal(count(parts.payments ? parts.payments.entries.join("") : "", /STATUS/g), 0, "the payment history does not carry the status");

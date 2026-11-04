@@ -191,66 +191,53 @@
             </p>
           </fieldset>
 
-          <div class="sale-fields-side">
-            <fieldset>
-              <legend data-i18n="sell.discountTaxLegend">Discount and tax</legend>
-              <div class="field">
-                <label for="discountValue" data-i18n="sell.discount">Discount</label>
-                <div class="with-unit">
-                  <input type="number" id="discountValue" min="0" step="any" placeholder="0">
-                  <select id="discountType" aria-label="Discount type" data-i18n-aria-label="sell.discountType">
-                    <option value="amount" data-currency></option>
-                    <option value="percent">%</option>
-                  </select>
-                </div>
-              </div>
-              <div class="field">
-                <label for="taxValue" data-i18n="sell.tax">Tax</label>
-                <div class="with-unit">
-                  <input type="number" id="taxValue" min="0" step="any" placeholder="0">
-                  <select id="taxType" aria-label="Tax type" data-i18n-aria-label="sell.taxType">
-                    <option value="amount" data-currency></option>
-                    <option value="percent">%</option>
-                  </select>
-                </div>
-              </div>
-            </fieldset>
+          <fieldset>
+            <legend data-i18n="sell.deliveryLegend">Delivery Information</legend>
+            <div class="field">
+              <label for="deliveryPerson" data-i18n="sell.deliveryPerson">Delivery Person Name</label>
+              <input type="text" id="deliveryPerson" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="deliveryPhone" data-i18n="sell.deliveryPhone">Phone Number</label>
+              <input type="text" id="deliveryPhone" inputmode="tel" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="deliveryFee" data-i18n="sell.deliveryFee">Delivery Fee</label>
+              <input type="number" id="deliveryFee" min="0" step="any" placeholder="0">
+            </div>
+          </fieldset>
 
-            <fieldset>
-              <legend data-i18n="sell.deliveryLegend">Delivery Information</legend>
-              <div class="field">
-                <label for="deliveryPerson" data-i18n="sell.deliveryPerson">Delivery Person Name</label>
-                <input type="text" id="deliveryPerson" autocomplete="off">
+          <fieldset>
+            <legend data-i18n="sell.discountLegend">Discount</legend>
+            <div class="field">
+              <label for="discountValue" data-i18n="sell.discount">Discount</label>
+              <div class="with-unit">
+                <input type="number" id="discountValue" min="0" step="any" placeholder="0">
+                <select id="discountType" aria-label="Discount type" data-i18n-aria-label="sell.discountType">
+                  <option value="amount" data-currency></option>
+                  <option value="percent">%</option>
+                </select>
               </div>
-              <div class="field">
-                <label for="deliveryPhone" data-i18n="sell.deliveryPhone">Phone Number</label>
-                <input type="text" id="deliveryPhone" inputmode="tel" autocomplete="off">
-              </div>
-              <div class="field">
-                <label for="deliveryFee" data-i18n="sell.deliveryFee">Delivery Fee</label>
-                <input type="number" id="deliveryFee" min="0" step="any" placeholder="0">
-              </div>
-            </fieldset>
+            </div>
+          </fieldset>
 
+          <div class="totals">
+            <div><span data-i18n="sell.subtotal">Subtotal</span><span id="tSubtotal"></span></div>
+            <div><span data-i18n="sell.discount">Discount</span><span id="tDiscount"></span></div>
+            <div id="tTaxRow" hidden><span data-i18n="sell.tax">Tax</span><span id="tTax"></span></div>
+            <div id="tDeliveryRow" hidden><span data-i18n="sell.deliveryFee">Delivery Fee</span><span id="tDelivery"></span></div>
+            <div class="grand" id="tTotalRow"><span id="tTotalLabel">Total</span><span id="tTotal"></span></div>
+            <div id="tCarriedRow" hidden><span data-i18n="sell.carried">Carried-forward debt</span><span id="tCarried"></span></div>
+            <div class="grand" id="tDueRow" hidden><span data-i18n="sell.totalDue">Total due</span><span id="tDue"></span></div>
+            <div class="pay-input" id="payInputRow"><label for="amountPaid" data-i18n="sell.amountPaid">Amount Paid</label><input type="number" id="amountPaid" min="0" step="any"></div>
+            <div class="due"><span id="tRemainingLabel" data-i18n="sell.remaining">Remaining</span><span id="tRemaining"></span></div>
+            <div class="edit-rows" id="tEditRows"></div>
+            <p class="muted small pay-hint" id="salePayHint" data-i18n="sell.payHint">Leave Amount Paid empty or 0 if the customer pays nothing now. Add payments later from Invoices.</p>
           </div>
         </div>
 
-        <!-- Warning about the customer's unpaid invoices. It appears here, next to the customer fields, and never replaces the sale. -->
+        <!-- Warning about the customer's unpaid invoices. It appears here, under the customer / delivery / discount / totals cards, and never replaces the sale. -->
         <section class="debt-notice no-print" id="debtNotice" aria-labelledby="debtNoticeTitle" aria-live="polite" hidden></section>
-
-        <div class="totals">
-          <div><span data-i18n="sell.subtotal">Subtotal</span><span id="tSubtotal"></span></div>
-          <div><span data-i18n="sell.discount">Discount</span><span id="tDiscount"></span></div>
-          <div><span data-i18n="sell.tax">Tax</span><span id="tTax"></span></div>
-          <div id="tDeliveryRow" hidden><span data-i18n="sell.deliveryFee">Delivery Fee</span><span id="tDelivery"></span></div>
-          <div class="grand" id="tTotalRow"><span id="tTotalLabel">Total</span><span id="tTotal"></span></div>
-          <div id="tCarriedRow" hidden><span data-i18n="sell.carried">Carried-forward debt</span><span id="tCarried"></span></div>
-          <div class="grand" id="tDueRow" hidden><span data-i18n="sell.totalDue">Total due</span><span id="tDue"></span></div>
-          <div class="pay-input" id="payInputRow"><label for="amountPaid" data-i18n="sell.amountPaid">Amount Paid</label><input type="number" id="amountPaid" min="0" step="any"></div>
-          <div class="due"><span id="tRemainingLabel" data-i18n="sell.remaining">Remaining</span><span id="tRemaining"></span></div>
-          <div class="edit-rows" id="tEditRows"></div>
-          <p class="muted small pay-hint" id="salePayHint" data-i18n="sell.payHint">Leave Amount Paid empty or 0 if the customer pays nothing now. Add payments later from Invoices.</p>
-        </div>
 
         <p class="error" id="saleError" role="alert"></p>
         <div class="actions">

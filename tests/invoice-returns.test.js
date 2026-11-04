@@ -302,20 +302,20 @@ test("carried-forward debt: the old invoice can't drop below what was paid plus 
 });
 
 /* ==========================================================================
-   7. Discounts, tax and unit conversions
+   7. Discounts and unit conversions
    ========================================================================== */
 
-test("a percent discount and tax follow the new quantity; a fixed discount stays the same amount", async () => {
+test("a percent discount follows the new quantity; a fixed discount stays the same amount", async () => {
   const ctx = await boot();
   const tile = await addTile(ctx);
-  const pct = await sellLines(ctx, [{ product: tile, qty: "15" }], { name: "Pct", discount: { type: "percent", value: "10" }, tax: { type: "percent", value: "19" } });
-  assert.equal(pct.total, round2((30000 - 3000) * 1.19));       // 32,130
+  const pct = await sellLines(ctx, [{ product: tile, qty: "15" }], { name: "Pct", discount: { type: "percent", value: "10" } });
+  assert.equal(pct.total, 30000 - 3000);                          // 27,000
   await setQty(ctx, pct, 14);
   const savedPct = invoiceById(ctx.api, pct.id);
   assert.equal(savedPct.subtotal, 28000);
   assert.equal(savedPct.discount, 2800);
-  assert.equal(savedPct.tax, round2((28000 - 2800) * 0.19));
-  assert.equal(savedPct.total, round2((28000 - 2800) * 1.19));
+  assert.equal(savedPct.tax, 0);
+  assert.equal(savedPct.total, 28000 - 2800);
 
   const fixed = await sellLines(ctx, [{ product: tile, qty: "3" }], { name: "Fixed", discount: { type: "amount", value: "500" } });
   await setQty(ctx, fixed, 2);

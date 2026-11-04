@@ -26,14 +26,13 @@ async function appWithProduct(price = 10000) {
   return { app, productId: app.api.getState().products[0].id };
 }
 
-// 2 pieces at 10,000 DA, 10 % discount, 5 % tax, 500 DA paid now and 100 DA later:
-//   subtotal 20,000 - discount 2,000 + tax 900 = total 18,900;  paid 600;  remaining 18,300.
+// 2 pieces at 10,000 DA, 10 % discount, 500 DA paid now and 100 DA later:
+//   subtotal 20,000 - discount 2,000 = total 18,000;  paid 600;  remaining 17,400.
 async function partlyPaidInvoice() {
   const { app, productId } = await appWithProduct(10000);
   assert.equal(app.api.addToSale(productId, "2", "piece").ok, true);
   const sale = app.api.getSale();
   sale.discountType = "percent"; sale.discountValue = "10";
-  sale.taxType = "percent"; sale.taxValue = "5";
   sale.paidValue = "500";
   await app.api.completeSale();
   const invoice = app.api.getInvoices()[0];
@@ -120,13 +119,13 @@ test("the conversion keeps every digit: no floating point noise, no rounding awa
 test("the invoice shows every amount in centimes, and the same invoice in dinars again afterwards", async () => {
   const { app, invoiceId } = await partlyPaidInvoice();
   const inv = savedInvoice(app, invoiceId);
-  assert.deepEqual([inv.subtotal, inv.discount, inv.tax, inv.total], [20000, 2000, 900, 18900]);
+  assert.deepEqual([inv.subtotal, inv.discount, inv.tax, inv.total], [20000, 2000, 0, 18000]);
 
   const inDinars = shown(app, invoiceId);
   assert.match(inDinars, /Price \(DA\)/);
   assert.match(inDinars, /Total \(DA\)/);
   assert.match(inDinars, /<td class="num">2 Pieces<\/td><td class="num">10,000 <span class="inv-unit">\/ Piece<\/span><\/td><td class="num">20,000<\/td>/);
-  for (const text of ["20,000 DA", "2,000 DA", "900 DA", "18,900 DA", "600 DA", "18,300 DA"]) assert.ok(inDinars.includes(text), text + " in dinars");
+  for (const text of ["20,000 DA", "2,000 DA", "18,000 DA", "600 DA", "17,400 DA"]) assert.ok(inDinars.includes(text), text + " in dinars");
   assert.ok(!inDinars.includes("centimes"));
 
   await app.api.saveCurrencyUnit("centimes");
@@ -137,7 +136,7 @@ test("the invoice shows every amount in centimes, and the same invoice in dinars
   // Line: the quantity is untouched, the price keeps its unit, price and total are x 100.
   assert.match(inCentimes, /<td class="num">2 Pieces<\/td><td class="num">1,000,000 <span class="inv-unit">\/ Piece<\/span><\/td><td class="num">2,000,000<\/td>/);
   // Totals, payments and the remaining balance: x 100.
-  for (const text of ["2,000,000 centimes", "200,000 centimes", "90,000 centimes", "1,890,000 centimes", "60,000 centimes", "1,830,000 centimes"]) {
+  for (const text of ["2,000,000 centimes", "200,000 centimes", "1,800,000 centimes", "60,000 centimes", "1,740,000 centimes"]) {
     assert.ok(inCentimes.includes(text), text + " in centimes");
   }
   // Both payments of the history are there: 500 DA and 100 DA.
@@ -180,16 +179,16 @@ test("the printed pages are made from the same pieces, so they follow the same s
   const { app, invoiceId } = await partlyPaidInvoice();
   const inv = savedInvoice(app, invoiceId);
   const printed = () => app.api.printItems(inv).map((item) => (item.kind === "block" ? item.html : item.entries.join("") + item.build(item.entries, false))).join("\n");
-  assert.ok(printed().includes("18,900 DA"));
+  assert.ok(printed().includes("18,000 DA"));
 
   for (const paper of ["A4", "A5"]) {
     await app.api.savePaper(paper);
     await app.api.saveCurrencyUnit("centimes");
     const printedCentimes = printed();
-    assert.ok(printedCentimes.includes("1,890,000 centimes") && printedCentimes.includes("1,830,000 centimes"), paper);
+    assert.ok(printedCentimes.includes("1,800,000 centimes") && printedCentimes.includes("1,740,000 centimes"), paper);
     assert.ok(!printedCentimes.includes("DA"), paper + ": no dinar label");
     // What is printed shows the same amounts as the live preview.
-    for (const amount of ["2,000,000", "1,890,000 centimes", "1,830,000 centimes", "60,000 centimes"]) {
+    for (const amount of ["2,000,000", "1,800,000 centimes", "1,740,000 centimes", "60,000 centimes"]) {
       assert.ok(app.api.invoiceHtml(inv).includes(amount) && printedCentimes.includes(amount), `${paper}: ${amount} in preview and print`);
     }
     await app.api.saveCurrencyUnit("dinars");
@@ -202,7 +201,7 @@ test("the label and the amount stay left to right in French and Arabic", async (
   await app.api.saveCurrencyUnit("centimes");
   await app.api.saveLanguage("fr");
   const fr = shown(app, invoiceId);
-  assert.ok(fr.includes("1 890 000 centimes"), "French groups digits with a no-break space");
+  assert.ok(fr.includes("1 800 000 centimes"), "French groups digits with a no-break space");
   await app.api.saveLanguage("ar");
   const ar = shown(app, invoiceId);
   assert.ok(ar.includes("⁦") && ar.includes("centimes"), "Arabic keeps the amount in its own left-to-right run");
@@ -241,8 +240,8 @@ test("payments recorded and a refund after the display was changed are in dinars
   assert.equal((await app.api.addPayment(invoiceId, "400")).error, undefined);
   const inv = savedInvoice(app, invoiceId);
   assert.deepEqual(plain(inv.payments.map((p) => p.amount)), [500, 100, 400]);
-  assert.ok(shown(app, invoiceId).includes("1,790,000 centimes"), "remaining 17,900 DA");
-  assert.equal(app.api.paymentInfo(inv).remaining, 17900);
+  assert.ok(shown(app, invoiceId).includes("1,700,000 centimes"), "remaining 17,000 DA");
+  assert.equal(app.api.paymentInfo(inv).remaining, 17000);
 });
 
 /* ---------- Saved, and still there after a reload ---------- */
@@ -256,7 +255,7 @@ test("the choice is saved and restored when the application is opened again", as
   const reopened = await startedApp({ indexedDB: app.indexedDB });          // the same database, a new page load
   assert.equal(reopened.api.getState().settings.currencyUnit, "centimes");
   assert.equal(reopened.field("currencyUnitCentimes").checked, true, "the selector shows it");
-  assert.ok(reopened.api.invoiceHtml(savedInvoice(reopened, invoiceId)).includes("1,830,000 centimes"));
+  assert.ok(reopened.api.invoiceHtml(savedInvoice(reopened, invoiceId)).includes("1,740,000 centimes"));
   assert.deepEqual(plain({ products: reopened.api.getState().products, invoices: reopened.api.getState().invoices, counter: reopened.api.getState().counter }), before);
 
   await reopened.api.saveCurrencyUnit("dinars");
@@ -304,7 +303,7 @@ test("a backup carries the choice, and an older backup without it restores as di
   await restored.api.importBackup(restored.file(text));
   assert.equal(restored.api.getState().settings.currencyUnit, "centimes");
   assert.equal(restored.api.getState().invoices.length, 1);
-  assert.ok(restored.api.invoiceHtml(restored.api.getInvoices()[0]).includes("1,830,000 centimes"));
+  assert.ok(restored.api.invoiceHtml(restored.api.getInvoices()[0]).includes("1,740,000 centimes"));
 
   // A backup made before the setting existed has no such key: it restores as dinars and nothing else about it changes.
   const old = JSON.parse(text);
@@ -316,6 +315,6 @@ test("a backup carries the choice, and an older backup without it restores as di
   assert.equal(settings.currencyUnit, "dinars");
   assert.equal(settings.businessName, "Old Shop");
   assert.equal(older.api.getState().invoices.length, 1);
-  assert.equal(older.api.getInvoices()[0].total, 18900, "the saved amounts are untouched");
-  assert.ok(older.api.invoiceHtml(older.api.getInvoices()[0]).includes("18,900 DA"));
+  assert.equal(older.api.getInvoices()[0].total, 18000, "the saved amounts are untouched");
+  assert.ok(older.api.invoiceHtml(older.api.getInvoices()[0]).includes("18,000 DA"));
 });

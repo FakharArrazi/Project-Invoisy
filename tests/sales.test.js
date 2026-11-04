@@ -471,23 +471,22 @@ test("17c. units in a data file are normalised and checked", () => {
   assert.match(api.productProblem({ ...ok, stock: -1 }), /stock quantity/);
 });
 
-test("18. discounts, taxes, payments and totals still calculate correctly", async () => {
+test("18. discounts, payments and totals still calculate correctly (no tax)", async () => {
   const { api } = load();
   api.addToSale("t1", "2", "box");                               // 4,320
   api.addToSale("t1", "3", "piece");                             // 1,620 -> subtotal 5,940
   const sale = api.getSale();
   sale.discountType = "percent"; sale.discountValue = "10";      // 594
-  sale.taxType = "amount"; sale.taxValue = "100";
   const t = api.calculateTotals(sale);
-  assert.deepEqual({ ...t }, { subtotal: 5940, discount: 594, tax: 100, total: 5446 });
+  assert.deepEqual({ ...t }, { subtotal: 5940, discount: 594, tax: 0, total: 5346 });
   sale.paidValue = "1000";
   const invoice = await complete(api);
-  assert.equal(invoice.total, 5446);
+  assert.equal(invoice.total, 5346);
   assert.equal(invoice.discountPercent, 10);
   assert.equal(JSON.stringify(invoice.payments.map((p) => p.amount)), "[1000]");
   assert.equal(invoice.invoiceNumber, "INV-000001");
-  assert.equal(api.paymentInfo(invoice).remaining, 4446);
-  const paid = await api.addPayment(invoice.id, "4446");
+  assert.equal(api.paymentInfo(invoice).remaining, 4346);
+  const paid = await api.addPayment(invoice.id, "4346");
   assert.equal(paid.error, undefined);
   assert.equal(api.paymentInfo(api.getInvoices()[0]).status, "PAID");
 });

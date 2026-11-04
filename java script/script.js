@@ -295,7 +295,6 @@ function newSale() {
     secondCustomer: { name: "" },           // optional second name on the same invoice (e.g. the builder when an architect buys); never a debt identity
     sellerName: "",                         // who handles this sale ("Nom du vendeur"): follows the saved setting (see renderSellerName); copied onto the invoice when it is made
     discountType: "amount", discountValue: "",
-    taxType: "amount", taxValue: "",
     delivery: { person: "", phone: "", fee: "" },   // optional delivery information, as typed (see saleDelivery): the fee is paid by the customer with the invoice
     paidValue: "",                          // amount paid now; empty = 0 (nothing paid yet)
     identity: null,                         // the returning customer the person confirmed: { key, name, phone } (see debt.js)
@@ -1719,13 +1718,13 @@ function amountFrom(type, value, base) {
 function calculateTotals(sale) {
   const subtotal = Calc.calculateSubtotal(sale.items);
   const discount = Math.min(amountFrom(sale.discountType, sale.discountValue, subtotal), subtotal);
-  const tax = amountFrom(sale.taxType, sale.taxValue, subtotal - discount);
-  const total = Math.max(0, round2(subtotal - discount + tax));
-  return { subtotal, discount, tax, total };
+  const total = Math.max(0, round2(subtotal - discount));
+  // `tax` stays on the result (always 0) only because a saved invoice has always carried that field; nothing is taxed any more.
+  return { subtotal, discount, tax: 0, total };
 }
 
 // Old debt carried onto this sale (a draft until the sale is saved) is NOT part of calculateTotals: those totals
-// describe the products sold, and discount and tax apply to them only. What the customer owes on this invoice is
+// describe the products sold, and the discount applies to them only. What the customer owes on this invoice is
 // the total of this purchase plus the carried-forward debt.
 function saleCarried(sale) {
   return round2((sale.debts || []).reduce((sum, d) => sum + toNumber(d.amount), 0));
@@ -1804,15 +1803,10 @@ function paidError() {
 
 function adjustmentError() {
   const s = state.sale;
-  const checks = [
-    [s.discountType, s.discountValue, "sale.discountNegative", "sale.discountPercent"],
-    [s.taxType, s.taxValue, "sale.taxNegative", "sale.taxPercent"],
-  ];
-  for (const [type, value, negativeKey, percentKey] of checks) {
-    if (value === "") continue;
-    const v = Number(value);
-    if (!Number.isFinite(v) || v < 0) return t(negativeKey);
-    if (type === "percent" && v > 100) return t(percentKey);
+  if (s.discountValue !== "") {
+    const v = Number(s.discountValue);
+    if (!Number.isFinite(v) || v < 0) return t("sale.discountNegative");
+    if (s.discountType === "percent" && v > 100) return t("sale.discountPercent");
   }
   return deliveryFeeProblem(s.delivery);
 }
@@ -1915,13 +1909,11 @@ function clearSale() {
   $("custAddress").value = "";
   $("custName2").value = "";
   $("discountValue").value = "";
-  $("taxValue").value = "";
   $("deliveryPerson").value = "";
   $("deliveryPhone").value = "";
   $("deliveryFee").value = "";
   $("amountPaid").value = "";
   $("discountType").value = "amount";
-  $("taxType").value = "amount";
   showError("saleError", "");
   showError("addError", "");
   state.previewInvoice = null;
@@ -2034,7 +2026,7 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
     // changing the name later never rewrites an invoice that is already saved.
     ...(sellerNameOf(sale) ? { sellerName: sellerNameOf(sale) } : {}),
     items,
-    // Debt carried forward from older invoices: its own lines, never products. subtotal, discount, tax and total
+    // Debt carried forward from older invoices: its own lines, never products. subtotal, discount and total
     // above stay the figures of this purchase; what the customer owes is total + the carried lines.
     ...(carried.length ? { carriedForward: carried } : {}),
     // Delivery information: only present when something was filled in, so invoices without a delivery keep their shape. The fee is not in
@@ -2047,7 +2039,6 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
     total: totals.total,
     payments: paid > 0 ? [{ amount: paid, timestamp: dateIso }] : [],
     discountPercent: sale.discountType === "percent" ? toNumber(sale.discountValue) : null,
-    taxPercent: sale.taxType === "percent" ? toNumber(sale.taxValue) : null,
     currency: s.currency,
     business: Validation.businessSnapshot(s),
   };
@@ -2363,8 +2354,8 @@ async function recordCollection(id, entries, note) {
    Corrects an invoice after it was saved (and maybe printed) WITHOUT making a new one: the id, the number, the date, the
    customer link, the payments, the carried-forward debt and the delivery log all stay. The invoice is edited on the Sell
    page itself: it is loaded into state.sale (saleFromInvoice) and everything the Sell page does (search, add, remove,
-   quantity, unit, price, discount, tax, the live preview) works on it. What can change is the customer's details, the lines
-   (products, quantities, units, prices) and the discount and tax; removing EVERY line deletes the invoice and refunds the sale.
+   quantity, unit, price, discount, the live preview) works on it. What can change is the customer's details, the lines
+   (products, quantities, units, prices) and the discount; removing EVERY line deletes the invoice and refunds the sale.
 
    The rules, all in planInvoiceEdit() so the screen, the tests and the database transaction share them:
      - Stock: what the invoice originally took out of stock (the `stockDeducted` saved on each line, never recalculated from
@@ -2373,7 +2364,7 @@ async function recordCollection(id, entries, note) {
      - History: a line that is kept keeps every saved detail (unit, the price it was sold at, where that price came from, the
        size and coverage it was sold with). Only a quantity or price that was edited changes, and the line total follows. A
        new line (or a line sold in another unit now) is made like a sale line, from the product as it is now.
-     - Money: subtotal, discount, tax and total are recalculated only when something financial was edited. Payments are never
+     - Money: subtotal, discount and total are recalculated only when something financial was edited. Payments are never
        edited or removed. When the new amount due is lower than what is already held (a box returned on a paid invoice), the
        edit is allowed and the difference is a REFUND OR CREDIT DUE to the customer: shown on the screen and the printed
        invoice. It becomes a refund record (separate from the payments) only when it is handed back (recordRefund).
@@ -2383,7 +2374,7 @@ async function recordCollection(id, entries, note) {
      - History: each saved edit adds one entry to invoice.edits (when, totals before and after, what was paid, the quantity and
        price of every line that changed, and the stock moved), so the original values stay available for troubleshooting.
      - An invoice sold in several deliveries keeps its products and quantities (its delivery log is a record) and can not be
-       cancelled here; prices, customer, discount and tax can still be corrected.
+       cancelled here; prices, customer and discount can still be corrected.
    applyInvoiceEdit() saves through commit(): invoice + stock in ONE transaction, with the usual revision check and backup. */
 
 // What a saved line took out of stock, in the product's stock unit. Lines saved by older versions may not say: they are
@@ -2397,12 +2388,11 @@ function lineStockTaken(item) {
   return toNumber(item.qty);
 }
 
-// The discount and tax of a saved invoice as the Sell page boxes show them (text).
+// The discount of a saved invoice as the Sell page box shows it (text).
 function invoiceAdjustInputs(inv) {
   const part = (percent, amount) => (percent != null && percent !== "" ? { type: "percent", value: String(percent) } : { type: "amount", value: toNumber(amount) ? String(amount) : "" });
   const d = part(inv.discountPercent, inv.discount);
-  const x = part(inv.taxPercent, inv.tax);
-  return { discountType: d.type, discountValue: d.value, taxType: x.type, taxValue: x.value };
+  return { discountType: d.type, discountValue: d.value };
 }
 
 const clean = (v) => String(v == null ? "" : v).trim();
@@ -2450,7 +2440,7 @@ function saleFromInvoice(inv) {
   return sale;
 }
 
-// Puts a sale's customer, discount, tax and payment into the Sell page boxes.
+// Puts a sale's customer, discount and payment into the Sell page boxes.
 function loadSaleIntoForm(sale) {
   $("custName").value = sale.customer.name;
   $("custPhone").value = sale.customer.phone;
@@ -2458,8 +2448,6 @@ function loadSaleIntoForm(sale) {
   $("custName2").value = secondCustomerName(sale);
   $("discountValue").value = sale.discountValue;
   $("discountType").value = sale.discountType;
-  $("taxValue").value = sale.taxValue;
-  $("taxType").value = sale.taxType;
   const delivery = sale.delivery || { person: "", phone: "", fee: "" };
   $("deliveryPerson").value = delivery.person;
   $("deliveryPhone").value = delivery.phone;
@@ -2541,7 +2529,7 @@ function editSignature(sale = state.sale) {
   return JSON.stringify({
     customer: sale.customer, second: secondCustomerName(sale),
     items: sale.items.map((i) => [i.origIndex == null ? null : i.origIndex, i.productId, i.sellingUnit, i.qty, i.unitPrice, i.priceQty]),
-    adjust: [sale.discountType, sale.discountValue, sale.taxType, sale.taxValue],
+    adjust: [sale.discountType, sale.discountValue],
     delivery: [sale.delivery.person, sale.delivery.phone, sale.delivery.fee],
   });
 }
@@ -2676,7 +2664,7 @@ function applyInvoiceRollback(d, invoiceId, options) {
 
 // Plans the corrected invoice WITHOUT changing anything.
 //   edit: { sale, baseItems?, confirmedRefund? }
-//     sale = a Sell page sale (customer, secondCustomer, items, discountType/Value, taxType/Value). A line that is a saved line
+//     sale = a Sell page sale (customer, secondCustomer, items, discountType/Value). A line that is a saved line
 //            of the invoice carries origIndex (its position on the saved invoice); a line added now has none.
 //     baseItems = the lines the person started from: when the invoice changed meanwhile (another window), the edit is refused.
 //     confirmedRefund = the refund the person confirmed when cancelling: cancelling refuses when payments changed since.
@@ -2797,19 +2785,14 @@ function planInvoiceEdit(d, invoiceId, edit) {
   });
   if (tracked && (items.length !== inv.items.length || items.some((i, n) => i.lineId !== inv.items[n].lineId || i.qty !== inv.items[n].qty))) return { error: t("edit.trackedLines") };
 
-  // ----- the discount and the tax -----
+  // ----- the discount -----
   const adjust = {
     discountType: sale.discountType === "percent" ? "percent" : "amount", discountValue: clean(sale.discountValue),
-    taxType: sale.taxType === "percent" ? "percent" : "amount", taxValue: clean(sale.taxValue),
   };
-  for (const [type, value, negativeKey, percentKey] of [
-    [adjust.discountType, adjust.discountValue, "sale.discountNegative", "sale.discountPercent"],
-    [adjust.taxType, adjust.taxValue, "sale.taxNegative", "sale.taxPercent"],
-  ]) {
-    if (value === "") continue;
-    const v = Number(value);
-    if (!Number.isFinite(v) || v < 0) return { error: t(negativeKey) };
-    if (type === "percent" && v > 100) return { error: t(percentKey) };
+  if (adjust.discountValue !== "") {
+    const v = Number(adjust.discountValue);
+    if (!Number.isFinite(v) || v < 0) return { error: t("sale.discountNegative") };
+    if (adjust.discountType === "percent" && v > 100) return { error: t("sale.discountPercent") };
   }
   const feeProblem = deliveryFeeProblem(sale.delivery);
   if (feeProblem) return { error: feeProblem };
@@ -2817,8 +2800,7 @@ function planInvoiceEdit(d, invoiceId, edit) {
   const before = invoiceAdjustInputs(inv);
   // Nothing typed (or 0) is the same whichever type is selected; otherwise the type and the number must both match.
   const sameAdjust = (type, value, beforeType, beforeValue) => (toNumber(value) === 0 && toNumber(beforeValue) === 0) || (type === beforeType && toNumber(value) === toNumber(beforeValue));
-  const adjustChanged = !sameAdjust(adjust.discountType, adjust.discountValue, before.discountType, before.discountValue) ||
-    !sameAdjust(adjust.taxType, adjust.taxValue, before.taxType, before.taxValue);
+  const adjustChanged = !sameAdjust(adjust.discountType, adjust.discountValue, before.discountType, before.discountValue);
 
   const updated = { ...inv, customer: editedCustomer(inv, sale), items };
   const second = secondCustomerName(sale);
@@ -2829,9 +2811,11 @@ function planInvoiceEdit(d, invoiceId, edit) {
   if (linesChanged || adjustChanged) {
     const totals = calculateTotals({ items, ...adjust });
     if (!Number.isFinite(totals.total)) return { error: t("sale.totalInvalid") };
+    // An invoice saved when tax still existed loses its tax line here: once its products or discount are corrected, the total is
+    // subtotal - discount again (the edit history keeps the old and the new total, and the edit banner says so beforehand).
     Object.assign(updated, totals, {
       discountPercent: adjust.discountType === "percent" ? toNumber(adjust.discountValue) : null,
-      taxPercent: adjust.taxType === "percent" ? toNumber(adjust.taxValue) : null,
+      taxPercent: null,
     });
   }
 
@@ -2994,8 +2978,11 @@ function renderEditChrome() {
   $("editBanner").hidden = !on;
   if (on && inv) {
     $("editHeading").textContent = t("edit.heading", { number: inv.invoiceNumber });
-    $("editNotes").hidden = !edit.tracked;
-    $("editNotes").textContent = edit.tracked ? t("edit.trackedNote") : "";
+    const noteLines = [];
+    if (edit.tracked) noteLines.push(t("edit.trackedNote"));
+    if (toNumber(inv.tax) > 0) noteLines.push(t("edit.legacyTaxNote", { tax: money(toNumber(inv.tax), inv.currency) }));
+    $("editNotes").hidden = noteLines.length === 0;
+    $("editNotes").textContent = noteLines.join(" ");
   }
   for (const id of ["clearSale", "completeSale", "payInputRow", "salePayHint"]) $(id).hidden = on;
   for (const id of ["editCancel", "editSave", "editSavePrint"]) $(id).hidden = !on;
@@ -3018,6 +3005,8 @@ function renderEditTotals() {
   const row = (label, value, cls) => `<div${cls ? ` class="${cls}"` : ""}><span>${esc(label)}</span><span>${esc(value)}</span></div>`;
   $("tSubtotal").textContent = money(toNumber(shown.subtotal), cur);
   $("tDiscount").textContent = money(toNumber(shown.discount), cur);
+  // Only an invoice saved while tax still existed has a tax amount to show; it keeps adding up until its figures are corrected.
+  $("tTaxRow").hidden = toNumber(shown.tax) <= 0;
   $("tTax").textContent = money(toNumber(shown.tax), cur);
   const fee = Validation.deliveryFeeOf(shown);
   $("tDeliveryRow").hidden = fee <= 0;
@@ -3535,7 +3524,7 @@ function renderTotals() {
   const due = round2(totals.total + fee + carried);
   $("tSubtotal").textContent = money(totals.subtotal);
   $("tDiscount").textContent = money(totals.discount);
-  $("tTax").textContent = money(totals.tax);
+  $("tTaxRow").hidden = true;
   $("tDeliveryRow").hidden = fee <= 0;
   $("tDelivery").textContent = money(fee);
   // With debt carried forward the Total is the products only, followed by the carried debt and the total due.
@@ -3647,7 +3636,7 @@ function invoiceParts(inv) {
       <table class="inv-totals">
         <tr><td>${esc(t("inv.subtotal"))}</td><td>${esc(cash(toNumber(inv.subtotal)))}</td></tr>
         <tr><td>${esc(t("inv.discount"))}${pct(inv.discountPercent)}</td><td>${esc(cash(toNumber(inv.discount)))}</td></tr>
-        <tr><td>${esc(t("inv.tax"))}${pct(inv.taxPercent)}</td><td>${esc(cash(toNumber(inv.tax)))}</td></tr>
+        ${toNumber(inv.tax) > 0 ? `<tr><td>${esc(t("inv.tax"))}${pct(inv.taxPercent)}</td><td>${esc(cash(toNumber(inv.tax)))}</td></tr>` : ""}
         ${deliveryRow}
         ${totalRows}
         ${paidRows}
@@ -5450,7 +5439,7 @@ function bindEvents() {
     renderInvoice();
   });
 
-  // Customer, discount, tax
+  // Customer, discount
   const customerFields = { custName: "name", custPhone: "phone", custAddress: "address" };
   for (const [id, key] of Object.entries(customerFields)) {
     $(id).addEventListener("input", () => {
@@ -5539,7 +5528,7 @@ function bindEvents() {
     updateDebtDialogTotals();
   });
   $("debtDialogRows").addEventListener("input", () => { showError("debtDialogError", ""); updateDebtDialogTotals(); });
-  const adjustFields = { discountValue: "discountValue", discountType: "discountType", taxValue: "taxValue", taxType: "taxType" };
+  const adjustFields = { discountValue: "discountValue", discountType: "discountType" };
   for (const [id, key] of Object.entries(adjustFields)) {
     $(id).addEventListener("input", () => {
       state.sale[key] = $(id).value;

@@ -36,7 +36,8 @@ means Later. Nothing navigates away on its own.
 **Edit** is on the Invoices list and next to a saved invoice (beside View, Add Payment, Print and Delete).
 
 - **Editable:** customer name, phone, address and second name; products, quantities and units (add or remove lines);
-  selling price per line; the invoice discount and tax.
+  selling price per line; the invoice discount. (There is no tax on the Sell page any more; an older invoice that was saved
+  with a tax keeps it until its products or discount are corrected, and then its total is recalculated without tax.)
 - **Kept:** invoice number, id and date, the customer's identity, the payment history, the delivery log, the letterhead,
   and, for every line that stays, the price, unit, conversion and catalogue price it was sold at (the catalogue is not
   re-read for a line that was already sold). The counter is not touched.
@@ -45,7 +46,7 @@ means Later. Nothing navigates away on its own.
   number, a conflicting change from another window) nothing is written and the screen stays open with what was typed.
 - **Totals, balance and status** are recalculated.
 - **Returns are an edit.** A customer brings back a box: open the invoice, **Edit Invoice**, lower the quantity (15 → 14),
-  and save. The line total, subtotal, discount and tax (a percentage follows the new subtotal; a fixed amount stays),
+  and save. The line total, subtotal and discount (a percentage follows the new subtotal; a fixed amount stays),
   total and balance follow. Exactly the difference goes back to stock (never the whole new quantity), in the product's own
   stock unit: 1 box, 2 pieces (half a box when a box holds 4), 5 m². Saving without a change moves nothing, and every
   edit starts from the quantity saved now, so editing several times never repeats an adjustment.

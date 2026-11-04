@@ -372,30 +372,29 @@ test("12 (continued). an invoice saved before this feature still shows its origi
   assert.equal(app.api.invoiceHtml(app.api.getState().invoices[0]), html);
 });
 
-test("13. payments, discounts, taxes and invoice numbering behave as before with several prices", async () => {
+test("13. payments, discounts and invoice numbering behave as before with several prices", async () => {
   const app = await startedApp();
   const product = await addThroughForm(app);
 
   const first = await sell(app, [[product.id, 3, "piece"], [product.id, 1, "box"]], (sale) => {
     sale.discountType = "percent"; sale.discountValue = "10";
-    sale.taxType = "amount"; sale.taxValue = "100";
     sale.paidValue = "1000";
   });
   assert.equal(first.invoiceNumber, "INV-000001");
   assert.equal(first.subtotal, 2340);
   assert.equal(first.discount, 234);
-  assert.equal(first.tax, 100);
-  assert.equal(first.total, 2206);
-  assert.deepEqual(plain(app.api.Validation.paymentSummary(first)), { payments: plain(first.payments), paid: 1000, remaining: 1206, cls: "partial" });
+  assert.equal(first.tax, 0);
+  assert.equal(first.total, 2106);
+  assert.deepEqual(plain(app.api.Validation.paymentSummary(first)), { payments: plain(first.payments), paid: 1000, remaining: 1106, cls: "partial" });
 
   // prices change; a later payment on the old invoice and the next invoice number are unaffected
   await editThroughForm(app, product.id, () => { rowFor(app, "piece").price = "350"; });
-  const paid = await app.api.addPayment(first.id, "1206");
+  const paid = await app.api.addPayment(first.id, "1106");
   assert.equal(paid && paid.error, undefined);
   const summary = app.api.Validation.paymentSummary(app.api.getState().invoices[0]);
   assert.equal(summary.cls, "paid");
   assert.equal(summary.payments.length, 2);
-  assert.equal(app.api.getState().invoices[0].total, 2206);
+  assert.equal(app.api.getState().invoices[0].total, 2106);
 
   const second = await sell(app, [[product.id, 1, "piece"]], (sale) => { sale.paidValue = "350"; });
   assert.equal(second.invoiceNumber, "INV-000002");

@@ -254,20 +254,20 @@ test("E. a line that was boxes typed by hand (no area asked for) prints the same
    Test F: discount, tax, payments and balances on the corrected line totals
    ========================================================================== */
 
-test("F. discount, tax and a partial payment work from the corrected line totals", async () => {
+test("F. discount and a partial payment work from the corrected line totals", async () => {
   const { api } = load([GPT, DECOR]);
   api.addToSale("gpt", "10", "m2");            // 14,112
   api.addToSale("decor", "10", "piece");       // 16,000
   const sale = api.getSale();
-  Object.assign(sale, { discountType: "percent", discountValue: "10", taxType: "amount", taxValue: "500", paidValue: "10000" });
-  assert.deepEqual(plain(api.calculateTotals(sale)), { subtotal: 30112, discount: 3011.2, tax: 500, total: 27600.8 });
+  Object.assign(sale, { discountType: "percent", discountValue: "10", paidValue: "10000" });
+  assert.deepEqual(plain(api.calculateTotals(sale)), { subtotal: 30112, discount: 3011.2, tax: 0, total: 27100.8 });
   const invoice = await complete(api);
-  assert.deepEqual(plain([invoice.subtotal, invoice.discount, invoice.tax, invoice.total]), [30112, 3011.2, 500, 27600.8]);
+  assert.deepEqual(plain([invoice.subtotal, invoice.discount, invoice.tax, invoice.total]), [30112, 3011.2, 0, 27100.8]);
   assert.deepEqual(plain(invoice.payments.map((p) => p.amount)), [10000]);
   const pay = api.paymentInfo(invoice);
-  assert.deepEqual(plain([pay.paid, pay.remaining, pay.cls]), [10000, 17600.8, "partial"]);
+  assert.deepEqual(plain([pay.paid, pay.remaining, pay.cls]), [10000, 17100.8, "partial"]);
   const html = api.invoiceHtml(invoice);
-  assert.match(html, /<td>TOTAL<\/td><td>27,600\.8 DA<\/td>/);          // the discount and the tax were applied once
+  assert.match(html, /<td>TOTAL<\/td><td>27,100\.8 DA<\/td>/);          // the discount was applied once, and no tax line is printed
   assert.equal(Calc.roundMoney(invoice.items.reduce((sum, i) => sum + Calc.calculateLineTotal(i.qty, i.unitPrice), 0)), invoice.subtotal, "the lines add up to the subtotal");
   assert.deepEqual(plain([stock(api, "gpt"), stock(api, "decor")]), [13, 90]);
 });

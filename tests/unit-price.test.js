@@ -119,19 +119,18 @@ test("1b. the Current Sale row shows the price-unit label next to the price inpu
   assert.match(html, /data-line-total>8,000 DA</);
 });
 
-test("2. editing the unit price updates the line, subtotal, discount, tax and final total", () => {
+test("2. editing the unit price updates the line, subtotal, discount and final total", () => {
   const api = load({ sellingPrice: 1000, priceUnit: "box" });
   api.addToSale("t1", "10", "box");
   const sale = api.getSale();
   sale.discountType = "percent"; sale.discountValue = "10";
-  sale.taxType = "amount"; sale.taxValue = "50";
-  assert.deepEqual(plain(api.calculateTotals(sale)), { subtotal: 10000, discount: 1000, tax: 50, total: 9050 });
+  assert.deepEqual(plain(api.calculateTotals(sale)), { subtotal: 10000, discount: 1000, tax: 0, total: 9000 });
 
   assert.equal(api.updateSalePrice(line(api).lineId, "900").error, undefined);
   assert.equal(line(api).unitPrice, 900);
   assert.equal(line(api).priceOverridden, true);
   assert.equal(line(api).listPrice, 1000);
-  assert.deepEqual(plain(api.calculateTotals(sale)), { subtotal: 9000, discount: 900, tax: 50, total: 8150 });
+  assert.deepEqual(plain(api.calculateTotals(sale)), { subtotal: 9000, discount: 900, tax: 0, total: 8100 });
 
   // the live invoice (draft) shows the charged price and unit
   const html = api.invoiceHtml(api.buildInvoiceData(sale, "INV-000001", new Date().toISOString()));
@@ -325,24 +324,24 @@ test("10. invalid prices are rejected and the line keeps its last valid price", 
   assert.ok(api.validateSale().length > 0);
 });
 
-test("11. discount, tax and payment still work with a special price", async () => {
+test("11. discount and payment still work with a special price", async () => {
   const api = load();
   api.addToSale("t1", "10", "box");
   api.updateSalePrice(line(api).lineId, "500");                                // 10 boxes = 14.4 m² x 500 = 7,200
   const sale = api.getSale();
-  sale.discountType = "percent"; sale.discountValue = "10";                    // -720
-  sale.taxType = "percent"; sale.taxValue = "19";                              // 19% of 6,480 = 1,231.2
+  sale.discountType = "percent"; sale.discountValue = "10";                    // -720 -> 6,480
   sale.paidValue = "3000";
-  assert.deepEqual(plain(api.calculateTotals(sale)), { subtotal: 7200, discount: 720, tax: 1231.2, total: 7711.2 });
+  assert.deepEqual(plain(api.calculateTotals(sale)), { subtotal: 7200, discount: 720, tax: 0, total: 6480 });
   const invoice = await complete(api);
-  assert.equal(invoice.total, 7711.2);
+  assert.equal(invoice.total, 6480);
   const pay = api.paymentInfo(invoice);
-  assert.deepEqual(plain([pay.paid, pay.remaining, pay.cls]), [3000, 4711.2, "partial"]);
+  assert.deepEqual(plain([pay.paid, pay.remaining, pay.cls]), [3000, 3480, "partial"]);
   assert.equal(invoice.discountPercent, 10);
-  assert.equal(invoice.taxPercent, 19);
+  assert.equal(invoice.tax, 0);
+  assert.equal(invoice.taxPercent, undefined, "a new invoice carries no tax percentage");
 });
 
-test("12. products priced per m², box, piece and kg in one sale: each keeps its own price unit; totals, discount, tax and stock stay right", async () => {
+test("12. products priced per m², box, piece and kg in one sale: each keeps its own price unit; totals, discount and stock stay right", async () => {
   const { api } = loadProductApi();
   const make = (o) => api.normalizeProduct({ tileSize: "60*60", coveragePerBox: 1.44, stockUnit: "box", stock: 50, ...o });
   api.applyData({
@@ -363,11 +362,10 @@ test("12. products priced per m², box, piece and kg in one sale: each keeps its
   assert.deepEqual(plain(items.map((i) => api.linePriceUnit(i))), ["DA/m²", "DA/box", "DA/piece", "DA/kg"]);
   const sale = api.getSale();
   sale.discountType = "percent"; sale.discountValue = "10";
-  sale.taxType = "percent"; sale.taxValue = "19";
-  assert.deepEqual(plain(api.calculateTotals(sale)), { subtotal: 16157, discount: 1615.7, tax: 2762.85, total: 17304.15 });
+  assert.deepEqual(plain(api.calculateTotals(sale)), { subtotal: 16157, discount: 1615.7, tax: 0, total: 14541.3 });
   const invoice = await complete(api);
   assert.deepEqual(plain(invoice.items.map((i) => [i.qty, i.sellingUnit, i.total])), [[7, "box", 8064], [3, "box", 4968], [10, "piece", 3000], [25, "kg", 125]]);
-  assert.equal(invoice.total, 17304.15);
+  assert.equal(invoice.total, 14541.3);
   assert.deepEqual(plain(invoice.items.map((i) => i.stockDeducted)), [7, 3, 10, 25]);
   const stock = (id) => api.getProducts().find((p) => p.id === id).stock;
   assert.deepEqual([stock("m"), stock("b"), stock("p"), stock("k")], [43, 47, 190, 475]);

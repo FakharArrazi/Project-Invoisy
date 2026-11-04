@@ -51,19 +51,21 @@
   .sell-sale .sale-table td.sale-product { min-width: 170px; }
 }
 
-/* ---------- Customer, discount and tax, invoice details ---------- */
-
-/* Two columns when there is room for them, one when there is not (no breakpoint to keep in step with the preview's width). */
-.sell-sale .sale-fields { grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; align-items: start; margin-top: 20px; }
-.sale-fields-side { display: grid; gap: 16px; min-width: 0; }
+/* ---------- Customer, delivery, discount and totals ----------
+   Four cards in two columns, in this order: Customer | Delivery, then Discount | Totals (the totals sit under Delivery).
+   Two columns when there is room for them, one when there is not (no breakpoint to keep in step with the preview's width):
+   the cards then stack in the same order. Cards of a row have the same height. */
+.sell-sale .sale-fields { grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; align-items: stretch; margin-top: 20px; }
+.sell-sale .sale-fields > * { min-width: 0; }
 .sell-sale fieldset { padding: 12px 16px 4px; border-radius: 6px; }
 .sell-sale legend { padding: 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
 .sell-sale .sale-fields .field { margin-bottom: 12px; }
 .sell-sale .sale-fields input, .sell-sale .sale-fields select { min-height: 38px; }
 
-/* ---------- Totals: one quiet card on the right ---------- */
+/* ---------- Totals: one quiet card, the fourth of the grid above (bottom right) ---------- */
 
 .sell-sale .totals { max-width: 340px; margin: 20px 0 0; margin-inline-start: auto; padding: 12px 16px; background: #f6f8fa; border: 1px solid var(--border); border-radius: 6px; }
+.sell-sale .sale-fields .totals { max-width: none; margin: 0; }
 .sell-sale .totals > div > span:last-child { font-variant-numeric: tabular-nums; }
 .sell-sale .totals .grand { font-size: 18px; }
 

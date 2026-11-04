@@ -42,7 +42,7 @@ async function addTile(ctx, overrides) {
 }
 
 // Sells lines the way the Sell page does. lines: [{ product, qty, unit }]. Returns the saved invoice.
-async function sellLines(ctx, lines, { name = "Alex", phone = "", paid = "", discount, tax } = {}) {
+async function sellLines(ctx, lines, { name = "Alex", phone = "", paid = "", discount } = {}) {
   const { api } = ctx;
   for (const l of lines) assert.equal(api.addToSale(l.product.id, l.qty, l.unit || "box").ok, true);
   const sale = api.getSale();
@@ -50,7 +50,6 @@ async function sellLines(ctx, lines, { name = "Alex", phone = "", paid = "", dis
   sale.customer.phone = phone;
   sale.paidValue = paid;
   if (discount) { sale.discountType = discount.type; sale.discountValue = discount.value; }
-  if (tax) { sale.taxType = tax.type; sale.taxValue = tax.value; }
   await api.completeSale();
   const all = api.getInvoices();
   return all[all.length - 1];
