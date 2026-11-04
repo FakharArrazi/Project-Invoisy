@@ -2180,6 +2180,22 @@
     return rows.sort((a, b) => b.purchase.invoiceDate.localeCompare(a.purchase.invoiceDate) || b.purchase.reference.localeCompare(a.purchase.reference));
   }
 
+  // The purchase price the Sell page shows (read only): the unit price of the product's newest confirmed purchase line, in
+  // the unit it was bought in, with the supplier of that purchase. It is one real record: prices of different suppliers are
+  // never averaged or mixed, and nothing is converted. A line without a usable price or unit is skipped for the next older one.
+  // null when the product has never been bought. Nothing is written.
+  function latestPurchasePrice(d, productId) {
+    for (const row of productHistory(d, productId)) {
+      const unitPrice = toNumber(row.line.unitPrice);
+      if (!(unitPrice > 0) || !Calc.isUnit(row.line.unit)) continue;
+      return {
+        unitPrice, unit: row.line.unit, supplierId: row.purchase.supplierId || "", supplierName: row.supplier ? text(row.supplier.name) : "",
+        date: text(row.purchase.invoiceDate), reference: text(row.purchase.reference),
+      };
+    }
+    return null;
+  }
+
   // The products bought from one supplier, with what was bought and the last price paid.
   function supplierProducts(d, supplierId) {
     const groups = new Map();
@@ -2394,7 +2410,7 @@
     saveDraft, deleteDraft, confirmPurchase, creditCheck, receiveDelivery, reverseReceipt, cancelPurchase, deletePurchase, deletionPreview, updatePurchaseDetails, setAttachmentMeta,
     recordPayment, updatePayment, voidPayment,
     linkProblems,
-    purchasesInPeriod, periodReport, outstandingReport, purchasesBySupplier, productHistory, supplierProducts, priceInsights, PRICE_MODERATE_PCT, PRICE_HIGH_PCT, matchProducts, paymentsReport, overview,
+    purchasesInPeriod, periodReport, outstandingReport, purchasesBySupplier, productHistory, latestPurchasePrice, supplierProducts, priceInsights, PRICE_MODERATE_PCT, PRICE_HIGH_PCT, matchProducts, paymentsReport, overview,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = globalThis.Purchases;
 })();

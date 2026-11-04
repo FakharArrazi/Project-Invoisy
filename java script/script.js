@@ -3352,9 +3352,20 @@ function renderSelected() {
       (p.stock > 0 ? `<span>${esc(t("stock.n", { n: stockLabel(p) }))}</span>` : `<span class="out">${esc(t("stock.out"))}</span>`) +
       (p.stock > 0 && p.stock <= LOW_STOCK ? `<span class="low">${esc(t("stock.low"))}</span>` : "") +
       `<span>${esc(t("selected.price", { price: priceLabel(p) }))}</span>` +
-      boxPriceNote(p)
+      boxPriceNote(p) +
+      purchaseInfo(p)
     : `<span class="none">${esc(t("selected.none"))}</span>`;
   syncAddUnit(p);
+}
+
+// What the product was last bought for, read from the supplier purchase records (nothing is typed here and nothing is
+// saved): "Purchase price: 450 DA / m²" and the supplier of that purchase, in the unit it was bought in. Informational
+// only: it never reaches the selling price, the sale line, the stock or the invoice, and it never stops a sale.
+function purchaseInfo(p) {
+  const last = Purchases.latestPurchasePrice(state, p.id);
+  if (!last) return `<span class="purchase-info none">${esc(t("selected.noPurchase"))}</span>`;
+  return `<span class="purchase-info">${esc(t("selected.purchase", { price: money(last.unitPrice), unit: unitLabel(last.unit, 1) }))}` +
+    (last.supplierName ? ` · ${esc(t("selected.supplier", { name: last.supplierName }))}` : "") + `</span>`;
 }
 
 // Can this product be added to a sale in this unit? ("" when yes, otherwise the reason.)
@@ -5982,6 +5993,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     applyCollection, recordCollection, collectionHtml, renderDeliveryBox, qtyText,
     viewInvoice, clearSale, draftInvoice, refreshAfterLoad, renderInvoices, renderInvoice, refreshLive,
     getDebtUi: () => state.debtUi,
+    selectProduct, renderSelected, purchaseInfo,
     productSuggestions, renderProductSuggestions, useSuggestion, searchInvoices, setInvoiceSort, clearInvoiceFilters, invoiceView, planInvoiceEdit, applyInvoiceEdit, lineStockTaken, startEditInvoice, editDirty, editPlan, editPreviewInvoice, saleFromInvoice, endEdit,
     saveInvoiceEdit, cancelInvoiceEdit, recordRefund, stockAvail, renderTotals, removeFromSale, getInvoiceEdit: () => state.invoiceEdit,
     addPhoneRow, removePhoneRow, setPhoneRow, saveBusinessSettings, fillSettingsForm, businessPhonesHtml,

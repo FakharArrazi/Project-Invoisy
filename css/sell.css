@@ -31,6 +31,8 @@
 /* The chosen product on the left; quantity, unit and the blue button on one line, all as high as the search box. */
 .sell-add .add-row { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); gap: 12px 14px; align-items: flex-end; }
 .sell-add .selected { min-height: 42px; }
+/* The purchase price is read from the supplier purchases: a quiet line of its own under the product, never an input. */
+.sell-add .selected .purchase-info { flex-basis: 100%; font-size: 13px; color: var(--muted); }
 .sell-add .add-qty, .sell-add .add-unit { width: auto; }
 .sell-add .add-qty { flex: 0 0 96px; }
 .sell-add .add-unit { flex: 0 0 120px; }

@@ -1558,8 +1558,9 @@
         </div>
       </div>
       <div class="panel">
-        <div class="panel-head"><h2>${esc(t("pur.lines"))}</h2><button type="button" class="btn" data-act="pur-line-add">${esc(t("pur.addLine"))}</button></div>
+        <div class="panel-head"><h2>${esc(t("pur.lines"))}</h2></div>
         <div id="pfLines">${v.lines.map(lineHtml).join("")}</div>
+        <div class="pl-add"><button type="button" class="btn" data-act="pur-line-add">${esc(t("pur.addLine"))}</button></div>
         <p class="error" id="pf-lines-error" role="alert"></p>
       </div>
       <div class="panel">
