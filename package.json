@@ -1,11 +1,73 @@
 {
   "name": "invoisy",
+  "productName": "Invoisy",
+  "version": "1.0.0",
   "private": true,
-  "description": "Invoisy runs straight from index.html. This file exists only to run the tests; the app itself has no dependencies.",
+  "description": "Invoisy: invoices, stock, purchases, suppliers and workers. Runs in a browser straight from index.html, and as a Windows desktop application (Electron) with the same IndexedDB database.",
+  "main": "electron/main.js",
+  "author": {
+    "name": "Fakhar Arrazi"
+  },
+  "license": "UNLICENSED",
+  "homepage": "https://github.com/FakharArrazi/Project-Invoisy",
   "scripts": {
-    "test": "node --test \"tests/*.test.js\""
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder --win nsis --x64",
+    "build:dir": "electron-builder --win dir --x64",
+    "test": "node --test \"tests/*.test.js\"",
+    "test:electron": "node tests/electron/run.js"
   },
   "devDependencies": {
-    "fake-indexeddb": "^6.2.5"
+    "electron": "^45.2.3",
+    "electron-builder": "26.18.0",
+    "fake-indexeddb": "^6.2.5",
+    "playwright-core": "1.65.0"
+  },
+  "build": {
+    "appId": "com.invoisy.desktop",
+    "productName": "Invoisy",
+    "copyright": "Copyright © 2026 Fakhar Arrazi",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      "index.html",
+      "css/**/*",
+      "java script/**/*",
+      "package.json",
+      "build/icon.png",
+      "build/icon.ico"
+    ],
+    "asar": true,
+    "publish": null,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Invoisy",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "uninstallDisplayName": "Invoisy",
+      "artifactName": "Invoisy Setup ${version}.${ext}"
+    }
   }
 }

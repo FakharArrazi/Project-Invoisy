@@ -1890,7 +1890,23 @@
     "problem.badWorkerLink": "n'est lié à aucun employé",
     "db.cannotDeleteWorker": "Un employé n'est jamais supprimé. Marquez-le comme inactif.",
     "db.what.workers": "employés",
-    "db.what.workerTransactions": "opérations des employés"
+    "db.what.workerTransactions": "opérations des employés",
+
+    // ----- Application de bureau (Electron) : dossier de sauvegarde et boîtes de dialogue natives -----
+    "auto.desktopNote": "Invoisy conserve des sauvegardes automatiques de toutes vos données dans ce dossier et les met à jour après chaque modification enregistrée : {folder}. Vos données restent dans la base d'Invoisy ; les fichiers ne sont que des copies (l'actuelle, la précédente, les 7 derniers jours et les 4 dernières semaines). Recharger des données depuis un fichier reste toujours votre décision (Importer / Restaurer une sauvegarde).",
+    "auto.openFolder": "Ouvrir le dossier de sauvegarde",
+    "auto.replaceNewer": "Remplacer la sauvegarde plus récente",
+    "auto.confirmReplaceNewer": "Le fichier de sauvegarde le plus récent contient des données plus récentes que la base d'Invoisy.\n\nPoursuivre le remplace par les données actuellement dans Invoisy. Le fichier plus récent n'est PAS supprimé : une copie est conservée dans le dossier d'archives, à l'intérieur du dossier de sauvegarde.\n\nSi vous vouliez récupérer ces données, annulez et utilisez plutôt Importer / Restaurer une sauvegarde.\n\nContinuer ?",
+    "desktop.writeFailed": "La sauvegarde dans le dossier de sauvegarde de l'application n'a pas pu être mise à jour. {error} Vos données sont en sécurité dans la base d'Invoisy ; la sauvegarde reste en attente et sera réessayée.",
+    "desktop.saveFailed": "Le fichier n'a pas pu être enregistré. {error}",
+    "desktop.openFailed": "Le fichier n'a pas pu être ouvert. {error}",
+    "desktop.attachmentFailed": "Le fichier joint n'a pas pu être ouvert. {error}",
+    "desktop.confirmRestore": "Restaurer cette sauvegarde va REMPLACER toutes les données d'Invoisy sur cet ordinateur.\n\nLes produits, le stock, les factures, les paiements, les fournisseurs, les achats, les paiements fournisseurs, les fichiers joints et les paramètres seront remplacés.\n\nSauvegarde : {backup} (faite le {made})\nActuel : {current}\n\nUne copie de sécurité des données actuelles est d'abord enregistrée dans le dossier de sauvegarde d'Invoisy. Les numéros de facture ne reculent jamais : le prochain sera {next}.{notes}\n\nContinuer ?",
+    "desktop.restoreFound": "La base d'Invoisy est vide, mais une sauvegarde automatique a été trouvée dans le dossier de sauvegarde de cet ordinateur.",
+    "desktop.leaveConfirm": "Du travail à l'écran n'est pas encore enregistré. Fermer Invoisy quand même ?",
+    "desktop.savePdf": "Enregistrer en PDF",
+    "desktop.pdfSaved": "Le PDF a été enregistré.",
+    "desktop.pdfFailed": "Le PDF n'a pas pu être enregistré. {error}"
 
   };
 

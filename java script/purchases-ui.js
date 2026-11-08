@@ -201,6 +201,11 @@
   async function openAttachment(id, download) {
     const record = await h.db.getAttachment(id);
     if (!record) { h.notify(t("pur.attachmentMissing"), "error"); return; }
+    // Desktop application: opened with the program Windows uses for that file type, or saved through a Save dialog.
+    if (h.openAttachmentFile) {
+      try { await h.openAttachmentFile(record, Boolean(download)); } catch (e) { h.notify(t("desktop.attachmentFailed", { error: (e && e.message) || "" }), "error"); }
+      return;
+    }
     const url = URL.createObjectURL(dataUrlToBlob(record.dataUrl));
     if (download) {
       const link = document.createElement("a");

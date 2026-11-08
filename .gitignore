@@ -2,3 +2,7 @@
 invoisy-data.json
 invoisy-backup-*.json
 node_modules/
+
+# Electron build output and local data
+release/
+dist/

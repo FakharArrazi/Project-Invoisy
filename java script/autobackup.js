@@ -52,6 +52,8 @@
   // Turns whatever the file system threw into { code, message, retry }.
   function classify(e) {
     if (e instanceof BackupError) return { code: e.code, message: e.message, retry: e.retry };
+    // The desktop application (desktop-bridge.js) words its own failures and says whether trying again can help.
+    if (e && e.name === "DesktopError") return { code: e.invoisyCode || "WRITE", message: t("desktop.writeFailed", { error: errorText(e) }), retry: e.invoisyRetry !== false };
     const name = e && e.name;
     if (name === "NotFoundError") return { code: "NOT_FOUND", message: t("auto.notFound"), retry: false };
     if (name === "NotAllowedError" || name === "SecurityError") return { code: "PERMISSION", message: t("auto.permissionDenied"), retry: false };
@@ -138,6 +140,7 @@
     let dirty = false;              // something is waiting to be written
     let forceNext = false;          // the person confirmed replacing the file's content: skip the "newer" check
     let running = null;
+    let stoppedForHold = false;   // the last pass stopped early because the person is mid-task (see flushNow)
     let waitTimer = null;
     let retryTimer = null;
     let retryCount = 0;
@@ -270,9 +273,10 @@
       running = (async () => {
         await Promise.resolve();
         try {
+          stoppedForHold = false;
           while (dirty && handle) {
             // An automatic write waits while the person is mid-task. It stays pending (dirty) and resume() starts it again.
-            if (respectHold && held()) break;
+            if (respectHold && held()) { stoppedForHold = true; break; }
             dirty = false;
             const outcome = await writeOnce();
             if (outcome === "ok") continue;
@@ -323,9 +327,18 @@
     }
 
     // Writes now instead of after the short wait. Resolves when nothing is waiting any more.
-    function flushNow() {
+    async function flushNow() {
       clearWait();
       clearRetry();
+      // A pass that is already running may have been started as an automatic one, which stops early while the person is
+      // mid-task, so it can finish with a change still waiting. Wait for it, then write what is left, whatever the person
+      // is doing: this is what runs when the window is closing.
+      if (running) {
+        await running;
+        // Only a pass that stopped because the person is mid-task leaves a change behind that must be written now. A pass
+        // that failed is already in its own retry schedule (a flush must not add an attempt).
+        if (!stoppedForHold) return undefined;
+      }
       return run();
     }
 
@@ -450,6 +463,22 @@
       schedule();
     }
 
+    // The person confirmed that the file's NEWER content may be replaced by the data in this database (the desktop
+    // application's "Replace the newer backup" button, and right after a restore, which gives the database an older
+    // revision number than the file). The replaced file is kept by the desktop application in its archive folder.
+    async function replaceNewer() {
+      if (!handle) return getStatus();
+      // A pass that is running may be the one that just found the file newer. Let it finish, then start a new pass that
+      // is allowed to replace the file (nothing runs between the two steps below).
+      if (running) await running;
+      forceNext = true;
+      retryCount = 0;
+      dirty = true;
+      emit();
+      await flushNow();
+      return getStatus();
+    }
+
     // The window came back to the front: if something is waiting (for example a drive was plugged back in), try once.
     function nudge() {
       if (!handle || running || waitTimer !== null || held()) return Promise.resolve();
@@ -466,7 +495,7 @@
     }
 
     return {
-      supported, getStatus, notifyCommitted, flushNow, start, pickFile, inspect, attach, grant, retry, nudge, resume,
+      supported, getStatus, notifyCommitted, flushNow, start, pickFile, inspect, attach, grant, retry, nudge, resume, replaceNewer,
       on(fn) { listeners.push(fn); },
     };
   }

@@ -379,7 +379,10 @@ const db = InvoisyDB.create();
 
 // The automatic backup file (autobackup.js). It listens to the database's "commit" event (see below), so every
 // change saved through database.js is covered without any screen having to ask for it.
-const autoBackup = AutoBackup.create({ db, hold: backupShouldWait });
+// In the desktop application (Electron, see desktop-bridge.js) the backup file is the one in the application's own
+// backup folder: there is nothing to choose. In a browser desktopApp is null and everything works as before.
+const desktopApp = globalThis.DesktopBridge && globalThis.DesktopBridge.isDesktop ? globalThis.DesktopBridge : null;
+const autoBackup = AutoBackup.create({ db, hold: backupShouldWait, ...(desktopApp ? desktopApp.autoBackupOptions() : {}) });
 
 const storage = {
   mode: "connecting",     // connecting | ready | unavailable | failed | outdated
@@ -615,6 +618,7 @@ async function initStorage() {
   // never waits for the file, never prompts, and a problem with the file never affects the database.
   autoBackup.start().catch(() => {});
   if (notice) notify(notice);
+  offerRestoreFromBackups().catch(() => {});
   // A reload right after a save is no longer announced: the data is safe, so no message is shown. The call only
   // clears the remembered save time.
   reloadedRightAfterSave();
@@ -636,6 +640,8 @@ function startStorage() {
 
 // Hands a text file to the browser as a download. The temporary address is released afterwards.
 function downloadText(text, name, type) {
+  // Desktop application: the Windows "Save as" dialog. Resolves true when saved, false when the dialog was closed.
+  if (desktopApp) return desktopApp.saveText(text, name);
   const url = URL.createObjectURL(new Blob([text], { type: type || "application/json" }));
   try {
     const link = document.createElement("a");
@@ -666,7 +672,8 @@ function exportBackup() {
     const file = Validation.prepareBackupFile(snapshot, new Date());
     if (file.error) { reportDataProblem(t("storage.exportNoDate", { error: file.error })); return; }
     try {
-      downloadText(file.text, file.name);
+      // Desktop: false means the Save dialog was closed. Nothing was exported, so no backup date is recorded.
+      if (await downloadText(file.text, file.name) === false) return;
     } catch (e) {
       reportDataProblem(t("storage.exportDownloadFailed", { error: errorText(e) }));
       return;
@@ -686,7 +693,7 @@ function exportBackup() {
 
 // Import / Restore Backup: checks the whole file first, asks, downloads a safety copy of the current data,
 // then replaces everything in ONE transaction. A restore that fails changes nothing.
-function importBackup(file) {
+function importBackup(file, options) {
   return guard(async () => {
     showError("dataError", "");
     if (!file) return;
@@ -708,7 +715,7 @@ function importBackup(file) {
     const made = formatDateTime(parsed.exportedAt) || t("storage.unknown");
     const nextNumber = formatInvoiceNumber(Math.max(state.counter, incoming.counter) + 1);
     const noted = parsed.warnings.slice(0, 3).map((w) => "\n- " + w).join("") + (parsed.warnings.length > 3 ? "\n- " + t("storage.andMore", { n: parsed.warnings.length - 3 }) : "");
-    const ok = confirm(t("storage.confirmRestore", {
+    const ok = confirm((options && options.intro ? options.intro + "\n\n" : "") + t(desktopApp ? "desktop.confirmRestore" : "storage.confirmRestore", {
       backup: describeData(incoming), made, current: describeData(state), next: nextNumber,
       notes: noted ? "\n\n" + t("storage.noteHeading") + noted : "",
     }));
@@ -726,8 +733,9 @@ function importBackup(file) {
         const safety = Validation.prepareBackupFile(before, new Date(), "invoisy-before-restore");
         if (safety.error) return { error: t("storage.safetyMakeFailed", { error: safety.error }) };
         try {
-          downloadText(safety.text, safety.name);
-          safetyName = safety.name;
+          // Desktop: the safety copy goes to the safety folder inside the application's backup folder, without a dialog.
+          if (desktopApp) safetyName = await desktopApp.saveSafetyCopy(safety.text, safety.name);
+          else { downloadText(safety.text, safety.name); safetyName = safety.name; }
         } catch (e) {
           return { error: t("storage.safetyDownloadFailed", { error: errorText(e) }) };
         }
@@ -744,8 +752,68 @@ function importBackup(file) {
     PurchasesUI.reset();   // an open supplier, purchase or form may point at data the backup replaced
     WorkersUI.reset();     // the same for an open worker
     settingsTouched = false;   // a restore replaces everything, including business details that were being typed
+    // A restore starts the database revision again from its own number, which can be lower than the revision the backup
+    // file holds. The person just chose this data, so the file is brought in line with it (the older file is archived).
+    if (desktopApp) autoBackup.replaceNewer().catch(() => {});
     refreshAfterLoad();
     notify(t("storage.restored", { counts: describeData(outcome.done.counts) }) + (outcome.safetyName ? " " + t("storage.restoredSafety", { name: outcome.safetyName }) : ""));
+  });
+}
+
+// Import / Restore Backup button. Desktop: the Windows "Open" dialog, then the same checks as for any file.
+function chooseBackupToImport() {
+  if (!desktopApp) { $("importFile").click(); return; }
+  desktopApp.openBackupFile()
+    .then((picked) => { if (picked) return importBackup(picked); return undefined; })
+    .catch((e) => reportDataProblem(t("desktop.openFailed", { error: errorText(e) })));
+}
+
+// Desktop only. The database holds nothing (a new installation, or its storage was lost) but the application's backup
+// folder holds a valid backup: offer to restore it. Nothing is restored without the person agreeing, and a database
+// that already holds data is never offered a restore.
+async function offerRestoreFromBackups() {
+  if (!desktopApp || storage.mode !== "ready") return;
+  let latest;
+  try {
+    if (Validation.hasMeaningfulData(await db.loadAll({ withAttachments: false }))) return;
+    latest = await desktopApp.latestBackup();
+  } catch { return; }
+  if (!latest) return;
+  const parsed = Validation.parseBackup(latest.text);
+  if (parsed.error || !Validation.hasMeaningfulData(parsed.data)) return;
+  await importBackup({ name: latest.name, text: async () => latest.text }, { intro: t("desktop.restoreFound") });
+}
+
+// Desktop only: the page as a PDF, laid out like the printed page (the same pages the Print button prints).
+function saveInvoicePdf() {
+  if (!desktopApp) return undefined;
+  return guard(async () => {
+    const inv = previewedInvoice();
+    const original = document.title;
+    document.title = inv.invoiceNumber;
+    try {
+      buildPrintPages();
+      if (await desktopApp.savePdf(inv.invoiceNumber + ".pdf")) notify(t("desktop.pdfSaved"));
+    } catch (e) {
+      notify(t("desktop.pdfFailed", { error: errorText(e) }), "error");
+    } finally {
+      document.title = original;
+    }
+  });
+}
+
+// A save that fails is reported instead of lost, for callers that do not wait for the result (CSV exports).
+function downloadAndReport(text, name, type) {
+  const result = downloadText(text, name, type);
+  if (result && typeof result.catch === "function") result.catch((e) => notify(t("desktop.saveFailed", { error: errorText(e) }), "error"));
+  return result;
+}
+
+// Desktop only: "Replace the newer backup" (the latest backup file holds newer data than the database).
+function replaceNewerBackup() {
+  return guard(async () => {
+    if (!confirm(t("auto.confirmReplaceNewer"))) return;
+    reportAutoBackupResult(await autoBackup.replaceNewer());
   });
 }
 
@@ -800,7 +868,7 @@ function connectBackupFile() {
         const made = formatDateTime(seen.parsed.exportedAt) || t("storage.unknown");
         if (!confirm(t("auto.confirmReplace", { file: inFile, made, current: describeData(current) }))) return;
         try {
-          downloadText(seen.text, Validation.backupFileName(new Date(), "invoisy-before-autobackup"));
+          if (await downloadText(seen.text, Validation.backupFileName(new Date(), "invoisy-before-autobackup")) === false) return;
         } catch (e) {
           reportDataProblem(t("auto.safetyFailed", { error: errorText(e) }));
           return;
@@ -866,7 +934,7 @@ function downloadLegacyCopy() {
     const file = Validation.prepareLegacyCopy(legacyStorage(), new Date());
     if (file.error) { reportDataProblem(file.error); return; }
     try {
-      downloadText(file.text, file.name);
+      if (await downloadText(file.text, file.name) === false) return;   // desktop: the Save dialog was closed
     } catch (e) {
       reportDataProblem(t("storage.downloadFailed", { error: errorText(e) }));
       return;
@@ -3995,6 +4063,7 @@ function renderInvoice() {
   $("backToSale").hidden = Boolean(editing) || !saved;
   $("editInvoiceBtn").hidden = Boolean(editing) || !saved;
   $("printBtn").hidden = Boolean(editing);
+  $("pdfBtn").hidden = !desktopApp || Boolean(editing);
   renderPayBox();
   renderDeliveryBox();
 }
@@ -4582,7 +4651,8 @@ function renderAutoBackup() {
     : !s.connected ? "auto.connection.notConnected"
     : s.state === "needs-permission" ? "auto.connection.needsPermission"
     : "auto.connection.connected";
-  $("autoNote").textContent = s.state === "unsupported" ? t("auto.unsupportedNote")
+  $("autoNote").textContent = desktopApp ? t("auto.desktopNote", { folder: desktopApp.backupFolder || "-" })
+    : s.state === "unsupported" ? t("auto.unsupportedNote")
     : s.state === "not-connected" ? t("auto.notConnectedNote", { name: AutoBackup.FILE_NAME }) + " " + t("auto.intro")
     : t("auto.intro");
   $("autoConnection").textContent = t(connection);
@@ -4593,9 +4663,11 @@ function renderAutoBackup() {
   $("autoDbRevision").textContent = s.latestRevision === null ? t("auto.unknown") : String(s.latestRevision);
   $("autoBackedRevision").textContent = s.lastRevision === null ? t("auto.none") : String(s.lastRevision);
   $("autoError").textContent = s.error || t("auto.none");
-  $("autoChoose").hidden = s.state === "unsupported";
-  $("autoChoose").textContent = t(s.connected ? "auto.chooseOther" : "auto.choose");
-  $("autoChoose").disabled = locked;
+  $("autoChoose").hidden = !desktopApp && s.state === "unsupported";
+  $("autoChoose").textContent = t(desktopApp ? "auto.openFolder" : s.connected ? "auto.chooseOther" : "auto.choose");
+  $("autoChoose").disabled = desktopApp ? busy : locked;
+  $("autoReplace").hidden = !(desktopApp && s.state === "file-newer");
+  $("autoReplace").disabled = busy;
   $("autoGrant").hidden = s.state !== "needs-permission";
   $("autoGrant").disabled = busy;
   $("autoRetry").hidden = !(s.connected && (s.state === "error" || s.state === "pending"));
@@ -4681,7 +4753,7 @@ function renderStorage() {
   $("importBackup").disabled = locked;
   $("backupDays").disabled = locked;
   $("backupDaysSave").disabled = locked;
-  $("persistBtn").hidden = storage.persisted !== false;
+  $("persistBtn").hidden = storage.persisted !== false || Boolean(desktopApp);   // the desktop application's storage is not a browser's to evict
   $("persistBtn").disabled = busy;
   renderReminder();
   renderAutoBackup();
@@ -5697,6 +5769,15 @@ function bindEvents() {
   $("editSave").addEventListener("click", () => saveInvoiceEdit());
   $("editSavePrint").addEventListener("click", () => saveInvoiceEdit({ print: true }));
   $("editCancel").addEventListener("click", cancelInvoiceEdit);
+  // Desktop: before the window closes, the page asks about unsaved typed work and writes any backup that is still waiting
+  // (a change made a moment ago), so closing Invoisy never loses the last copy.
+  if (desktopApp) {
+    desktopApp.onBeforeClose(async () => {
+      if (hasUnsavedWork() && !confirm(t("desktop.leaveConfirm"))) return false;
+      try { await autoBackup.flushNow(); } catch { /* the database is safe; the backup is retried at the next start */ }
+      return true;
+    });
+  }
   // Closing or reloading the page with typed work that is not saved yet asks first (see hasUnsavedWork).
   window.addEventListener("beforeunload", (e) => {
     if (!hasUnsavedWork()) return;
@@ -5725,6 +5806,7 @@ function bindEvents() {
 
   // Preview
   $("printBtn").addEventListener("click", () => printInvoice());
+  $("pdfBtn").addEventListener("click", saveInvoicePdf);
   // The sheets are scaled to the width of the panel: scale them again when the window (or the layout) changes size.
   if (typeof ResizeObserver !== "undefined") new ResizeObserver(fitPreviewSheets).observe($("invoice"));
   // The printed pages are laid out whenever the browser is about to print: the Print button, Ctrl+P or the browser menu.
@@ -5817,12 +5899,16 @@ function bindEvents() {
     if ($("backupReminder").dataset.mode === "auto") showView("settings");
     else exportBackup();
   });
-  $("autoChoose").addEventListener("click", connectBackupFile);
+  $("autoChoose").addEventListener("click", () => {
+    if (!desktopApp) { connectBackupFile(); return; }
+    desktopApp.openBackupFolder().catch((e) => reportDataProblem(t("desktop.openFailed", { error: errorText(e) })));
+  });
+  $("autoReplace").addEventListener("click", replaceNewerBackup);
   $("autoGrant").addEventListener("click", grantBackupPermission);
   $("autoRetry").addEventListener("click", retryBackupFile);
   // Coming back to this window is a good moment to try a backup that is waiting (a drive plugged back in, say).
   window.addEventListener("focus", () => { autoBackup.nudge().catch(() => {}); });
-  $("importBackup").addEventListener("click", () => $("importFile").click());
+  $("importBackup").addEventListener("click", chooseBackupToImport);
   $("importFile").addEventListener("change", (e) => { importBackup(e.target.files[0]); e.target.value = ""; });
   $("backupForm").addEventListener("submit", (e) => { e.preventDefault(); saveBackupInterval(); });
   $("persistBtn").addEventListener("click", askBrowserToKeepData);
@@ -5852,7 +5938,8 @@ function bindEvents() {
 // The Suppliers and Purchases screens (purchases-ui.js) work on this page's data and save through the same commit().
 PurchasesUI.init({
   state, db, commit, guard, $, t, tn, esc, money, numberFormat, notify, formatDateTime, productLabel, priceLabel, stockText, formatTileSize, ltr,
-  downloadText, showView, openProductInStock,
+  downloadText: downloadAndReport, showView, openProductInStock,
+  openAttachmentFile: desktopApp ? (record, download) => (download ? desktopApp.saveAttachment(record) : desktopApp.openAttachment(record)) : null,
 });
 
 // The Workers screens (workers-ui.js) work on this page's data and save through the same commit(). Amounts are shown in the chosen
@@ -5993,6 +6080,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     markSettingsTouched: () => { settingsTouched = true; },
     touchProductForm: () => { productFormTouched = true; },
     addProductAsNew, guard, t,
+    chooseBackupToImport, offerRestoreFromBackups, replaceNewerBackup, saveInvoicePdf,
     invoiceParts, invoiceHtml, printItems, continuationHeadHtml,
     businessPhonesHtml, fillSettingsForm, saveBusinessSettings, addPhoneRow, removePhoneRow, setPhoneRow, renderPhoneRows,
     getPhoneRows: () => state.phoneRows,

@@ -1886,6 +1886,22 @@ I18n.register("en", "English", {
   "problem.badWorkerLink": "is not linked to a worker",
   "db.cannotDeleteWorker": "A worker is never deleted. Mark them inactive instead.",
   "db.what.workers": "workers",
-  "db.what.workerTransactions": "worker transactions"
+  "db.what.workerTransactions": "worker transactions",
+
+  // ----- Desktop application (Electron): automatic backup folder and native dialogs -----
+  "auto.desktopNote": "Invoisy keeps automatic backups of all your data in this folder and updates them after every saved change: {folder}. Your data stays in Invoisy's database; the files are only copies (the current one, the previous one, the last 7 days and the last 4 weeks). Loading data back from a file is always your decision (Import / Restore Backup).",
+  "auto.openFolder": "Open backup folder",
+  "auto.replaceNewer": "Replace the newer backup",
+  "auto.confirmReplaceNewer": "The newest backup file holds more recent data than Invoisy's database.\n\nContinuing replaces it with the data that is in Invoisy now. The newer file is NOT deleted: a copy is kept in the archive folder inside the backup folder.\n\nIf you wanted that data back, cancel and use Import / Restore Backup instead.\n\nContinue?",
+  "desktop.writeFailed": "The backup in the application's backup folder could not be updated. {error} Your data is safe in Invoisy's database; the backup stays pending and is retried.",
+  "desktop.saveFailed": "The file could not be saved. {error}",
+  "desktop.openFailed": "The file could not be opened. {error}",
+  "desktop.attachmentFailed": "The attached file could not be opened. {error}",
+  "desktop.confirmRestore": "Restoring this backup will REPLACE all the data in Invoisy on this computer.\n\nProducts, stock, invoices, payments, suppliers, purchases, supplier payments, attached files and settings will be replaced.\n\nBackup: {backup} (made {made})\nCurrent: {current}\n\nA safety copy of the current data is saved first in Invoisy's backup folder. Invoice numbers never go back: the next one will be {next}.{notes}\n\nContinue?",
+  "desktop.restoreFound": "Invoisy's database is empty, but an automatic backup was found in this computer's backup folder.",
+  "desktop.leaveConfirm": "There is work on screen that is not saved yet. Close Invoisy anyway?",
+  "desktop.savePdf": "Save as PDF",
+  "desktop.pdfSaved": "The PDF was saved.",
+  "desktop.pdfFailed": "The PDF could not be saved. {error}"
 
 });
