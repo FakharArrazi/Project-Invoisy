@@ -122,3 +122,31 @@ test("no page is ever empty", () => {
     for (const page of pages) assert.ok(page.length > 0, `${n} rows`);
   }
 });
+
+test("an invoice that fits on one page is measured once, and comes out exactly as when it is grown piece by piece", () => {
+  const items = () => [
+    block("head", 20),
+    flow(rows(4, 5), table),
+    block("summary", 15),
+    flow(["pay1:5", "pay2:5"], section("Payments"), "lead:4"),
+    flow([], section("Refunds")),
+    block("thanks", 5),
+  ];
+  let calls = 0;
+  const counted = (fragments, pageIndex) => { calls++; return fits(fragments, pageIndex); };
+  const fast = layout(items(), counted);
+  assert.equal(calls, 1, "one measurement for the whole invoice");
+
+  // The same invoice with the quick check refused: the page is grown piece by piece, as it always was.
+  let refused = false;
+  const slowFits = (fragments, pageIndex) => { if (!refused) { refused = true; return false; } return fits(fragments, pageIndex); };
+  assert.deepEqual(fast, layout(items(), slowFits));
+});
+
+test("an invoice that does not fit on one page still goes over several, the quick check changes nothing for it", () => {
+  const items = [block("head", 20), flow(rows(30, 10), table), block("summary", 20)];
+  const pages = layout(items, fits);
+  assert.ok(pages.length > 1);
+  assert.deepEqual(entriesIn(pages.flat()), rows(30, 10).map((r) => r.split(":")[0]));
+  pages.forEach((page, index) => assert.ok(pageHeight(page, index) <= PAGE, `page ${index + 1} fits`));
+});

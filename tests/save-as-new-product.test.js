@@ -39,6 +39,7 @@ function openEdit(app, id) {
 
 async function withProduct(overrides) {
   const app = await boot();
+  app.api.showView("stock");   // the Stock page draws its table while it is open (a person adds and edits products there)
   await app.api.addProduct(tile(overrides));
   const original = app.api.getState().products[0];
   openEdit(app, original.id);

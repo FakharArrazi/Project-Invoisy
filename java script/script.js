@@ -3387,18 +3387,41 @@ function renderResults() {
     return;
   }
 
-  box.innerHTML = state.results.map((shelf) => {
-    const p = stockShown(shelf);   // while an invoice is edited, what it already holds is available again
-    const meta = [productDetails(p), p.sku, p.category].filter(Boolean).join(", ");
-    const stock = esc(p.stock <= 0 ? t("stock.out") : p.stock <= LOW_STOCK ? t("stock.lowN", { n: stockLabel(p) }) : t("stock.n", { n: stockLabel(p) }));
-    return `<div class="result" role="option" data-id="${esc(p.id)}" aria-selected="${p.id === state.selectedId}">` +
-      `<div><div>${esc(productLabel(p))}</div>${meta ? `<div class="meta">${esc(meta)}</div>` : ""}</div>` +
-      `<div class="price">${esc(priceLabel(p))}</div>` +
-      `<div class="stock${p.stock <= 0 ? " out" : p.stock <= LOW_STOCK ? " low" : ""}">${stock}</div></div>`;
-  }).join("");
+  // A short query such as "e" matches most of a big catalogue: only the first matches are drawn, the rest as the list is
+  // scrolled to its end (loadMoreResults). The selected product is always among the rows drawn, so the arrow keys can reach any.
+  const windowed = typeof IntersectionObserver === "function";
+  if (resultsWindow.query !== query) { resultsWindow.query = query; resultsWindow.shown = RESULTS_FIRST; }
+  const selectedAt = state.results.findIndex((p) => p.id === state.selectedId);
+  resultsWindow.shown = windowed ? Math.min(state.results.length, Math.max(resultsWindow.shown, selectedAt + 1)) : state.results.length;
+  box.innerHTML = state.results.slice(0, resultsWindow.shown).map(resultRowHtml).join("");
 
   const selected = box.querySelector('[aria-selected="true"]');
   if (selected) selected.scrollIntoView({ block: "nearest" });
+}
+
+const RESULTS_FIRST = 40;
+const RESULTS_MORE = 40;
+const resultsWindow = { query: null, shown: RESULTS_FIRST };
+
+// One row of the product picker.
+function resultRowHtml(shelf) {
+  const p = stockShown(shelf);   // while an invoice is edited, what it already holds is available again
+  const meta = [productDetails(p), p.sku, p.category].filter(Boolean).join(", ");
+  const stock = esc(p.stock <= 0 ? t("stock.out") : p.stock <= LOW_STOCK ? t("stock.lowN", { n: stockLabel(p) }) : t("stock.n", { n: stockLabel(p) }));
+  return `<div class="result" role="option" data-id="${esc(p.id)}" aria-selected="${p.id === state.selectedId}">` +
+    `<div><div>${esc(productLabel(p))}</div>${meta ? `<div class="meta">${esc(meta)}</div>` : ""}</div>` +
+    `<div class="price">${esc(priceLabel(p))}</div>` +
+    `<div class="stock${p.stock <= 0 ? " out" : p.stock <= LOW_STOCK ? " low" : ""}">${stock}</div></div>`;
+}
+
+// The picker was scrolled near its end: draw the next matches.
+function loadMoreResults() {
+  if (resultsWindow.shown >= state.results.length) return;
+  const box = $("results");
+  if (box.scrollHeight - box.scrollTop - box.clientHeight > 120) return;
+  const next = Math.min(state.results.length, resultsWindow.shown + RESULTS_MORE);
+  box.insertAdjacentHTML("beforeend", state.results.slice(resultsWindow.shown, next).map(resultRowHtml).join(""));
+  resultsWindow.shown = next;
 }
 
 function renderSelected() {
@@ -3623,7 +3646,26 @@ function refreshLive() {
     if (deliver && document.activeElement !== deliver) deliver.value = item.deliverNow;   // follows the quantity and the stock
   });
   renderTotals();
-  renderInvoice();
+  schedulePreview();
+}
+
+// The preview of the invoice being prepared is the costliest part of a keystroke on the Sell page: the printed pages are laid out
+// and measured. It is drawn right after the browser has shown the typed character (and once, if several keys came in the
+// meantime), never before it. Anything that draws the preview itself (renderInvoice) also settles a drawing that was waiting.
+// Without requestAnimationFrame (the test stand-in) it is drawn at once, as it always was.
+let previewFrame = 0;
+let previewTask = 0;
+function schedulePreview() {
+  if (typeof requestAnimationFrame !== "function") { renderInvoice(); return; }
+  if (previewFrame || previewTask) return;
+  previewFrame = requestAnimationFrame(() => {
+    previewFrame = 0;
+    previewTask = setTimeout(() => { previewTask = 0; renderInvoice(); }, 0);
+  });
+}
+function cancelScheduledPreview() {
+  if (previewFrame) { cancelAnimationFrame(previewFrame); previewFrame = 0; }
+  if (previewTask) { clearTimeout(previewTask); previewTask = 0; }
 }
 
 // The invoice as separate pieces of markup. The preview on screen puts them together (invoiceHtml); the printed pages
@@ -4045,6 +4087,7 @@ function renderDeliveryBox() {
 }
 
 function renderInvoice() {
+  cancelScheduledPreview();
   // While an invoice is being corrected the preview shows the corrected invoice (not saved yet) and nothing can be printed from it.
   const editing = Boolean(state.invoiceEdit);
   const saved = state.previewInvoice;
@@ -4066,6 +4109,52 @@ function renderInvoice() {
   $("pdfBtn").hidden = !desktopApp || Boolean(editing);
   renderPayBox();
   renderDeliveryBox();
+}
+
+/* ---------- Long tables ----------
+   The Stock and Invoices tables used to be built in full on every keystroke of their search box (thousands of rows, hundreds of
+   milliseconds). A long table now draws its first rows at once and the next ones as the person scrolls toward the end: an invisible
+   one-pixel marker under the table asks for more shortly before it comes into view. Nothing else changes: the same rows in the same
+   order with the same row numbers, and search, sort and the counts look at the whole list. A short table (and any browser without
+   IntersectionObserver, such as the test stand-in) is drawn whole, as it always was. */
+const TABLE_FIRST_ROWS = 60;
+const TABLE_MORE_ROWS = 60;
+const tableWindows = new WeakMap();   // <tbody> -> { key, shown, observer, marker }
+
+// body: the <tbody>; list: everything that matches; rowHtml(item, index): one row; key: what the list was filtered and sorted by
+// (the window starts again when it changes, and keeps its size when only the data changed, so the scroll position stays);
+// needIndex: a row that has to be among those drawn (-1 for none).
+function drawRows(body, list, rowHtml, key, needIndex) {
+  if (typeof IntersectionObserver !== "function") { body.innerHTML = list.map(rowHtml).join(""); return; }
+  let w = tableWindows.get(body);
+  if (!w) { w = { key: null, shown: TABLE_FIRST_ROWS, observer: null, marker: null }; tableWindows.set(body, w); }
+  if (w.observer) { w.observer.disconnect(); w.observer = null; }
+  if (w.key !== key) { w.key = key; w.shown = TABLE_FIRST_ROWS; }
+  w.shown = Math.min(list.length, Math.max(w.shown, needIndex + 1));
+  body.innerHTML = list.slice(0, w.shown).map(rowHtml).join("");
+  if (w.shown >= list.length) return;
+
+  if (!w.marker) {
+    const marker = document.createElement("div");
+    marker.setAttribute("aria-hidden", "true");
+    marker.style.height = "1px";
+    const wrap = body.closest(".table-wrap") || body.closest("table");
+    wrap.insertAdjacentElement("afterend", marker);
+    w.marker = marker;
+  }
+  const more = new IntersectionObserver((entries) => {
+    if (!entries.some((e) => e.isIntersecting)) return;
+    const next = Math.min(list.length, w.shown + TABLE_MORE_ROWS);
+    let html = "";
+    for (let i = w.shown; i < next; i++) html += rowHtml(list[i], i);
+    body.insertAdjacentHTML("beforeend", html);
+    w.shown = next;
+    if (next >= list.length) { more.disconnect(); if (w.observer === more) w.observer = null; return; }
+    more.unobserve(w.marker);   // the marker may still be near the screen (a tall window): look again
+    more.observe(w.marker);
+  }, { rootMargin: "800px 0px" });
+  w.observer = more;
+  more.observe(w.marker);
 }
 
 function renderStock() {
@@ -4111,11 +4200,22 @@ function renderStockNow() {
     empty.innerHTML = `<p class="muted">${esc(t("results.noMatch", { query: $("stockFilter").value }))}</p>`;
   }
 
-  $("stockBody").innerHTML = list.map((p, index) => stockRowHtml(p, index + 1)).join("");
+  // A product opened with "Open in Stock" is always among the rows drawn (see drawRows).
+  const focusAt = state.stockFocusId ? list.findIndex((p) => p.id === state.stockFocusId) : -1;
+  drawRows($("stockBody"), list, (p, index) => stockRowHtml(p, index + 1), `${$("stockFilter").value}\u0000${state.stockSort}`, focusAt);
 
-  // Category suggestions for the product form.
-  $("categoryList").innerHTML = [...new Set(state.products.map((p) => p.category).filter(Boolean))]
-    .map((c) => `<option value="${esc(c)}"></option>`).join("");
+  renderCategoryList();
+}
+
+// Category suggestions for the product forms (Stock and Purchases). Drawn whenever the screen is, whichever page is open; the list is
+// only replaced when the categories changed, so a long product list costs one comparison.
+let categoryListKey = null;
+function renderCategoryList() {
+  const categories = [...new Set(state.products.map((p) => p.category).filter(Boolean))];
+  const key = categories.join("\u0000");
+  if (key === categoryListKey) return;
+  categoryListKey = key;
+  $("categoryList").innerHTML = categories.map((c) => `<option value="${esc(c)}"></option>`).join("");
 }
 
 // What the history screen shows: the search box, the two filters and the sort, which all work together.
@@ -4213,7 +4313,8 @@ function renderInvoicesNow() {
     ? `<p class="muted">${esc(query.trim() ? t("invoices.noMatch", { query }) : t("invoices.noMatchFilters"))}</p>` +
       `<div class="actions"><button type="button" class="btn" data-action="clear-filters">${esc(t("invoices.clearFilters"))}</button></div>`
     : `<p><strong>${esc(t("invoices.none"))}</strong></p><p class="muted">${esc(t("invoices.noneHint"))}</p>`;
-  $("invoiceBody").innerHTML = list.map((inv) => {
+  const listKey = [query, invoiceView.pay, invoiceView.delivery, invoiceView.sortKey, invoiceView.sortDir].join("\u0000");
+  drawRows($("invoiceBody"), list, (inv) => {
     const pay = paymentInfo(inv);
     const label = t({ paid: "badge.paid", partial: "badge.partial", unpaid: "badge.unpaid", transferred: "badge.transferred", cancelled: "badge.cancelled" }[pay.cls]);
     const cancelled = pay.cls === "cancelled";
@@ -4250,7 +4351,7 @@ function renderInvoicesNow() {
       action("edit", t("invoices.edit"), cancelled ? { attrs: ` disabled title="${esc(t("edit.cancelledLocked", { number: inv.invoiceNumber }))}"` } : {}) +
       action("delete", t("common.delete"), { cls: "danger" }) +
       `</div></td></tr>`;
-  }).join("");
+  }, listKey, -1);
 }
 
 function applyCurrency() {
@@ -4857,8 +4958,10 @@ function renderEverything() {
   renderSelected();
   renderSellerName();   // before the preview, which prints the name
   renderSale();
-  renderStock();
-  renderInvoices();
+  // The two long tables are drawn while their page is open (like Purchases, Workers and the Dashboard, which already did this);
+  // opening a page draws the screen again (showView), so a page is never shown out of date.
+  if (state.view === "stock") renderStock(); else renderCategoryList();
+  if (state.view === "invoices") renderInvoices();
   renderInvoice();
   PurchasesUI.render();
   WorkersUI.render();
@@ -4877,7 +4980,18 @@ const BELL_ICON = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" s
 let debtNoticeCache = "";
 let debtDialogReturnFocus = null;
 
-const debtDirectory = () => Debt.directory(state.invoices, state.debtTransfers);
+// The customers with what they owe, over every invoice: worked out once per version of the data (every change replaces the invoice
+// and transfer lists, see adopt), not on every keystroke of the customer fields.
+let debtDirectoryCache = { invoices: null, transfers: null, value: null };
+function debtDirectory() {
+  const c = debtDirectoryCache;
+  if (c.invoices !== state.invoices || c.transfers !== state.debtTransfers) {
+    c.value = Debt.directory(state.invoices, state.debtTransfers);
+    c.invoices = state.invoices;
+    c.transfers = state.debtTransfers;
+  }
+  return c.value;
+}
 
 // How much of an older invoice is already on the sale being prepared.
 function draftAmountFor(invoiceId) {
@@ -5399,6 +5513,7 @@ function bindEvents() {
       if (state.selectedId) { $("addQty").focus(); $("addQty").select(); }
     }
   });
+  $("results").addEventListener("scroll", loadMoreResults, { passive: true });
   $("results").addEventListener("click", (e) => {
     const row = e.target.closest(".result");
     if (!row) return;

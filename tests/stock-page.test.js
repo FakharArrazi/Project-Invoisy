@@ -262,6 +262,8 @@ test("Edit opens the form with the product; opening another product over typed c
 test("saving a valid product closes the form, shows it once in the table and keeps it saved", async () => {
   const app = await boot();
   const { api } = app;
+  // The Stock page draws its table while it is open (a person adds and edits products there).
+  api.showView("stock");
   api.openProductForm();
   const set = (id, value) => { app.field(id).value = value; };
   set("pName", "Wonder"); set("pManufacturer", "Tiknus Ceram"); set("pTileSize", "45*90"); set("pCoveragePerBox", "1.215");
@@ -284,6 +286,8 @@ test("saving a valid product closes the form, shows it once in the table and kee
 test("editing and saving updates the table and closes the form; deleting the product being edited closes it too", async () => {
   const app = await boot();
   const { api } = app;
+  // The Stock page draws its table while it is open (a person adds and edits products there).
+  api.showView("stock");
   const p = await add(app, { name: "Old name", sku: "1", stock: 4 });
   api.startEditProduct(p.id);
   app.field("pName").value = "New name";

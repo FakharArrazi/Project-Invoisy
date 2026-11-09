@@ -31,6 +31,18 @@
   // items: see above.  fits(fragments, pageIndex): would a page holding exactly these fragments (after the continuation
   // header when pageIndex > 0) stay inside the printable area?  Returns the pages, each a list of markup fragments.
   function layout(items, fits) {
+    // Nearly every invoice fits on one page. That is found out with one measurement of everything together instead of one per
+    // line; the result is exactly what growing the page piece by piece ends with when it all fits.
+    const whole = [];
+    for (const item of items) {
+      if (item.kind === "block") whole.push(item.html);
+      else {
+        if (item.lead) whole.push(item.lead);
+        whole.push(item.build(item.entries, false));
+      }
+    }
+    if (fits(whole, 0)) return [whole];
+
     const pages = [[]];
     const current = () => pages[pages.length - 1];
     const next = () => { pages.push([]); };

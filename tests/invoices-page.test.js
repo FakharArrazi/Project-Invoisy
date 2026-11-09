@@ -286,6 +286,8 @@ test("D: Delete asks first; Cancel leaves the invoice, the stock and the saved d
 
 test("D: a deleted invoice is gone from the list at once, the count follows, and a short message names it", async () => {
   const ctx = await boot();
+  // The Invoices page draws its table while it is open (a person deletes invoices there).
+  ctx.api.showView("invoices");
   const tile = await addTile(ctx);
   await sellLines(ctx, [{ product: tile, qty: "1" }], { name: "Karim" });
   const middle = await sellLines(ctx, [{ product: tile, qty: "1" }], { name: "Sara" });
@@ -302,6 +304,8 @@ test("D: a deleted invoice is gone from the list at once, the count follows, and
 
 test("D: search and sorting still work, and still count right, after a deletion", async () => {
   const ctx = await boot();
+  // The Invoices page draws its table while it is open (a person deletes invoices there).
+  ctx.api.showView("invoices");
   const { invoices } = await manyInvoices(ctx, 8);
   ctx.api.setInvoiceSort("total");
   type(ctx, "alpha");
