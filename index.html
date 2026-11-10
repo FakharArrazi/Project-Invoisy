@@ -114,7 +114,14 @@
       </div>
 
       <div class="panel sell-add">
-        <h2 data-i18n="sell.addProducts">Add products</h2>
+        <div class="sell-add-head">
+          <h2 data-i18n="sell.addProducts">Add products</h2>
+          <!-- Anything that is not in Stock (broken tiles, cement, a jacket...): added to this invoice only, the inventory is never touched. -->
+          <div class="custom-add">
+            <span class="muted small custom-add-hint" data-i18n="sell.customItemHint">Not in Stock? Add it to this invoice only.</span>
+            <button type="button" class="btn" id="addCustomItem" data-i18n="sell.addCustomItem">+ Custom Item</button>
+          </div>
+        </div>
         <label class="sr-only" for="search" data-i18n="sell.searchLabel">Search products</label>
         <div class="sell-search">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
@@ -680,6 +687,46 @@
     <div class="actions">
       <button type="button" class="btn" id="debtDialogCancel" data-i18n="common.cancel">Cancel</button>
       <button type="submit" class="btn primary" id="debtDialogConfirm" data-i18n="debt.dialogConfirm">Add to sale</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Adds (or edits) a custom item of the sale on screen: a line that is not a Stock product and never touches the inventory. Nothing is saved from here. -->
+<dialog class="custom-dialog no-print" id="customDialog" aria-labelledby="customDialogTitle">
+  <form id="customForm" novalidate autocomplete="off">
+    <h2 id="customDialogTitle">Add a custom item</h2>
+    <p class="muted small" data-i18n="custom.intro">For anything that is not in Stock: broken tiles, old tiles, cement, a jacket… It is added to this invoice only. Stock is never changed.</p>
+    <div class="custom-grid">
+      <div class="field custom-wide">
+        <label for="customName" data-i18n="custom.name">Product name / description</label>
+        <input type="text" id="customName" maxlength="120" placeholder="e.g. Broken tiles" data-i18n-placeholder="custom.namePlaceholder" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="customQty" data-i18n="custom.qty">Quantity</label>
+        <input type="number" id="customQty" min="0" step="any" inputmode="decimal" value="1">
+      </div>
+      <div class="field">
+        <label for="customUnit" data-i18n="custom.unit">Unit</label>
+        <input type="text" id="customUnit" list="customUnitList" maxlength="24" placeholder="Box, m², Piece, Bag, kg…" data-i18n-placeholder="custom.unitPlaceholder" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="customPrice"><span data-i18n="custom.price">Price per unit</span> (<span id="customCurrency"></span>)</label>
+        <input type="number" id="customPrice" min="0" step="any" inputmode="decimal">
+      </div>
+      <div class="field">
+        <label for="customTotal" data-i18n="custom.total">Total</label>
+        <output id="customTotal" class="custom-total" for="customQty customPrice">0</output>
+      </div>
+      <div class="field custom-wide">
+        <label for="customNote" data-i18n="custom.note">Additional note (optional)</label>
+        <input type="text" id="customNote" maxlength="300" placeholder="Shown under the name on the invoice" data-i18n-placeholder="custom.notePlaceholder" autocomplete="off">
+      </div>
+    </div>
+    <datalist id="customUnitList"></datalist>
+    <p class="error" id="customError" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="btn" id="customCancel" data-i18n="common.cancel">Cancel</button>
+      <button type="submit" class="btn primary" id="customConfirm">Add to sale</button>
     </div>
   </form>
 </dialog>

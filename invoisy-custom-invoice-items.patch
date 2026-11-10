@@ -1,0 +1,1787 @@
+cddiff --git a/css/rtl.css b/css/rtl.css
+index 01c272e..8da2cdc 100644
+--- a/css/rtl.css
++++ b/css/rtl.css
+@@ -130,3 +130,7 @@ html[dir="rtl"] .invoice-sheets .inv-sheet > .inv-page { transform-origin: top r
+   html[dir="rtl"] .sale-table .collect-later { text-align: right; }
+   html[dir="rtl"] .sale-table td.sale-remove { text-align: left; }
+ }
++
++/* ---------- Custom items ---------- */
++
++html[dir="rtl"] .sale-table input.unit-input { text-align: right; }
+diff --git a/css/sell.css b/css/sell.css
+index 0a9dc4a..7d55d4f 100644
+--- a/css/sell.css
++++ b/css/sell.css
+@@ -20,6 +20,12 @@
+ .sell-add, .sell-sale { padding: 20px; }
+ .sell-add h2, .sell-sale h2 { margin-bottom: 14px; font-size: 16px; }
+ 
++/* The "+ Custom Item" button sits on the heading line of the Add products card. */
++.sell-add .sell-add-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 14px; }
++.sell-add .sell-add-head h2 { margin: 0; }
++.custom-add { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px 12px; }
++.custom-add .btn { min-height: 36px; padding: 0 16px; font-weight: 600; white-space: nowrap; }
++
+ /* Search: the same box as the Stock page's (icon inside, 42px high). */
+ .sell-search { position: relative; }
+ .sell-search svg { position: absolute; top: 50%; inset-inline-start: 13px; width: 18px; height: 18px; margin-top: -9px; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+@@ -118,3 +124,32 @@
+ @media (max-width: 1180px) {
+   .preview-panel { scrollbar-gutter: auto; }
+ }
++
++/* ---------- Custom items: the dialog and the rows of the sale ---------- */
++
++.custom-dialog { width: min(560px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; padding: 20px 22px; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--text); background: var(--panel); }
++.custom-dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
++.custom-dialog h2 { margin: 0 0 6px; font-size: 18px; }
++.custom-dialog > form > p { margin: 0 0 14px; }
++.custom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
++.custom-grid .field { margin-bottom: 12px; min-width: 0; }
++.custom-grid .custom-wide { grid-column: 1 / -1; }
++.custom-grid label { margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
++.custom-grid input { height: 40px; border-radius: 6px; }
++.custom-total { display: flex; align-items: center; height: 40px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: #f6f8fa; font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
++.custom-dialog .error { min-height: 1.4em; margin: 0; }
++.custom-dialog .actions .btn { min-height: 42px; padding: 0 22px; font-size: 15px; font-weight: 600; }
++
++.sale-table input.unit-input { width: 92px; text-align: left; }
++.sale-table .custom-note { overflow-wrap: anywhere; }
++.sale-table .custom-tag { margin-top: 2px; }
++.sale-table .custom-row-actions { margin-top: 6px; }
++
++@media (max-width: 720px) {
++  .sell-add .sell-add-head { align-items: flex-start; }
++  .custom-add { justify-content: flex-start; width: 100%; }
++  .custom-add .btn { flex: 1 1 100%; }
++  .custom-dialog { padding: 16px; }
++  .custom-grid { grid-template-columns: 1fr; }
++  .custom-dialog .actions .btn { flex: 1 1 0; min-width: 0; }
++}
+diff --git a/docs/custom-invoice-items.md b/docs/custom-invoice-items.md
+new file mode 100644
+index 0000000..787fc1a
+--- /dev/null
++++ b/docs/custom-invoice-items.md
+@@ -0,0 +1,78 @@
++# Custom invoice items
++
++A **custom item** is a line of an invoice that is not a Stock product: broken tiles, old or discontinued ceramic, cement,
++grout, a jacket, anything a customer wants to buy. It is typed on the Sell page and lives on the invoice only. It
++**never touches the inventory**.
++
++## Using it
++
++On the Sell page, **+ Custom Item** (next to *Add products*) opens a dialog:
++
++| Field | Rule |
++| --- | --- |
++| Product name / description | required, up to 120 characters |
++| Quantity | required, above 0, decimals allowed (`2.5`, `0.75`) |
++| Unit | required, free text (up to 24 characters): Box, m², Piece, Bag, kg, "Sac 50 kg"... A list of common units is offered while typing |
++| Price per unit | required, 0 or more (money has 2 decimals, like everywhere in the app) |
++| Total | shown, calculated: quantity x price per unit |
++| Additional note | optional, up to 300 characters; printed under the name |
++
++The line then sits in the sale next to the Stock products. Its quantity, unit and price can be changed in the table, **Edit**
++reopens the dialog (name and note too), **Remove** takes it off. A custom line is marked *Custom item · not in stock* and
++shows no stock, no unit list and no "deliver later" box.
++
++An invoice can hold only custom items, only Stock products, or both.
++
++**Discount.** Custom lines take part in the invoice discount (amount or percent), the tax, the amount due, the payments and the
++remaining balance like any other line. There is no separate discount per line: Invoisy has one discount per invoice, and a
++line discount would have been a second rule that every total, print and report had to learn.
++
++## What a saved line looks like
++
++```js
++// Stock product (older invoices have no itemType: they are read as "inventory")
++{ itemType: "inventory", productId, name, sellingUnit, qty, unitPrice, total, stockDeducted, ... }
++
++// Custom item: a snapshot of what was typed, nothing about stock
++{ itemType: "custom", name: "Broken Tiles", note: "optional", qty: 3, unit: "Box", unitPrice: 300, total: 900 }
++```
++
++A custom line has **no** `productId`, `sellingUnit`, `stockUnit` or `stockDeducted`. `validation.js` (`customItemProblem`)
++refuses an invoice whose custom line has any of them, in the database and when a backup is restored.
++
++## Why the inventory can not be affected
++
++Every place that moves stock tests `isCustomItem(item)` (`itemType === "custom"`) and skips the line, and none of them has a
++product to find anyway:
++
++| Operation | What happens to a custom line |
++| --- | --- |
++| Sale (`stockNeeds`, `applySale`) | needs no stock; no product is looked up |
++| Sell page sync with the Stock page (`syncSaleWithProducts`) | kept (a deleted product removes its own lines, never a custom one) |
++| Editing a saved invoice (`planInvoiceEdit`) | stays custom; its name, note, quantity, unit and price can change; no stock change |
++| Removing a line / returning goods | a removed custom line gives nothing back to stock |
++| Removing every line, or deleting the invoice (`planInvoiceRollback`, `stockHeld`) | nothing to restore, and it is never reported as "could not be restored" |
++| Pick-ups of an invoice delivered in steps (`deliveryDetail`, `applyCollection`) | always delivered with the sale, never "to collect"; a pick-up of a custom line is refused |
++| Dashboard product rankings (`analytics.js`) | not counted as a product (its money is in the invoice total, so revenue is right) |
++
++On an invoice delivered in steps, a custom line's **price** can still be corrected, but its quantity can not and a custom line
++can not be added (the lines of such an invoice are a record, the same rule as for products).
++
++## Database and backups
++
++There is **no schema change and no migration**. Invoices are stored as before; a custom line is just another entry of
++`invoice.items`, so existing records, the invoice counter and the backup format (`formatVersion`) are untouched. Older invoices
++are not rewritten (no `itemType` means inventory). The JSON export / import carries custom lines unchanged. Backups made before this
++feature import exactly as they did (their lines are inventory lines). A backup made with custom items is meant for this
++version or a later one.
++
++## Printing
++
++A custom row prints the name (the note under it, in the same small grey type as a product's type), the quantity with its unit as
++typed (`3 Box`, `12 m²`), the unit price (`300 / Box`) and the total. Text typed in any field is escaped.
++
++## Tests
++
++`tests/custom-items.test.js` covers the typing rules, custom-only / mixed / inventory-only invoices, decimals and units,
++discounts and payment states, the Sell page and its dialog, editing, returns, deleting, invoices delivered in steps, reload,
++backup export / import, invoices made before this feature, print markup and the Dashboard.
+diff --git a/index.html b/index.html
+index da3d2cf..62ab0a4 100644
+--- a/index.html
++++ b/index.html
+@@ -114,7 +114,14 @@
+       </div>
+ 
+       <div class="panel sell-add">
+-        <h2 data-i18n="sell.addProducts">Add products</h2>
++        <div class="sell-add-head">
++          <h2 data-i18n="sell.addProducts">Add products</h2>
++          <!-- Anything that is not in Stock (broken tiles, cement, a jacket...): added to this invoice only, the inventory is never touched. -->
++          <div class="custom-add">
++            <span class="muted small custom-add-hint" data-i18n="sell.customItemHint">Not in Stock? Add it to this invoice only.</span>
++            <button type="button" class="btn" id="addCustomItem" data-i18n="sell.addCustomItem">+ Custom Item</button>
++          </div>
++        </div>
+         <label class="sr-only" for="search" data-i18n="sell.searchLabel">Search products</label>
+         <div class="sell-search">
+           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+@@ -684,6 +691,46 @@
+   </form>
+ </dialog>
+ 
++<!-- Adds (or edits) a custom item of the sale on screen: a line that is not a Stock product and never touches the inventory. Nothing is saved from here. -->
++<dialog class="custom-dialog no-print" id="customDialog" aria-labelledby="customDialogTitle">
++  <form id="customForm" novalidate autocomplete="off">
++    <h2 id="customDialogTitle">Add a custom item</h2>
++    <p class="muted small" data-i18n="custom.intro">For anything that is not in Stock: broken tiles, old tiles, cement, a jacket… It is added to this invoice only. Stock is never changed.</p>
++    <div class="custom-grid">
++      <div class="field custom-wide">
++        <label for="customName" data-i18n="custom.name">Product name / description</label>
++        <input type="text" id="customName" maxlength="120" placeholder="e.g. Broken tiles" data-i18n-placeholder="custom.namePlaceholder" autocomplete="off">
++      </div>
++      <div class="field">
++        <label for="customQty" data-i18n="custom.qty">Quantity</label>
++        <input type="number" id="customQty" min="0" step="any" inputmode="decimal" value="1">
++      </div>
++      <div class="field">
++        <label for="customUnit" data-i18n="custom.unit">Unit</label>
++        <input type="text" id="customUnit" list="customUnitList" maxlength="24" placeholder="Box, m², Piece, Bag, kg…" data-i18n-placeholder="custom.unitPlaceholder" autocomplete="off">
++      </div>
++      <div class="field">
++        <label for="customPrice"><span data-i18n="custom.price">Price per unit</span> (<span id="customCurrency"></span>)</label>
++        <input type="number" id="customPrice" min="0" step="any" inputmode="decimal">
++      </div>
++      <div class="field">
++        <label for="customTotal" data-i18n="custom.total">Total</label>
++        <output id="customTotal" class="custom-total" for="customQty customPrice">0</output>
++      </div>
++      <div class="field custom-wide">
++        <label for="customNote" data-i18n="custom.note">Additional note (optional)</label>
++        <input type="text" id="customNote" maxlength="300" placeholder="Shown under the name on the invoice" data-i18n-placeholder="custom.notePlaceholder" autocomplete="off">
++      </div>
++    </div>
++    <datalist id="customUnitList"></datalist>
++    <p class="error" id="customError" role="alert"></p>
++    <div class="actions">
++      <button type="button" class="btn" id="customCancel" data-i18n="common.cancel">Cancel</button>
++      <button type="submit" class="btn primary" id="customConfirm">Add to sale</button>
++    </div>
++  </form>
++</dialog>
++
+ <!-- After a sale is saved: print it now, start the next sale, or decide later. Opened only once the sale is committed. -->
+ <dialog class="sale-done-dialog no-print" id="saleDoneDialog" aria-labelledby="saleDoneTitle">
+   <div class="sale-done-icon" aria-hidden="true">
+diff --git a/java script/analytics.js b/java script/analytics.js
+index c2211eb..78b0a45 100644
+--- a/java script/analytics.js	
++++ b/java script/analytics.js	
+@@ -188,7 +188,7 @@
+     for (const r of scanned.rows) {
+       if (r.cancelled || !r.day || cmpDay(r.day, from) < 0 || cmpDay(r.day, to) > 0) continue;
+       for (const item of Array.isArray(r.inv.items) ? r.inv.items : []) {
+-        if (!item) continue;
++        if (!item || V.isCustomItem(item)) continue;   // a custom item is not a Stock product: it has no place in the product rankings (its money is in the invoice total)
+         const product = item.productId ? byId.get(item.productId) : null;
+         const key = item.productId ? "id:" + item.productId : "n:" + [item.name, item.tileSize, item.manufacturer].join("|");
+         const e = map.get(key) || {
+diff --git a/java script/lang/ar.js b/java script/lang/ar.js
+index b000c9a..ed747e9 100644
+--- a/java script/lang/ar.js	
++++ b/java script/lang/ar.js	
+@@ -91,6 +91,36 @@ I18n.register("ar", "العربية", {
+   "sell.unitAria": "وحدة {name}",
+   "sell.priceAria": "سعر الوحدة لـ {name} ({unit})",
+   "sell.removeAria": "إزالة {name} من البيع",
++  // ----- Custom invoice items (anything sold that is not a Stock product) -----
++  "sell.addCustomItem": "+ منتج مخصص",
++  "sell.customItemHint": "ليس في المخزون؟ أضفه إلى هذه الفاتورة فقط.",
++  "sell.customBadge": "منتج مخصص",
++  "sell.customNoStock": "منتج مخصص · خارج المخزون",
++  "sell.customEditAria": "تعديل المنتج المخصص {name}",
++  "custom.title": "إضافة منتج مخصص",
++  "custom.titleEdit": "تعديل المنتج المخصص",
++  "custom.intro": "لأي شيء غير موجود في المخزون: بلاط مكسور، بلاط قديم، إسمنت، سترة… يُضاف إلى هذه الفاتورة فقط ولا يتغيّر المخزون أبدًا.",
++  "custom.name": "اسم المنتج / الوصف",
++  "custom.namePlaceholder": "مثال: بلاط مكسور",
++  "custom.qty": "الكمية",
++  "custom.unit": "الوحدة",
++  "custom.unitPlaceholder": "صندوق، م²، قطعة، كيس، كغ…",
++  "custom.price": "سعر الوحدة",
++  "custom.total": "المجموع",
++  "custom.note": "ملاحظة إضافية (اختيارية)",
++  "custom.notePlaceholder": "تظهر تحت الاسم في الفاتورة",
++  "custom.add": "إضافة إلى البيع",
++  "custom.save": "حفظ التغييرات",
++  "custom.unitBag": "كيس",
++  "custom.unitLiter": "لتر",
++  "custom.nameRequired": "أدخل اسم المنتج أو وصفه.",
++  "custom.nameTooLong": "الاسم محدود بـ {max} حرفًا.",
++  "custom.qtyPositive": "أدخل كمية أكبر من 0 (الكسور مسموحة).",
++  "custom.unitRequired": "أدخل وحدة أو اخترها.",
++  "custom.unitTooLong": "الوحدة محدودة بـ {max} حرفًا.",
++  "custom.priceRequired": "أدخل سعر الوحدة.",
++  "custom.priceNegative": "لا يمكن أن يكون السعر سالبًا.",
++  "custom.noteTooLong": "الملاحظة محدودة بـ {max} حرفًا.",
+   "sell.completed": "تم إتمام البيع. تم حفظ {number}.",
+   "sell.priceUnit": "{currency}/{unit}",
+   "sell.priceReset": "تغيّرت الوحدة: تم استبدال السعر المخصص بالسعر لكل {unit}.",
+@@ -593,6 +623,7 @@ I18n.register("ar", "العربية", {
+   "problem.badDate": "التاريخ غير صالح",
+   "problem.noItems": "قائمة العناصر مفقودة",
+   "problem.badItem": "أحد العناصر غير صالح",
++  "problem.badCustomItem": "أحد المنتجات المخصصة غير صالح",
+   "problem.badSubtotal": "المجموع الفرعي غير صالح",
+   "problem.badDiscount": "الخصم غير صالح",
+   "problem.badTax": "الضريبة غير صالحة",
+diff --git a/java script/lang/en.js b/java script/lang/en.js
+index 955aec0..2bac4e5 100644
+--- a/java script/lang/en.js	
++++ b/java script/lang/en.js	
+@@ -87,6 +87,36 @@ I18n.register("en", "English", {
+   "sell.unitAria": "Unit of {name}",
+   "sell.priceAria": "Unit price of {name} ({unit})",
+   "sell.removeAria": "Remove {name} from sale",
++  // ----- Custom invoice items (anything sold that is not a Stock product) -----
++  "sell.addCustomItem": "+ Custom Item",
++  "sell.customItemHint": "Not in Stock? Add it to this invoice only.",
++  "sell.customBadge": "Custom item",
++  "sell.customNoStock": "Custom item · not in stock",
++  "sell.customEditAria": "Edit custom item {name}",
++  "custom.title": "Add a custom item",
++  "custom.titleEdit": "Edit custom item",
++  "custom.intro": "For anything that is not in Stock: broken tiles, old tiles, cement, a jacket… It is added to this invoice only. Stock is never changed.",
++  "custom.name": "Product name / description",
++  "custom.namePlaceholder": "e.g. Broken tiles",
++  "custom.qty": "Quantity",
++  "custom.unit": "Unit",
++  "custom.unitPlaceholder": "Box, m², Piece, Bag, kg…",
++  "custom.price": "Price per unit",
++  "custom.total": "Total",
++  "custom.note": "Additional note (optional)",
++  "custom.notePlaceholder": "Shown under the name on the invoice",
++  "custom.add": "Add to sale",
++  "custom.save": "Save changes",
++  "custom.unitBag": "Bag",
++  "custom.unitLiter": "L",
++  "custom.nameRequired": "Enter the product name or description.",
++  "custom.nameTooLong": "The name is limited to {max} characters.",
++  "custom.qtyPositive": "Enter a quantity greater than 0 (decimals are allowed).",
++  "custom.unitRequired": "Enter or choose a unit.",
++  "custom.unitTooLong": "The unit is limited to {max} characters.",
++  "custom.priceRequired": "Enter a price per unit.",
++  "custom.priceNegative": "Price can't be negative.",
++  "custom.noteTooLong": "The note is limited to {max} characters.",
+   "sell.completed": "Sale completed. {number} saved.",
+   "sell.priceUnit": "{currency}/{unit}",
+   "sell.priceReset": "Unit changed: the custom price was replaced by the price per {unit}.",
+@@ -579,6 +609,7 @@ I18n.register("en", "English", {
+   "problem.badDate": "has an invalid date",
+   "problem.noItems": "has no item list",
+   "problem.badItem": "has an invalid item",
++  "problem.badCustomItem": "has an invalid custom item",
+   "problem.badSubtotal": "has an invalid subtotal",
+   "problem.badDiscount": "has an invalid discount",
+   "problem.badTax": "has an invalid tax",
+diff --git a/java script/lang/fr.js b/java script/lang/fr.js
+index 0dda5b9..8a2515a 100644
+--- a/java script/lang/fr.js	
++++ b/java script/lang/fr.js	
+@@ -91,6 +91,36 @@
+     "sell.unitAria": "Unité de {name}",
+     "sell.priceAria": "Prix unitaire de {name} ({unit})",
+     "sell.removeAria": "Retirer {name} de la vente",
++    // ----- Custom invoice items (anything sold that is not a Stock product) -----
++    "sell.addCustomItem": "+ Article libre",
++    "sell.customItemHint": "Pas en stock ? Ajoutez-le à cette facture seulement.",
++    "sell.customBadge": "Article libre",
++    "sell.customNoStock": "Article libre · hors stock",
++    "sell.customEditAria": "Modifier l'article libre {name}",
++    "custom.title": "Ajouter un article libre",
++    "custom.titleEdit": "Modifier l'article libre",
++    "custom.intro": "Pour tout ce qui n'est pas en stock : carreaux cassés, anciens carreaux, ciment, une veste… Il est ajouté à cette facture seulement. Le stock n'est jamais modifié.",
++    "custom.name": "Désignation / description du produit",
++    "custom.namePlaceholder": "ex. Carreaux cassés",
++    "custom.qty": "Quantité",
++    "custom.unit": "Unité",
++    "custom.unitPlaceholder": "Boîte, m², Pièce, Sac, kg…",
++    "custom.price": "Prix unitaire",
++    "custom.total": "Total",
++    "custom.note": "Note supplémentaire (facultatif)",
++    "custom.notePlaceholder": "Affichée sous la désignation sur la facture",
++    "custom.add": "Ajouter à la vente",
++    "custom.save": "Enregistrer les modifications",
++    "custom.unitBag": "Sac",
++    "custom.unitLiter": "L",
++    "custom.nameRequired": "Saisissez la désignation ou la description du produit.",
++    "custom.nameTooLong": "La désignation est limitée à {max} caractères.",
++    "custom.qtyPositive": "Saisissez une quantité supérieure à 0 (les décimales sont permises).",
++    "custom.unitRequired": "Saisissez ou choisissez une unité.",
++    "custom.unitTooLong": "L'unité est limitée à {max} caractères.",
++    "custom.priceRequired": "Saisissez un prix unitaire.",
++    "custom.priceNegative": "Le prix ne peut pas être négatif.",
++    "custom.noteTooLong": "La note est limitée à {max} caractères.",
+     "sell.completed": "Vente validée. {number} enregistrée.",
+     "sell.priceUnit": "{currency}/{unit}",
+     "sell.priceReset": "Unité modifiée : le prix personnalisé a été remplacé par le prix par {unit}.",
+@@ -583,6 +613,7 @@
+     "problem.badDate": "date non valide",
+     "problem.noItems": "liste d’articles manquante",
+     "problem.badItem": "article non valide",
++    "problem.badCustomItem": "article libre non valide",
+     "problem.badSubtotal": "sous-total non valide",
+     "problem.badDiscount": "remise non valide",
+     "problem.badTax": "taxe non valide",
+diff --git a/java script/script.js b/java script/script.js
+index 4ea9c2f..1a08887 100644
+--- a/java script/script.js	
++++ b/java script/script.js	
+@@ -26,6 +26,8 @@ if (typeof globalThis.WorkersUI === "undefined" || typeof globalThis.Workers ===
+ 
+ // The data rules (setting defaults, units, ids, invoice numbers) live in validation.js; unit and price maths in calc.js.
+ const { CURRENCY, DEFAULT_SETTINGS, SELLING_UNITS, round2, toNumber, uid, formatInvoiceNumber, invoiceSequence } = Validation;
++// A custom item is an invoice line that is not a Stock product (see "Invoice item types" in validation.js): it never touches inventory.
++const isCustomItem = Validation.isCustomItem;
+ // These two names are saved inside invoices exactly as written here, so the data file does not depend on the
+ // language. They are translated only when shown (see customerLabel and invoiceItemLabel).
+ const WALK_IN = "Walk-in Customer";
+@@ -277,6 +279,8 @@ function productTypeLabel(type) {
+ // The type under the product name, in the same small grey style as the converted quantity ("1,42 m²").
+ // No type: nothing at all, so the line is exactly what it always was.
+ function invoiceItemTypeHtml(item) {
++  // A custom line has no product type: the optional note typed with it is shown there, in the same small grey style.
++  if (isCustomItem(item)) return item.note ? `<div class="inv-sub">${esc(item.note)}</div>` : "";
+   const label = productTypeLabel(item.productType);
+   return label ? `<div class="inv-sub">${esc(label)}</div>` : "";
+ }
+@@ -286,6 +290,11 @@ function qtyText(qty, unit) {
+   return numberFormat.format(qty) + (unit ? ` ${unitLabel(unit, qty)}` : "");
+ }
+ 
++// The quantity of a custom line with the unit text it was typed with ("3 Box", "2.5 m²"): the unit is free text, never translated.
++function customQtyText(item, qty = item.qty) {
++  return numberFormat.format(qty) + (item.unit ? ` ${item.unit}` : "");
++}
++
+ /* ---------- State ---------- */
+ 
+ function newSale() {
+@@ -1519,6 +1528,7 @@ function stockNeeds(items, data = state) {
+   const totals = new Map();
+   const errors = [];
+   for (const item of items) {
++    if (isCustomItem(item)) continue;   // a custom line is not in stock: it needs none
+     const p = findProduct(item.productId, data);
+     if (!p) continue;
+     const d = Calc.stockDeduction(p, deliverNowQty(item), item.sellingUnit);
+@@ -1731,6 +1741,14 @@ function removeFromSale(lineId) {
+ // Returns { error } when the value is rejected; { error, clamped } when it was capped to stock.
+ function updateSaleQuantity(lineId, rawQty) {
+   const item = findSaleItem(lineId);
++  // A custom line has no stock to check: any quantity above 0 is fine, decimals included.
++  if (item && isCustomItem(item)) {
++    const typed = String(rawQty).trim();
++    const n = Number(typed);
++    if (typed === "" || !Number.isFinite(n) || n <= 0) return { error: t("custom.qtyPositive") };
++    item.qty = Calc.cleanNumber(n);
++    return {};
++  }
+   const product = item && findProduct(item.productId);
+   if (!item || !product) return { error: t("sale.productUnavailable") };
+   const checked = Calc.validateQuantity(rawQty, item.sellingUnit);
+@@ -1773,10 +1791,57 @@ function updateSalePrice(lineId, rawPrice) {
+   const rounded = Calc.roundMoney(price);
+   if (!Number.isFinite(Calc.calculateLineTotal(Calc.lineQuantity(item), rounded))) return { error: t("sale.enterPrice") };
+   item.unitPrice = rounded;
+-  item.priceOverridden = rounded !== round2(toNumber(item.listPrice));
++  if (!isCustomItem(item)) item.priceOverridden = rounded !== round2(toNumber(item.listPrice));   // a custom line has no catalogue price to differ from
++  return {};
++}
++
++/* ---------- Custom items on the sale ----------
++   A custom line is { lineId, itemType: "custom", name, note?, qty, unit, unitPrice }: what was typed, nothing else. It has no productId, so no
++   function that looks a product up, checks stock, converts a unit or takes stock out ever finds anything to act on (and each of them also
++   skips it explicitly). Its total is qty x unitPrice, like every line, so the subtotal, the discount, the amount due and the balance treat
++   it as any other line. Adding is refused on an invoice sold in several deliveries (its lines are a record). */
++
++// Adds a custom line from what the person typed. { item } or { field, error }.
++function addCustomToSale(raw) {
++  if (state.invoiceEdit && state.invoiceEdit.tracked) return { field: "", error: t("edit.trackedLines") };
++  const read = Validation.readCustomItemInput(raw);
++  if (read.error) return read;
++  const { total, ...typed } = read.item;
++  const line = { lineId: uid(), ...typed };
++  state.sale.items.push(line);
++  return { item: line };
++}
++
++// Replaces what a custom line says (the same checks as when it is added). { item } or { field, error }.
++function updateCustomLine(lineId, raw) {
++  const line = findSaleItem(lineId);
++  if (!line || !isCustomItem(line)) return { field: "", error: t("sale.lineGone") };
++  const read = Validation.readCustomItemInput(raw);
++  if (read.error) return read;
++  const { total, ...typed } = read.item;
++  delete line.note;
++  Object.assign(line, typed);
++  return { item: line };
++}
++
++// The unit typed on a custom line (free text). { error } leaves the line as it was.
++function updateCustomUnit(lineId, rawUnit) {
++  const line = findSaleItem(lineId);
++  if (!line || !isCustomItem(line)) return { error: t("sale.lineGone") };
++  const unit = String(rawUnit == null ? "" : rawUnit).replace(/\s+/g, " ").trim();
++  if (!unit) return { error: t("custom.unitRequired") };
++  if (unit.length > Validation.CUSTOM_UNIT_MAX) return { error: t("custom.unitTooLong", { max: Validation.CUSTOM_UNIT_MAX }) };
++  line.unit = unit;
+   return {};
+ }
+ 
++// What the line of a custom item keeps on an invoice: its own snapshot (name, note, quantity, unit, unit price, total) and nothing about stock.
++function customInvoiceLine(item, tracked) {
++  const read = Validation.readCustomItemInput({ name: item.name, note: item.note, qty: item.qty, unit: item.unit, unitPrice: item.unitPrice });
++  const line = read.item || { itemType: "custom", name: item.name, qty: item.qty, unit: item.unit, unitPrice: item.unitPrice, total: Calc.calculateLineTotal(item.qty, item.unitPrice) };
++  return { ...line, ...(tracked ? { lineId: item.lineId } : {}) };
++}
++
+ function amountFrom(type, value, base) {
+   const v = Number(value);
+   if (!Number.isFinite(v) || v < 0) return 0;
+@@ -1883,6 +1948,11 @@ function validateSale() {
+   const errors = [];
+   if (state.sale.items.length === 0) errors.push(t("sale.addOne"));
+   for (const item of state.sale.items) {
++    if (isCustomItem(item)) {
++      const read = Validation.readCustomItemInput({ name: item.name, note: item.note, qty: item.qty, unit: item.unit, unitPrice: item.unitPrice });
++      if (read.error) errors.push(t("edit.lineError", { name: String(item.name || "").trim() || t("sell.customBadge"), error: read.error }));
++      continue;
++    }
+     const p = findProduct(item.productId);
+     if (!p) { errors.push(t("sale.productMissing")); continue; }
+     if (Calc.validateQuantity(item.qty, item.sellingUnit).error) {
+@@ -1926,6 +1996,7 @@ function syncSaleWithProducts() {
+   const notes = [];
+   const used = new Map();   // stock (in the product's stock unit) already given to earlier lines of the same product
+   state.sale.items = state.sale.items.filter((item) => {
++    if (isCustomItem(item)) return true;   // not a product: nothing in the inventory can change or remove it
+     const p = findProduct(item.productId);
+     // A line of the invoice being edited is never dropped, repriced or shortened behind the person's back: its price and
+     // quantity are the saved ones. A problem with it (stock, a deleted product) is reported when the changes are saved.
+@@ -2007,6 +2078,7 @@ function invoiceLineData(item, p, stockDeducted) {
+   // for an area, the m² the goods contain, so the printed invoice can show "7 Boxes, 10.08 m², 1,400 DA/m²" from the line alone.
+   const inPriceUnit = Number.isFinite(Number(item.chargedPrice)) && Calc.isUnit(priceUnit) && priceUnit !== sellingUnit;
+   return {
++    itemType: "inventory",
+     productId: item.productId,
+     name: p ? p.name : DELETED_PRODUCT,
+     productType: p ? Validation.normalizeProductType(p.productType) : "",   // a snapshot, like the name: editing the product later never changes a saved invoice
+@@ -2073,6 +2145,8 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
+   const tracked = sale.items.some(leavesRemainder);
+   const handedOver = [];
+   const items = sale.items.map((item) => {
++    // A custom line is copied as typed: no product is looked up, no stock is worked out, nothing is handed over later.
++    if (isCustomItem(item)) return customInvoiceLine(item, tracked);
+     const p = findProduct(item.productId, data);
+     const handed = deliverNowQty(item);
+     const taken = p ? Calc.stockDeduction(p, handed, item.sellingUnit) : { error: true };
+@@ -2124,7 +2198,13 @@ function draftInvoice() {
+ // The debt is checked again here against the latest data, and once more inside the database transaction.
+ function applySale(d, sale) {
+   d.debtTransfers = d.debtTransfers || [];
+-  if (sale.items.some((i) => !findProduct(i.productId, d))) return { error: t("sale.productMissing") };
++  if (sale.items.some((i) => !isCustomItem(i) && !findProduct(i.productId, d))) return { error: t("sale.productMissing") };
++  // A custom line is checked again here as typed; it takes nothing from the stock below (stockNeeds leaves it out).
++  for (const i of sale.items) {
++    if (!isCustomItem(i)) continue;
++    const read = Validation.readCustomItemInput({ name: i.name, note: i.note, qty: i.qty, unit: i.unit, unitPrice: i.unitPrice });
++    if (read.error) return { error: read.error };
++  }
+   const badDelivery = deliveryErrors(sale, d);
+   if (badDelivery.length) return { error: badDelivery[0] };
+   const needs = stockNeeds(sale.items, d);
+@@ -2383,7 +2463,7 @@ function applyCollection(d, invoiceId, entries, note) {
+     const raw = String(entry && entry.qty != null ? entry.qty : "").trim();
+     if (raw === "") continue;
+     const line = detail.lines.find((l) => l.lineId && l.lineId === entry.lineId);
+-    if (!line || seen.has(line.lineId)) return { error: t("collect.badLine") };
++    if (!line || seen.has(line.lineId) || isCustomItem(line.item)) return { error: t("collect.badLine") };   // a custom line has nothing to collect later
+     seen.add(line.lineId);
+     const name = invoiceItemLabel(line.item);
+     const unit = line.item.sellingUnit;
+@@ -2477,6 +2557,13 @@ function deliveryInputs(inv) {
+ //   - anything else (a price typed by hand, a price per box, an area typed in m²): the price really charged per unit sold.
+ // `orig` is the saved line, `origIndex` its place on the invoice and `fromInvoice` says the line is still in its saved form.
+ function saleLineFromItem(item, index) {
++  // A custom line stays a custom line: it comes back exactly as saved (name, note, quantity, unit, price) and never gets a product.
++  if (isCustomItem(item)) {
++    return {
++      lineId: uid(), origIndex: index, orig: item, fromInvoice: true, itemType: "custom", name: item.name, ...(item.note ? { note: item.note } : {}),
++      qty: item.qty, unit: item.unit, unitPrice: item.unitPrice,
++    };
++  }
+   const unit = SELLING_UNITS.includes(item.sellingUnit) ? item.sellingUnit : "piece";
+   const line = { lineId: uid(), origIndex: index, orig: item, fromInvoice: true, productId: item.productId, qty: item.qty, sellingUnit: unit };
+   const savedTotal = round2(item.total != null ? toNumber(item.total) : Calc.calculateLineTotal(item.qty, item.unitPrice));
+@@ -2596,7 +2683,7 @@ function saveSellerName() {
+ function editSignature(sale = state.sale) {
+   return JSON.stringify({
+     customer: sale.customer, second: secondCustomerName(sale),
+-    items: sale.items.map((i) => [i.origIndex == null ? null : i.origIndex, i.productId, i.sellingUnit, i.qty, i.unitPrice, i.priceQty]),
++    items: sale.items.map((i) => [i.origIndex == null ? null : i.origIndex, i.productId, i.sellingUnit, i.qty, i.unitPrice, i.priceQty, isCustomItem(i) ? [i.name, i.unit, i.note || ""] : null]),
+     adjust: [sale.discountType, sale.discountValue],
+     delivery: [sale.delivery.person, sale.delivery.phone, sale.delivery.fee],
+   });
+@@ -2629,7 +2716,7 @@ function editedCustomer(inv, sale) {
+ function stockHeld(inv) {
+   const held = new Map();
+   const add = (item, qty) => {
+-    if (!item || !(qty > 0)) return;
++    if (!item || isCustomItem(item) || !(qty > 0)) return;   // a custom line never held any stock: there is nothing to give back
+     const entry = held.get(item.productId) || { qty: 0, unit: Calc.isUnit(item.stockUnit) ? item.stockUnit : null, name: invoiceItemLabel(item) };
+     entry.qty = Calc.cleanNumber(entry.qty + qty);
+     held.set(item.productId, entry);
+@@ -2703,7 +2790,7 @@ function planInvoiceRollback(d, invoiceId, options = {}) {
+     total: toNumber(inv.total), paid: Validation.paidTotal(inv), alreadyRefunded: Validation.refundedTotal(inv), refund,
+     ...(deliveryFee > 0 ? { deliveryFee } : {}),
+     payments: (Array.isArray(inv.payments) ? inv.payments : []).map((p) => ({ amount: p.amount, timestamp: p.timestamp })),
+-    items: inv.items.map((item) => ({ name: invoiceItemLabel(item), qty: item.qty, unit: item.sellingUnit || null })),
++    items: inv.items.map((item) => ({ name: invoiceItemLabel(item), qty: item.qty, unit: isCustomItem(item) ? item.unit : item.sellingUnit || null, ...(isCustomItem(item) ? { custom: true } : {}) })),
+     stock,
+     ...(notRestored.length ? { notRestored } : {}),
+     ...(Validation.isCancelled(inv) ? { wasCancelled: true } : {}),
+@@ -2764,6 +2851,28 @@ function planInvoiceEdit(d, invoiceId, edit) {
+   for (const line of lines) {
+     const orig = line.origIndex != null ? inv.items[line.origIndex] : null;
+     if (line.origIndex != null && !orig) return { error: t("edit.changedElsewhere") };
++    if (isCustomItem(line) || isCustomItem(orig)) {
++      // ----- a custom line: kept as a custom line (its name, note, quantity, unit and price may change); the stock is never involved -----
++      if (!isCustomItem(line) || (orig && !isCustomItem(orig))) return { error: t("edit.changedElsewhere") };
++      const read = Validation.readCustomItemInput({ name: line.name, note: line.note, qty: line.qty, unit: line.unit, unitPrice: line.unitPrice });
++      if (read.error) return { error: t("edit.lineError", { name: clean(line.name) || t("sell.customBadge"), error: read.error }) };
++      if (orig) {
++        if (used.has(line.origIndex)) return { error: t("edit.changedElsewhere") };
++        used.add(line.origIndex);
++        const item = { ...orig, ...read.item };
++        if (read.item.note === undefined) delete item.note;
++        if (tracked && item.qty !== orig.qty) return { error: t("edit.trackedQty", { name: invoiceItemLabel(orig) }) };
++        if (!Validation.sameValue(item, orig)) linesChanged = true;
++        if (line.origIndex !== items.length) linesChanged = true;   // moved or an earlier line removed
++        items.push(item);
++        origOf.push(orig);
++      } else {
++        items.push(read.item);
++        origOf.push(null);
++        linesChanged = true;
++      }
++      continue;
++    }
+     if (orig && line.sellingUnit === orig.sellingUnit) {
+       // ----- a kept line: every saved detail stays unless this edit changes it -----
+       if (used.has(line.origIndex)) return { error: t("edit.changedElsewhere") };
+@@ -2832,7 +2941,7 @@ function planInvoiceEdit(d, invoiceId, edit) {
+   }
+   // A saved line that was removed (or replaced by another unit) hands its stock back.
+   inv.items.forEach((orig, index) => {
+-    if (used.has(index)) return;
++    if (used.has(index) || isCustomItem(orig)) return;   // a removed custom line gives nothing back: it never took any stock
+     const product = findProduct(orig.productId, d);
+     if (product) bump(restore, product.id, lineStockTaken(orig));
+   });
+@@ -2841,15 +2950,15 @@ function planInvoiceEdit(d, invoiceId, edit) {
+   items.forEach((item, n) => {
+     const orig = origOf[n];
+     if (orig) {
+-      if (item.qty === orig.qty && item.unitPrice === orig.unitPrice) return;
+-      lineLog.push({ name: invoiceItemLabel(orig), unit: orig.sellingUnit, qtyBefore: orig.qty, qtyAfter: item.qty,
++      if (item.qty === orig.qty && item.unitPrice === orig.unitPrice && !(isCustomItem(item) && (item.name !== orig.name || item.unit !== orig.unit))) return;
++      lineLog.push({ name: invoiceItemLabel(orig), unit: isCustomItem(orig) ? orig.unit : orig.sellingUnit, qtyBefore: orig.qty, qtyAfter: item.qty,
+         ...(item.unitPrice !== orig.unitPrice ? { priceBefore: orig.unitPrice, priceAfter: item.unitPrice } : {}) });
+     } else {
+-      lineLog.push({ name: invoiceItemLabel(item), unit: item.sellingUnit, qtyBefore: 0, qtyAfter: item.qty, priceAfter: item.unitPrice });
++      lineLog.push({ name: invoiceItemLabel(item), unit: isCustomItem(item) ? item.unit : item.sellingUnit, qtyBefore: 0, qtyAfter: item.qty, priceAfter: item.unitPrice });
+     }
+   });
+   inv.items.forEach((orig, index) => {
+-    if (!used.has(index)) lineLog.push({ name: invoiceItemLabel(orig), unit: orig.sellingUnit, qtyBefore: orig.qty, qtyAfter: 0, priceBefore: orig.unitPrice });
++    if (!used.has(index)) lineLog.push({ name: invoiceItemLabel(orig), unit: isCustomItem(orig) ? orig.unit : orig.sellingUnit, qtyBefore: orig.qty, qtyAfter: 0, priceBefore: orig.unitPrice });
+   });
+   if (tracked && (items.length !== inv.items.length || items.some((i, n) => i.lineId !== inv.items[n].lineId || i.qty !== inv.items[n].qty))) return { error: t("edit.trackedLines") };
+ 
+@@ -3058,6 +3167,7 @@ function renderEditChrome() {
+   $("search").disabled = locked;
+   $("addQty").disabled = locked;
+   $("addUnit").disabled = locked;
++  $("addCustomItem").disabled = locked;
+ }
+ 
+ // The summary of the sale on screen while an invoice is edited: the corrected totals, what is already paid, what remains, the
+@@ -3490,6 +3600,7 @@ function unitOptions(selected, product) {
+ // "DA/m²", "DA/piece", "DA/box": what the unit price typed on a sale line is for: the unit the product is priced in,
+ // which is not always the unit it is sold in.
+ function linePriceUnit(item) {
++  if (isCustomItem(item)) return t("sell.priceUnit", { currency: state.settings.currency, unit: item.unit || "" });   // the unit as typed
+   const unit = unitLabel(item.priceUnit || item.sellingUnit, 1).toLowerCase();
+   return t("sell.priceUnit", { currency: state.settings.currency, unit });
+ }
+@@ -3497,6 +3608,7 @@ function linePriceUnit(item) {
+ // Shows the product's own price and unit from Stock under the price input: "Product price: 1,150 DA / m²".
+ // A price typed for this sale says so and shows the saved one. Old products without a price unit show nothing.
+ function priceNote(item) {
++  if (isCustomItem(item)) return "";   // there is no catalogue price to compare with
+   const p = findProduct(item.productId);
+   const priced = p ? Calc.getUnitPrice(p, item.sellingUnit) : null;
+   if (!priced || priced.error) return "";
+@@ -3513,6 +3625,7 @@ function priceNote(item) {
+ // Under the quantity: what the line is billed for when that is counted in another unit than the one sold, and how the
+ // two relate: "Billed: 9 m² · 1 Box = 1.22 m²". Nothing when the price is for the unit sold.
+ function qtyNote(item) {
++  if (isCustomItem(item)) return "";   // a custom line is billed for what it says: no conversion
+   const unit = item.priceUnit || item.sellingUnit;
+   if (!Calc.isUnit(unit) || unit === item.sellingUnit || item.priceQty == null) return "";
+   const p = item.fromInvoice ? item.orig : findProduct(item.productId);   // a saved line converts with what it was sold with
+@@ -3563,18 +3676,42 @@ function collectLaterText(item) {
+   return t("sell.collectLater", { n: qtyText(Calc.cleanNumber(Math.max(0, item.qty - deliverNowQty(item))), item.sellingUnit) });
+ }
+ 
++// One row of the current sale for a custom item. It has the same cells and hooks as a product row (quantity, price, line total, remove)
++// so the live refresh treats it alike, but it shows no stock, no unit list and no "deliver later" box: it is not in the inventory.
++function customSaleRowHtml(item, label) {
++  const name = item.name;
++  const locked = state.invoiceEdit && state.invoiceEdit.tracked ? " disabled" : "";   // a delivered invoice keeps its lines and quantities
++  return `<tr data-id="${esc(item.lineId)}" data-type="custom">` +
++    `<td class="sale-product"${label("col.product")}><div class="sale-name">${esc(name)}</div>` +
++    (item.note ? `<div class="muted small custom-note">${esc(item.note)}</div>` : "") +
++    `<div class="muted small custom-tag">${esc(t("sell.customNoStock"))}</div>` +
++    `<div class="custom-row-actions"><button type="button" class="btn small" data-action="edit-custom" aria-label="${esc(t("sell.customEditAria", { name }))}">${esc(t("common.edit"))}</button></div>` +
++    `<div class="error small" data-row-error></div></td>` +
++    `<td class="num sale-qty"${label("col.qty")}><div class="qty-cell"><input class="qty-input" type="number" min="0" step="any" value="${item.qty}" data-field="qty"${locked} aria-label="${esc(t("sell.qtyAria", { name }))}">` +
++    `<input class="unit-input" type="text" list="customUnitList" maxlength="${Validation.CUSTOM_UNIT_MAX}" value="${esc(item.unit)}" data-field="cunit"${locked} autocomplete="off" aria-label="${esc(t("sell.unitAria", { name }))}"></div>` +
++    `<div class="muted small qty-note" data-qty-note></div></td>` +
++    `<td class="num sale-price"${label("col.unitPrice")}><div class="price-cell"><input class="price-input" type="number" min="0" step="any" value="${item.unitPrice}" data-field="price" aria-label="${esc(t("sell.priceAria", { name, unit: linePriceUnit(item) }))}">` +
++    `<span class="price-unit" data-price-unit>${esc(linePriceUnit(item))}</span></div>` +
++    `<div class="muted small price-note" data-price-note></div></td>` +
++    `<td class="num sale-total"${label("col.total")} data-line-total>${esc(money(Calc.calculateLineAmount(item)))}</td>` +
++    `<td class="num sale-remove"><button type="button" class="btn small danger" data-action="remove"${locked} aria-label="${esc(t("sell.removeAria", { name }))}">${esc(t("common.remove"))}</button></td>` +
++    `</tr>`;
++}
++
+ function renderSale() {
+   return keepFocus(renderSaleNow);
+ }
+ 
+ function renderSaleNow() {
+   const body = $("saleBody");
++  if (state.sale.items.some(isCustomItem)) renderCustomUnitList();   // the units offered while a custom line's unit is typed
+   if (state.sale.items.length === 0) {
+     body.innerHTML = `<tr class="empty-row"><td colspan="5">${esc(t("sell.empty"))}</td></tr>`;
+   } else {
+     // Each cell carries its column title (data-label) so a narrow screen can show the row as a stack (see .sale-table).
+     const label = (key) => ` data-label="${esc(t(key))}"`;
+     body.innerHTML = state.sale.items.map((item) => {
++      if (isCustomItem(item)) return customSaleRowHtml(item, label);
+       const p = findProduct(item.productId);
+       // A line of the invoice being edited keeps the name it was saved with (as the invoice prints it).
+       const name = item.orig ? invoiceItemLabel(item.orig) : p ? productLabel(p) : t("sell.deletedProduct");
+@@ -3686,6 +3823,11 @@ function invoiceParts(inv) {
+   const delivery = Validation.deliveryDetail(inv);
+   const rows = inv.items.length
+     ? inv.items.map((i, index) => {
++        // A custom line prints what it says: the name (and note), the quantity with its unit as typed, the unit price and the total.
++        if (isCustomItem(i)) {
++          const total = i.total != null ? i.total : Calc.calculateLineTotal(i.qty, i.unitPrice);
++          return `<tr><td>${esc(invoiceItemLabel(i))}${invoiceItemTypeHtml(i)}</td><td class="num">${num(i.qty)}${i.unit ? ` ${esc(i.unit)}` : ""}</td><td class="num">${amt(i.unitPrice)}${i.unit ? ` <span class="inv-unit">/ ${esc(i.unit)}</span>` : ""}</td><td class="num">${amt(total)}</td></tr>`;
++        }
+         const shown = invoiceLinePrice(i);
+         const inPriceUnit = shown.qtyInPriceUnit == null ? "" : `<div class="inv-sub">${num(shown.qtyInPriceUnit)} ${esc(unitLabel(shown.unit, shown.qtyInPriceUnit))}</div>`;
+         const left = delivery.tracked ? delivery.lines[index] : null;
+@@ -4067,7 +4209,7 @@ function renderDeliveryBox() {
+     });
+   }
+   deliveryBoxInvoiceId = inv.id;
+-  $("delBody").innerHTML = detail.lines.map((l) => {
++  $("delBody").innerHTML = detail.lines.filter((l) => !isCustomItem(l.item)).map((l) => {   // custom lines are never collected later
+     const unit = l.item.sellingUnit;
+     const name = invoiceItemLabel(l.item);
+     const whole = Calc.isWholeUnit(unit);
+@@ -5291,6 +5433,81 @@ function confirmDebtDialog() {
+   closeDebtDialog();
+ }
+ 
++/* ---------- The custom item dialog ----------
++   "+ Custom Item" opens one dialog to add (or edit) a line that is not a Stock product. Nothing is saved from here: the line joins the
++   sale on screen (see addCustomToSale) and is saved with the invoice like any other line. */
++
++let customDialogReturnFocus = null;
++let customDialogLine = null;   // the lineId being edited, or null when a new custom item is added
++
++// The units offered while typing (the unit itself is free text: anything can be typed).
++function renderCustomUnitList() {
++  const units = [t("unit.box"), t("unit.m2"), t("unit.piece"), t("custom.unitBag"), t("unit.kg"), t("unit.m"), t("custom.unitLiter")];
++  $("customUnitList").innerHTML = units.map((u) => `<option value="${esc(u)}"></option>`).join("");
++}
++
++// The total shown in the dialog: quantity x unit price, worked out the way the line will be (nothing when it can not be yet).
++function updateCustomTotal() {
++  const qtyText = $("customQty").value.trim();
++  const priceText = $("customPrice").value.trim();
++  const qty = Number(qtyText);
++  const price = Number(priceText);
++  const ready = qtyText !== "" && priceText !== "" && Number.isFinite(qty) && qty > 0 && Number.isFinite(price) && price >= 0;
++  $("customTotal").textContent = money(ready ? Calc.calculateLineTotal(Calc.cleanNumber(qty), Calc.roundMoney(price)) : 0);
++}
++
++function openCustomDialog(lineId) {
++  const line = lineId ? findSaleItem(lineId) : null;
++  if (lineId && !(line && isCustomItem(line))) return false;
++  if (!line && state.invoiceEdit && state.invoiceEdit.tracked) { showError("addError", t("edit.trackedLines")); return false; }
++  customDialogLine = line ? line.lineId : null;
++  customDialogReturnFocus = typeof document.activeElement !== "undefined" ? document.activeElement : null;
++  $("customDialogTitle").textContent = t(line ? "custom.titleEdit" : "custom.title");
++  $("customConfirm").textContent = t(line ? "custom.save" : "custom.add");
++  $("customName").value = line ? line.name : "";
++  $("customNote").value = line && line.note ? line.note : "";
++  $("customQty").value = line ? String(line.qty) : "1";
++  $("customUnit").value = line ? line.unit : "";
++  $("customPrice").value = line ? String(line.unitPrice) : "";
++  $("customCurrency").textContent = state.settings.currency;
++  renderCustomUnitList();
++  showError("customError", "");
++  updateCustomTotal();
++  const dialog = $("customDialog");
++  if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
++  if ($("customName").focus) $("customName").focus();
++  return true;
++}
++
++function closeCustomDialog() {
++  const dialog = $("customDialog");
++  if (typeof dialog.close === "function") dialog.close(); else dialog.removeAttribute("open");
++  if (customDialogReturnFocus && typeof customDialogReturnFocus.focus === "function") customDialogReturnFocus.focus();
++  customDialogReturnFocus = null;
++  customDialogLine = null;
++  resumeBackup();
++}
++
++// Adds (or saves) the custom item typed in the dialog. The dialog stays open, with the problem written in it, when something is wrong.
++function submitCustomDialog() {
++  const raw = { name: $("customName").value, note: $("customNote").value, qty: $("customQty").value, unit: $("customUnit").value, unitPrice: $("customPrice").value };
++  const result = customDialogLine ? updateCustomLine(customDialogLine, raw) : addCustomToSale(raw);
++  if (result.error) {
++    showError("customError", result.error);
++    const field = { name: "customName", qty: "customQty", unit: "customUnit", price: "customPrice", note: "customNote" }[result.field];
++    if (field && $(field).focus) $(field).focus();
++    return result;
++  }
++  showError("customError", "");
++  closeCustomDialog();
++  showError("addError", "");
++  showError("saleError", "");
++  state.previewInvoice = null;
++  renderSale();
++  renderInvoice();
++  return result;
++}
++
+ /* ==========================================================================
+    NAVIGATION
+    ========================================================================== */
+@@ -5390,7 +5607,8 @@ function hasUnsavedWork() {
+    resumeBackup), and at the next start at the latest. */
+ function backupShouldWait() {
+   const debtDialog = $("debtDialog");
+-  return Boolean(state.saleDone) || Boolean(debtDialog && debtDialog.open) || hasUnsavedWork() || settingsTouched;
++  const customDialog = $("customDialog");
++  return Boolean(state.saleDone) || Boolean(debtDialog && debtDialog.open) || Boolean(customDialog && customDialog.open) || hasUnsavedWork() || settingsTouched;
+ }
+ 
+ function resumeBackup() {
+@@ -5561,6 +5779,7 @@ function bindEvents() {
+     const wasPartial = Boolean(findSaleItem(id) && findSaleItem(id).partial);
+     const result = field === "qty" ? updateSaleQuantity(id, input.value.trim())
+       : field === "deliver" ? updateSaleDeliverNow(id, input.value.trim())
++      : field === "cunit" ? updateCustomUnit(id, input.value)   // the unit of a custom line is free text
+       : updateSalePrice(id, input.value.trim());
+     if (result.clamped) input.value = field === "deliver" ? findSaleItem(id).deliverNow : findSaleItem(id).qty;
+     // A quantity brought back to the stock: tell the person they can sell it all and let the customer collect the rest later.
+@@ -5613,10 +5832,12 @@ function bindEvents() {
+     const row = input.closest("tr");
+     const item = findSaleItem(row.dataset.id);
+     if (!item) return;
+-    input.value = input.dataset.field === "qty" ? item.qty : input.dataset.field === "deliver" ? item.deliverNow : item.unitPrice;
++    input.value = input.dataset.field === "qty" ? item.qty : input.dataset.field === "deliver" ? item.deliverNow : input.dataset.field === "cunit" ? item.unit : item.unitPrice;
+     row.querySelector("[data-row-error]").textContent = "";
+   });
+   saleBody.addEventListener("click", (e) => {
++    const editCustom = e.target.closest("[data-action='edit-custom']");
++    if (editCustom) { openCustomDialog(editCustom.closest("tr").dataset.id); return; }
+     const btn = e.target.closest("[data-action='remove']");
+     if (!btn) return;
+     removeFromSale(btn.closest("tr").dataset.id);
+@@ -5705,6 +5926,13 @@ function bindEvents() {
+     const btn = e.target.closest("[data-debt-remove]");
+     if (btn) removeDebtFromSale(btn.dataset.debtRemove);
+   });
++  // Custom items: the button on the Sell page and its dialog (an item that is not in Stock, added to this invoice only).
++  $("addCustomItem").addEventListener("click", () => openCustomDialog());
++  $("customForm").addEventListener("submit", (e) => { e.preventDefault(); submitCustomDialog(); });
++  $("customCancel").addEventListener("click", closeCustomDialog);
++  $("customDialog").addEventListener("cancel", (e) => { e.preventDefault(); closeCustomDialog(); });
++  for (const id of ["customName", "customUnit", "customNote"]) $(id).addEventListener("input", () => showError("customError", ""));
++  for (const id of ["customQty", "customPrice"]) $(id).addEventListener("input", () => { showError("customError", ""); updateCustomTotal(); });
+   $("debtForm").addEventListener("submit", (e) => { e.preventDefault(); confirmDebtDialog(); });
+   $("debtDialogCancel").addEventListener("click", closeDebtDialog);
+   $("debtDialog").addEventListener("cancel", (e) => { e.preventDefault(); closeDebtDialog(); });
+@@ -6181,6 +6409,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
+     openDebtDialog, closeDebtDialog, confirmDebtDialog, collectDebtPicks, updateDebtDialogTotals, debtDialogRowsData,
+     saleDue, saleCarried, draftCarriedLines, carriedToNumbers,
+     setSalePartial, updateSaleDeliverNow, deliverNowQty, maxDeliverableNow, deliveryErrors,
++    isCustomItem, addCustomToSale, updateCustomLine, updateCustomUnit, customInvoiceLine, customQtyText, openCustomDialog, closeCustomDialog, submitCustomDialog, updateCustomTotal,
+     applyCollection, recordCollection, collectionHtml, renderDeliveryBox, qtyText,
+     viewInvoice, clearSale, draftInvoice, refreshAfterLoad, renderInvoices, renderInvoice, refreshLive,
+     getDebtUi: () => state.debtUi,
+diff --git a/java script/validation.js b/java script/validation.js
+index ed06316..77e2634 100644
+--- a/java script/validation.js	
++++ b/java script/validation.js	
+@@ -82,6 +82,65 @@
+   const round2 = Calc.roundMoney;
+   const toNumber = Calc.toNumber;
+ 
++  /* ---------- Invoice item types: inventory and custom ----------
++     A line of an invoice is one of two kinds:
++       "inventory"  a product of the Stock page. It carries a productId, is sold in one of the units of calc.js and takes stock out.
++                    A line without an itemType (every invoice made before custom items existed) is an inventory line.
++       "custom"     anything else the customer buys: broken tiles, a jacket, cement, an old tile that is no longer in the catalogue.
++                    It lives on the invoice ONLY. It is a snapshot of what was typed (name, optional note, quantity, a free-text unit
++                    and the unit price) and has no productId, no sellingUnit and no stock: nothing that handles stock (selling,
++                    editing, returning, deleting, collecting, restoring a backup) ever reads or writes inventory for it.
++     isCustomItem is the one test every part of the app uses to tell them apart. */
++
++  const ITEM_TYPES = ["inventory", "custom"];
++  const CUSTOM_NAME_MAX = 120;
++  const CUSTOM_UNIT_MAX = 24;
++  const CUSTOM_NOTE_MAX = 300;
++  const isCustomItem = (item) => isObj(item) && item.itemType === "custom";
++
++  // Whitespace made single, ends trimmed: "  Broken   tiles " -> "Broken tiles".
++  const cleanCustomText = (value) => String(value == null ? "" : value).replace(/\s+/g, " ").trim();
++
++  // What is wrong with a SAVED custom line ("" when it is fine): the rules the database and a restored backup apply.
++  function customItemProblem(item) {
++    if (!isObj(item) || item.itemType !== "custom") return "";
++    if (!isStr(item.name) || !item.name.trim() || item.name.length > CUSTOM_NAME_MAX) return t("problem.badCustomItem");
++    if (!isStr(item.unit) || !item.unit.trim() || item.unit.length > CUSTOM_UNIT_MAX) return t("problem.badCustomItem");
++    if (item.note !== undefined && (!isStr(item.note) || item.note.length > CUSTOM_NOTE_MAX)) return t("problem.badCustomItem");
++    if (item.total !== undefined && !(isNum(item.total) && item.total >= 0)) return t("problem.badCustomItem");
++    // Never tied to the inventory: no product, no stock unit, nothing taken out of stock.
++    if (item.productId !== undefined || item.sellingUnit !== undefined || item.stockUnit !== undefined) return t("problem.badCustomItem");
++    if (item.stockDeducted !== undefined && item.stockDeducted !== 0) return t("problem.badCustomItem");
++    return "";
++  }
++
++  // The custom item a person typed: { name, note, qty, unit, unitPrice } as typed (text or numbers).
++  // Returns { item } (the line as an invoice keeps it, with its total) or { field, error } for the first thing that is wrong.
++  function readCustomItemInput(raw) {
++    const input = raw || {};
++    const fail = (field, error) => ({ field, error });
++    const name = cleanCustomText(input.name);
++    if (!name) return fail("name", t("custom.nameRequired"));
++    if (name.length > CUSTOM_NAME_MAX) return fail("name", t("custom.nameTooLong", { max: CUSTOM_NAME_MAX }));
++    const qtyText = String(input.qty == null ? "" : input.qty).trim();
++    const qty = Number(qtyText);
++    if (qtyText === "" || !Number.isFinite(qty) || qty <= 0) return fail("qty", t("custom.qtyPositive"));
++    const unit = cleanCustomText(input.unit);
++    if (!unit) return fail("unit", t("custom.unitRequired"));
++    if (unit.length > CUSTOM_UNIT_MAX) return fail("unit", t("custom.unitTooLong", { max: CUSTOM_UNIT_MAX }));
++    const priceText = String(input.unitPrice == null ? "" : input.unitPrice).trim();
++    const price = Number(priceText);
++    if (priceText === "" || !Number.isFinite(price)) return fail("price", t("custom.priceRequired"));
++    if (price < 0) return fail("price", t("custom.priceNegative"));
++    const note = cleanCustomText(input.note);
++    if (note.length > CUSTOM_NOTE_MAX) return fail("note", t("custom.noteTooLong", { max: CUSTOM_NOTE_MAX }));
++    const cleanQty = Calc.cleanNumber(qty);
++    const unitPrice = Calc.roundMoney(price);
++    const total = Calc.calculateLineTotal(cleanQty, unitPrice);
++    if (!Number.isFinite(total)) return fail("price", t("custom.priceRequired"));
++    return { item: { itemType: "custom", name, ...(note ? { note } : {}), qty: cleanQty, unit, unitPrice, total } };
++  }
++
+   function uid() {
+     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+   }
+@@ -974,7 +1033,8 @@
+     }
+     const lines = items.map((item, index) => {
+       const qty = toNumber(item && item.qty);
+-      const delivered = tracked ? Math.min(qty, handed.get(item && item.lineId) || 0) : qty;
++      // A custom line has no stock to hand over later: it always leaves with the sale, so it is never left to collect.
++      const delivered = tracked && !isCustomItem(item) ? Math.min(qty, handed.get(item && item.lineId) || 0) : qty;
+       return { lineId: item && item.lineId ? item.lineId : null, index, item, qty, delivered, remaining: Math.max(0, Calc.cleanNumber(qty - delivered)) };
+     });
+     const toCollect = lines.filter((l) => l.remaining > DELIVERY_EPSILON);
+@@ -999,6 +1059,7 @@
+     if (!Array.isArray(inv.deliveries)) return t("problem.badDeliveries");
+     const byLine = new Map();
+     for (const item of inv.items) {
++      if (isCustomItem(item)) continue;   // never delivered in steps: no stock, no line in the delivery log
+       if (!isStr(item.lineId) || !item.lineId || byLine.has(item.lineId)) return t("problem.badDeliveries");
+       byLine.set(item.lineId, item);
+     }
+@@ -1082,6 +1143,12 @@
+     if (!isDate(inv.date)) return t("problem.badDate");
+     if (!Array.isArray(inv.items)) return t("problem.noItems");
+     if (inv.items.some((i) => !isObj(i) || !isNum(i.qty) || i.qty <= 0 || !isNum(i.unitPrice) || i.unitPrice < 0 || (i.sellingUnit !== undefined && !SELLING_UNITS.includes(i.sellingUnit)))) return t("problem.badItem");
++    // An item type, when there is one, is inventory or custom (older invoices have none: they are inventory lines).
++    if (inv.items.some((i) => i.itemType !== undefined && !ITEM_TYPES.includes(i.itemType))) return t("problem.badItem");
++    for (const item of inv.items) {
++      const customProblem = customItemProblem(item);
++      if (customProblem) return customProblem;
++    }
+     for (const key of Object.keys(AMOUNT_PROBLEMS)) {
+       if (!isNum(inv[key]) || inv[key] < 0) return t(AMOUNT_PROBLEMS[key]);
+     }
+@@ -1170,7 +1237,7 @@
+       }
+     }
+     if (Array.isArray(inv.items) && isNum(inv.subtotal)) {
+-      const itemsTotal = round2(inv.items.reduce((sum, i) => sum + toNumber(i && i.qty) * toNumber(i && i.unitPrice), 0));
++      const itemsTotal = round2(inv.items.reduce((sum, i) => sum + (isCustomItem(i) ? Calc.calculateLineTotal(i.qty, i.unitPrice) : toNumber(i && i.qty) * toNumber(i && i.unitPrice)), 0));
+       if (Math.abs(itemsTotal - inv.subtotal) > MONEY_TOLERANCE) {
+         warnings.push(t("warn.subtotalMismatch", { number }));
+       }
+@@ -1738,6 +1805,7 @@
+   globalThis.Validation = {
+     APP_NAME, CURRENCY, CURRENCY_UNITS, DEFAULT_CURRENCY_UNIT, CENTIMES_PER_DINAR, CENTIMES_LABEL, DATA_VERSION, BACKUP_FORMAT_VERSION, MIRROR_KEY, LEGACY_KEYS, DEFAULT_BACKUP_DAYS,
+     DEFAULT_SETTINGS, SELLING_UNITS, PRODUCT_TYPES, normalizeProductType, INVOICE_STATUSES,
++    ITEM_TYPES, CUSTOM_NAME_MAX, CUSTOM_UNIT_MAX, CUSTOM_NOTE_MAX, isCustomItem, customItemProblem, readCustomItemInput,
+     MAX_PRODUCT_TYPES, MAX_PRODUCT_TYPE_LENGTH, isBuiltInProductType, productTypeKey, cleanProductTypeName, productTypeLabel, resolveProductType,
+     cleanProductTypes, productTypesOf, addProductType, removeProductType, countProductsOfType, productTypeAllowed, DERIVED_INVOICE_FIELDS, WALK_IN,
+     isObj, isStr, isNum, isDate, round2, toNumber, uid, sameValue,
+diff --git a/tests/custom-items.test.js b/tests/custom-items.test.js
+new file mode 100644
+index 0000000..a4f5eaa
+--- /dev/null
++++ b/tests/custom-items.test.js
+@@ -0,0 +1,782 @@
++"use strict";
++
++// Custom invoice items: lines of an invoice that are NOT Stock products (broken tiles, old ceramic, cement, a jacket...).
++//   A  the rules for what is typed (validation.js): required fields, decimals, the free unit, the total
++//   B  an invoice of custom items only, and of both kinds: totals, discounts, payment states, the stock never moves
++//   C  the Sell page: quantity, unit and price of a custom line, remove, the dialog
++//   D  editing a saved invoice and returning goods: custom lines stay custom lines, nothing moves in the inventory
++//   E  deleting an invoice (the rollback) that has custom lines
++//   F  an invoice sold in several deliveries that also has custom lines
++//   G  saving: reload, backup export / import, invoices made before custom items existed, what the database refuses
++//   H  what is printed and shown, and what the Dashboard counts
++// Everything runs through the application's own functions against a disposable in-memory IndexedDB (no real data).
++
++const test = require("node:test");
++const assert = require("node:assert/strict");
++const { sampleInvoice } = require("./helpers/modules");
++const { loadApp } = require("./helpers/app");
++const {
++  V, plain, boot, addTile, sellLines, stockOf, invoiceById, snapshot, openEdit, typeQty, typePrice, removeLine,
++} = require("./helpers/edit");
++
++const A = globalThis.Analytics;
++
++// The three example lines of the feature: 900 + 4,000 + 1,800 = 6,700.
++const BROKEN = { name: "Broken Tiles", qty: "3", unit: "Box", unitPrice: "300" };
++const JACKET = { name: "Jacket", qty: "1", unit: "Piece", unitPrice: "4000" };
++const OLD = { name: "Old Ceramic", qty: "12", unit: "m²", unitPrice: "150" };
++const THREE = [BROKEN, JACKET, OLD];
++
++const addCustom = (api, line) => {
++  const r = api.addCustomToSale(line);
++  assert.equal(r.error, undefined, r.error);
++  return r.item;
++};
++
++// Puts custom lines (and Stock lines) on the sale and completes it. Returns the saved invoice.
++async function sell(ctx, { custom = [], stock = [], name = "Alex", paid = "", discount } = {}) {
++  const { api } = ctx;
++  for (const l of stock) assert.equal(api.addToSale(l.product.id, l.qty, l.unit || "box").ok, true);
++  for (const c of custom) addCustom(api, c);
++  const sale = api.getSale();
++  sale.customer.name = name;
++  sale.paidValue = paid;
++  if (discount) { sale.discountType = discount.type; sale.discountValue = discount.value; }
++  await api.completeSale();
++  assert.equal(ctx.app.errorText("saleError"), "", ctx.app.errorText("saleError"));
++  const all = api.getInvoices();
++  return all[all.length - 1];
++}
++
++// Data made inside the application's own context compares by value: both sides are turned into plain data first.
++const same = (actual, expected, message) => assert.deepEqual(actual === undefined ? actual : plain(actual), expected === undefined ? expected : plain(expected), message);
++
++const productsOf = async (ctx) => plain((await ctx.api.db.loadAll()).products);
++const logOf = (ctx) => plain(ctx.api.getState().settings.rollbackLog || []);
++
++/* ==========================================================================
++   A. What is typed
++   ========================================================================== */
++
++test("A: the three examples of the feature: name, quantity, unit and unit price give the total", () => {
++  const read = (line) => V.readCustomItemInput(line);
++  same(plain(read(BROKEN).item), { itemType: "custom", name: "Broken Tiles", qty: 3, unit: "Box", unitPrice: 300, total: 900 });
++  same(plain(read(JACKET).item), { itemType: "custom", name: "Jacket", qty: 1, unit: "Piece", unitPrice: 4000, total: 4000 });
++  same(plain(read(OLD).item), { itemType: "custom", name: "Old Ceramic", qty: 12, unit: "m²", unitPrice: 150, total: 1800 });
++});
++
++test("A: decimal quantities, free units, an optional note, a price of 0, and text cleaned of extra spaces", () => {
++  const ok = (line) => { const r = V.readCustomItemInput(line); assert.equal(r.error, undefined, r.error); return r.item; };
++  assert.equal(ok({ ...BROKEN, qty: "2.5", unitPrice: "120" }).total, 300);
++  assert.equal(ok({ ...BROKEN, qty: "0.333", unitPrice: "100" }).total, 33.3);
++  assert.equal(ok({ ...BROKEN, qty: "2,5".replace(",", ".") }).qty, 2.5);
++  assert.equal(ok({ ...BROKEN, unit: "Sac 50 kg" }).unit, "Sac 50 kg", "any unit can be typed");
++  assert.equal(ok({ ...BROKEN, unitPrice: "0" }).total, 0, "a free item is allowed");
++  assert.equal(ok({ ...BROKEN, unitPrice: "10.456" }).unitPrice, 10.46, "money has 2 decimals everywhere in the app");
++  const noted = ok({ ...BROKEN, name: "  Grout   white ", unit: "  Bag ", note: "  2 kg   bags " });
++  assert.equal(noted.name, "Grout white");
++  assert.equal(noted.unit, "Bag");
++  assert.equal(noted.note, "2 kg bags");
++  assert.equal("note" in ok(BROKEN), false, "no note, no field");
++});
++
++test("A: every required field is refused when it is missing or wrong, naming the field", () => {
++  const bad = (change, field) => {
++    const r = V.readCustomItemInput({ ...BROKEN, ...change });
++    assert.equal(r.item, undefined);
++    assert.equal(r.field, field);
++    assert.ok(r.error, "a message");
++  };
++  bad({ name: "" }, "name");
++  bad({ name: "   " }, "name");
++  bad({ name: "x".repeat(V.CUSTOM_NAME_MAX + 1) }, "name");
++  bad({ qty: "" }, "qty");
++  bad({ qty: "0" }, "qty");
++  bad({ qty: "-2" }, "qty");
++  bad({ qty: "abc" }, "qty");
++  bad({ unit: "" }, "unit");
++  bad({ unit: "u".repeat(V.CUSTOM_UNIT_MAX + 1) }, "unit");
++  bad({ unitPrice: "" }, "price");
++  bad({ unitPrice: "-1" }, "price");
++  bad({ unitPrice: "cheap" }, "price");
++  bad({ note: "n".repeat(V.CUSTOM_NOTE_MAX + 1) }, "note");
++});
++
++/* ==========================================================================
++   B. An invoice of custom items, and of both kinds
++   ========================================================================== */
++
++test("B: an invoice with ONLY custom items: saved as custom lines, totals right, the inventory is not touched at all", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 40 });
++  const before = await productsOf(ctx);
++  const inv = await sell(ctx, { custom: THREE, paid: "6700" });
++
++  assert.equal(inv.items.length, 3);
++  same(inv.items.map((i) => i.itemType), ["custom", "custom", "custom"]);
++  same(inv.items.map((i) => [i.name, i.qty, i.unit, i.unitPrice, i.total]), [
++    ["Broken Tiles", 3, "Box", 300, 900], ["Jacket", 1, "Piece", 4000, 4000], ["Old Ceramic", 12, "m²", 150, 1800],
++  ]);
++  for (const item of inv.items) {
++    for (const key of ["productId", "sellingUnit", "stockUnit", "stockDeducted", "lineId"]) assert.equal(key in item, false, `a custom line has no ${key}`);
++  }
++  assert.equal(inv.subtotal, 6700);
++  assert.equal(inv.total, 6700);
++  assert.equal(V.invoiceProblem(inv), "");
++  assert.equal(ctx.api.paymentInfo(inv).cls, "paid");
++  same(await productsOf(ctx), before, "every product, stock included, is exactly as it was");
++  assert.equal(stockOf(ctx.api, tile.id), 40);
++  assert.equal((await ctx.api.db.loadAll()).products.length, 1, "no product was created");
++  assert.equal(ctx.api.getInvoices().length, 1);
++});
++
++test("B: custom items next to Stock products: only the product takes stock, and it behaves exactly as before", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { stock: [{ product: tile, qty: "2" }], custom: THREE, paid: "10700" });
++
++  assert.equal(inv.items.length, 4);
++  const [product, ...custom] = inv.items;
++  assert.equal(product.itemType, "inventory");
++  assert.equal(product.productId, tile.id);
++  assert.equal(product.qty, 2);
++  assert.equal(product.unitPrice, 2000);
++  assert.equal(product.total, 4000);
++  assert.equal(product.stockDeducted, 2);
++  same(custom.map((i) => i.itemType), ["custom", "custom", "custom"]);
++  assert.equal(inv.subtotal, 10700);
++  assert.equal(stockOf(ctx.api, tile.id), 18, "2 boxes of the tile, and nothing for the custom lines");
++  assert.equal(V.invoiceProblem(inv), "");
++});
++
++test("B: the same product, inventory only: nothing changes but the explicit item type", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { stock: [{ product: tile, qty: "3" }], paid: "6000" });
++  assert.equal(inv.items.length, 1);
++  assert.equal(inv.items[0].itemType, "inventory");
++  assert.equal(inv.items[0].productId, tile.id);
++  assert.equal(inv.items[0].sellingUnit, "box");
++  assert.equal(inv.total, 6000);
++  assert.equal(stockOf(ctx.api, tile.id), 17);
++});
++
++test("B: decimal quantities and different units on one invoice", async () => {
++  const ctx = await boot();
++  const inv = await sell(ctx, {
++    custom: [
++      { name: "Cement", qty: "2.5", unit: "Bag", unitPrice: "900" },
++      { name: "Grout", qty: "0.75", unit: "kg", unitPrice: "400" },
++      { name: "Skirting", qty: "7.2", unit: "m", unitPrice: "250" },
++    ],
++  });
++  same(inv.items.map((i) => i.total), [2250, 300, 1800]);
++  assert.equal(inv.subtotal, 4350);
++  same(inv.items.map((i) => i.unit), ["Bag", "kg", "m"], "the unit stays as it was typed");
++  assert.equal(ctx.api.paymentInfo(inv).cls, "unpaid");
++});
++
++test("B: invoice discounts (amount and percent) apply to custom lines, and every payment state and the balance work", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++
++  const percent = await sell(ctx, { custom: THREE, discount: { type: "percent", value: "10" }, paid: "2000" });
++  assert.equal(percent.subtotal, 6700);
++  assert.equal(percent.discount, 670);
++  assert.equal(percent.total, 6030);
++  let info = ctx.api.paymentInfo(percent);
++  assert.equal(info.cls, "partial");
++  assert.equal(info.remaining, 4030);
++
++  const amount = await sell(ctx, { stock: [{ product: tile, qty: "1" }], custom: [BROKEN], discount: { type: "amount", value: "500" }, paid: "" });
++  assert.equal(amount.subtotal, 2900);
++  assert.equal(amount.total, 2400);
++  info = ctx.api.paymentInfo(amount);
++  assert.equal(info.cls, "unpaid");
++  assert.equal(info.remaining, 2400);
++
++  assert.equal((await ctx.api.addPayment(amount.id, "2400")).error, undefined);
++  assert.equal(ctx.api.paymentInfo(invoiceById(ctx.api, amount.id)).cls, "paid");
++  assert.equal(ctx.api.paymentInfo(invoiceById(ctx.api, amount.id)).remaining, 0);
++  assert.equal(stockOf(ctx.api, tile.id), 19, "one box, nothing for the custom line");
++});
++
++test("B: a sale with a custom line that is not valid is refused and nothing is saved", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const line = addCustom(ctx.api, BROKEN);
++  line.qty = 0;   // what a stale screen could hold
++  await ctx.api.completeSale();
++  assert.match(ctx.app.errorText("saleError"), /greater than 0/);
++  assert.equal(ctx.api.getInvoices().length, 0);
++  assert.equal(stockOf(ctx.api, tile.id), 20);
++});
++
++/* ==========================================================================
++   C. The Sell page
++   ========================================================================== */
++
++test("C: quantity, unit and price of a custom line change the line and the totals; wrong values are refused", async () => {
++  const ctx = await boot();
++  const line = addCustom(ctx.api, BROKEN);
++  const { api } = ctx;
++  const totals = () => api.calculateTotals(api.getSale());
++  assert.equal(totals().subtotal, 900);
++
++  same(plain(api.updateSaleQuantity(line.lineId, "2.5")), {});
++  assert.equal(totals().subtotal, 750);
++  assert.match(api.updateSaleQuantity(line.lineId, "0").error, /greater than 0/);
++  assert.match(api.updateSaleQuantity(line.lineId, "").error, /greater than 0/);
++  assert.equal(line.qty, 2.5, "a refused value leaves the line as it was");
++
++  same(plain(api.updateSalePrice(line.lineId, "400")), {});
++  assert.equal(totals().subtotal, 1000);
++  assert.equal("priceOverridden" in line, false, "a custom line has no catalogue price to differ from");
++  assert.ok(api.updateSalePrice(line.lineId, "-5").error);
++  assert.ok(api.updateSalePrice(line.lineId, "").error);
++
++  same(plain(api.updateCustomUnit(line.lineId, "  Pallet ")), {});
++  assert.equal(line.unit, "Pallet");
++  assert.ok(api.updateCustomUnit(line.lineId, "   ").error);
++  assert.equal(line.unit, "Pallet");
++
++  api.removeFromSale(line.lineId);
++  assert.equal(api.getSale().items.length, 0);
++  assert.equal(totals().subtotal, 0);
++});
++
++test("C: the sale table shows a custom line without stock, a unit box and an Edit button; syncing with the products keeps it", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 4 });
++  addCustom(ctx.api, { ...BROKEN, note: "white, 60x60" });
++  assert.equal(ctx.api.addToSale(tile.id, "1", "box").ok, true);
++  ctx.api.renderSale();
++  const html = ctx.app.field("saleBody").innerHTML;
++  assert.match(html, /data-type="custom"/);
++  assert.match(html, /Broken Tiles/);
++  assert.match(html, /white, 60x60/);
++  assert.match(html, /data-field="cunit"/);
++  assert.match(html, /data-action="edit-custom"/);
++  assert.match(html, /Custom item · not in stock/);
++  assert.equal((html.match(/Available:/g) || []).length, 1, "only the real product shows its stock");
++
++  const notes = ctx.api.syncSaleWithProducts();
++  same(notes, []);
++  assert.equal(ctx.api.getSale().items.length, 2);
++  await ctx.api.deleteProduct(tile.id);
++  ctx.api.syncSaleWithProducts();
++  same(ctx.api.getSale().items.map((i) => i.itemType), ["custom"], "a deleted product leaves the sale, a custom line stays");
++});
++
++test("C: the dialog adds a custom item, keeps itself open with a message when something is wrong, and edits an existing line", async () => {
++  const ctx = await boot();
++  const { api, app } = ctx;
++  const set = (values) => {
++    app.field("customName").value = values.name;
++    app.field("customQty").value = values.qty;
++    app.field("customUnit").value = values.unit;
++    app.field("customPrice").value = values.unitPrice;
++    app.field("customNote").value = values.note || "";
++  };
++
++  assert.equal(api.openCustomDialog(), true);
++  assert.equal(app.field("customDialogTitle").textContent, "Add a custom item");
++  assert.equal(app.field("customConfirm").textContent, "Add to sale");
++  assert.equal(app.field("customQty").value, "1");
++  assert.equal(app.field("customName").value, "");
++
++  // the total follows the quantity and the price
++  app.field("customQty").value = "3";
++  app.field("customPrice").value = "300";
++  api.updateCustomTotal();
++  assert.equal(app.field("customTotal").textContent, api.money(900));
++
++  set({ name: "", qty: "1", unit: "Box", unitPrice: "100" });
++  assert.equal(api.submitCustomDialog().field, "name");
++  assert.match(app.errorText("customError"), /product name/);
++  set({ name: "Cement", qty: "1", unit: "", unitPrice: "100" });
++  assert.equal(api.submitCustomDialog().field, "unit");
++  set({ name: "Cement", qty: "1", unit: "Bag", unitPrice: "" });
++  assert.equal(api.submitCustomDialog().field, "price");
++  assert.equal(api.getSale().items.length, 0, "nothing was added by a refused form");
++
++  set({ name: "Cement", qty: "2.5", unit: "Bag", unitPrice: "900", note: "grey" });
++  assert.equal(api.submitCustomDialog().error, undefined);
++  assert.equal(app.errorText("customError"), "");
++  const [line] = api.getSale().items;
++  same([line.name, line.qty, line.unit, line.unitPrice, line.note], ["Cement", 2.5, "Bag", 900, "grey"]);
++
++  // edit the same line
++  assert.equal(api.openCustomDialog(line.lineId), true);
++  assert.equal(app.field("customDialogTitle").textContent, "Edit custom item");
++  assert.equal(app.field("customName").value, "Cement");
++  assert.equal(app.field("customQty").value, "2.5");
++  assert.equal(app.field("customUnit").value, "Bag");
++  assert.equal(app.field("customPrice").value, "900");
++  assert.equal(app.field("customNote").value, "grey");
++  set({ name: "Cement 50kg", qty: "3", unit: "Sac", unitPrice: "950" });
++  assert.equal(api.submitCustomDialog().error, undefined);
++  assert.equal(api.getSale().items.length, 1, "edited, not added again");
++  same([line.name, line.qty, line.unit, line.unitPrice], ["Cement 50kg", 3, "Sac", 950]);
++  assert.equal("note" in line, false, "the note was cleared");
++
++  assert.equal(api.openCustomDialog("no-such-line"), false);
++});
++
++/* ==========================================================================
++   D. Editing a saved invoice and returning goods
++   ========================================================================== */
++
++test("D: editing a saved invoice keeps custom lines custom: name, quantity, unit and price can change, the inventory never does", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { stock: [{ product: tile, qty: "2" }], custom: [BROKEN, JACKET], paid: "1000" });
++  const before = await productsOf(ctx);
++  const original = plain(inv);
++
++  const sale = openEdit(ctx, inv);
++  assert.equal(sale.items.length, 3);
++  const [, broken] = sale.items;
++  assert.equal(broken.itemType, "custom");
++  assert.equal(broken.productId, undefined);
++  assert.equal(ctx.api.editDirty(), false);
++
++  assert.equal(ctx.api.updateCustomLine(broken.lineId, { name: "Broken tiles (grey)", qty: "4", unit: "Boxes", unitPrice: "250", note: "grey" }).error, undefined);
++  assert.equal(typeQty(ctx.api, 2, "2").error, undefined);
++  assert.equal(typePrice(ctx.api, 2, "3500").error, undefined);
++  assert.equal(ctx.api.editDirty(), true);
++  assert.equal(ctx.api.editPlan().error, undefined);
++  await ctx.api.saveInvoiceEdit();
++
++  const saved = invoiceById(ctx.api, inv.id);
++  assert.equal(ctx.api.getInvoices().length, 1);
++  assert.equal(saved.invoiceNumber, original.invoiceNumber);
++  assert.equal(saved.date, original.date);
++  same(plain(saved.payments), original.payments, "payments are never edited");
++  same(plain(saved.items[1]), { itemType: "custom", name: "Broken tiles (grey)", note: "grey", qty: 4, unit: "Boxes", unitPrice: 250, total: 1000 });
++  same(plain(saved.items[2]), { itemType: "custom", name: "Jacket", qty: 2, unit: "Piece", unitPrice: 3500, total: 7000 });
++  same(plain(saved.items[0]), original.items[0], "the product line is as it was");
++  assert.equal(saved.subtotal, 4000 + 1000 + 7000);
++  assert.equal(saved.total, 12000);
++  assert.equal(V.invoiceProblem(saved), "");
++  same(await productsOf(ctx), before, "no product changed, stock included");
++  assert.equal(saved.edits.length, 1);
++  assert.equal(saved.edits[0].totalBefore, original.total);
++  assert.equal(saved.edits[0].totalAfter, 12000);
++  assert.equal(saved.edits[0].stock, undefined, "the edit moved no stock");
++});
++
++test("D: adding a custom item to a saved invoice, and removing one from it, never moves stock", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { stock: [{ product: tile, qty: "2" }], custom: [BROKEN], paid: "" });
++  const before = await productsOf(ctx);
++
++  openEdit(ctx, inv);
++  addCustom(ctx.api, OLD);
++  assert.equal(ctx.api.editPlan().error, undefined);
++  assert.equal(ctx.api.editPlan().stockChanges.size, 0);
++  await ctx.api.saveInvoiceEdit();
++  let saved = invoiceById(ctx.api, inv.id);
++  same(saved.items.map((i) => i.itemType), ["inventory", "custom", "custom"]);
++  assert.equal(saved.total, 4000 + 900 + 1800);
++  same(await productsOf(ctx), before);
++
++  openEdit(ctx, saved);
++  removeLine(ctx.api, 1);
++  assert.equal(ctx.api.editPlan().stockChanges.size, 0);
++  await ctx.api.saveInvoiceEdit();
++  saved = invoiceById(ctx.api, inv.id);
++  same(saved.items.map((i) => i.name === "Old Ceramic" || i.itemType), ["inventory", true]);
++  assert.equal(saved.total, 4000 + 1800);
++  same(await productsOf(ctx), before, "removing a custom line gave nothing back to stock");
++});
++
++test("D: a return: a paid invoice made cheaper by removing a custom line owes a refund, and stock stays put", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { stock: [{ product: tile, qty: "2" }], custom: [JACKET], paid: "8000" });
++  assert.equal(ctx.api.paymentInfo(inv).cls, "paid");
++  const before = await productsOf(ctx);
++
++  openEdit(ctx, inv);
++  removeLine(ctx.api, 1);   // the jacket comes back
++  const plan = ctx.api.editPlan();
++  assert.equal(plan.error, undefined);
++  assert.equal(plan.refundDue, 4000);
++  assert.equal(plan.stockChanges.size, 0, "a returned custom item gives nothing back to stock");
++  await ctx.api.saveInvoiceEdit();
++  assert.equal((await ctx.api.recordRefund(inv.id, "4000")).error, undefined);
++  const saved = invoiceById(ctx.api, inv.id);
++  assert.equal(saved.items.length, 1);
++  assert.equal(V.refundedTotal(saved), 4000);
++  same(await productsOf(ctx), before);
++});
++
++test("D: returning a Stock product from a mixed invoice gives back that stock only; the custom lines stay as they are", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { stock: [{ product: tile, qty: "5" }], custom: [BROKEN, OLD], paid: "" });
++  assert.equal(stockOf(ctx.api, tile.id), 15);
++
++  openEdit(ctx, inv);
++  assert.equal(typeQty(ctx.api, 0, 3).error, undefined);   // 2 boxes come back
++  await ctx.api.saveInvoiceEdit();
++  assert.equal(stockOf(ctx.api, tile.id), 17);
++  const saved = invoiceById(ctx.api, inv.id);
++  same(plain(saved.items.slice(1)), plain(inv.items.slice(1)), "the custom lines did not change");
++  assert.equal(saved.total, 3 * 2000 + 900 + 1800);
++});
++
++test("D: removing every line of an invoice that has only custom items deletes it, with nothing to restore", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { custom: THREE, paid: "2000" });
++  const before = await productsOf(ctx);
++
++  openEdit(ctx, inv);
++  while (ctx.api.getSale().items.length) removeLine(ctx.api, 0);
++  const plan = ctx.api.editPlan();
++  assert.equal(plan.deleted, true);
++  assert.equal(plan.stock.length, 0);
++  same(plan.notRestored, [], "a custom line is never reported as 'could not be restored to stock'");
++  ctx.app.answer(true);
++  await ctx.api.saveInvoiceEdit();
++
++  assert.equal(ctx.api.getInvoices().length, 0);
++  same(await productsOf(ctx), before);
++  assert.equal(stockOf(ctx.api, tile.id), 20);
++  const [entry] = logOf(ctx);
++  assert.equal(entry.reason, "edit");
++  assert.equal(entry.refund, 2000);
++  same(entry.stock, []);
++  assert.equal(entry.notRestored, undefined);
++  same(entry.items.map((i) => [i.name, i.qty, i.unit, i.custom]), [["Broken Tiles", 3, "Box", true], ["Jacket", 1, "Piece", true], ["Old Ceramic", 12, "m²", true]]);
++});
++
++test("D: a custom line can not be turned into a product or the other way round by an edit; a stale edit is refused", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { stock: [{ product: tile, qty: "1" }], custom: [BROKEN] });
++  const before = await productsOf(ctx);
++  const sale = openEdit(ctx, inv);
++  // a custom line that lost its type (what a damaged screen state would look like) is refused, never treated as a product
++  sale.items[1].itemType = "inventory";
++  assert.ok(ctx.api.editPlan().error);
++  sale.items[1].itemType = "custom";
++  assert.equal(ctx.api.editPlan().error, undefined);
++  // a custom line with a quantity the rules refuse
++  sale.items[1].qty = -1;
++  assert.match(ctx.api.editPlan().error, /greater than 0/);
++  ctx.api.cancelInvoiceEdit();
++  same(await productsOf(ctx), before);
++});
++
++/* ==========================================================================
++   E. Deleting an invoice
++   ========================================================================== */
++
++test("E: deleting a mixed invoice puts the product's stock back and reports nothing missing for the custom lines", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { stock: [{ product: tile, qty: "4" }], custom: THREE, paid: "5000" });
++  assert.equal(stockOf(ctx.api, tile.id), 16);
++  assert.equal(V.invoiceProblem(inv), "");
++
++  await ctx.api.deleteInvoice(inv.id);
++  assert.equal(ctx.api.getInvoices().length, 0);
++  assert.equal(stockOf(ctx.api, tile.id), 20);
++  const [entry] = logOf(ctx);
++  same(entry.stock.map((s) => [s.productId, s.qty]), [[tile.id, 4]]);
++  assert.equal(entry.notRestored, undefined);
++  assert.equal(entry.refund, 5000);
++  assert.equal((await ctx.api.db.loadAll()).products.length, 1);
++});
++
++test("E: deleting an invoice of custom items only changes no product and leaves no stock record", async () => {
++  const ctx = await boot();
++  await addTile(ctx, { stock: 7 });
++  const before = await productsOf(ctx);
++  const inv = await sell(ctx, { custom: THREE });
++  await ctx.api.deleteInvoice(inv.id);
++  assert.equal(ctx.api.getInvoices().length, 0);
++  same(await productsOf(ctx), before);
++  same(logOf(ctx)[0].stock, []);
++  assert.equal(logOf(ctx)[0].notRestored, undefined);
++});
++
++test("E: stockHeld never lists a custom line, even one carrying stray stock fields", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { stock: [{ product: tile, qty: "2" }], custom: [BROKEN] });
++  same([...ctx.api.stockHeld(inv).keys()], [tile.id]);
++  const stray = plain(inv);
++  stray.items[1].productId = tile.id;
++  stray.items[1].stockDeducted = 9;
++  same([...ctx.api.stockHeld(stray).entries()].map(([id, h]) => [id, h.qty]), [[tile.id, 2]], "a custom line is skipped by its type, whatever else it carries");
++});
++
++/* ==========================================================================
++   F. An invoice sold in several deliveries
++   ========================================================================== */
++
++test("F: custom lines on an invoice delivered in steps: never 'to collect', never collected, and the Stock line works as before", async () => {
++  const ctx = await boot();
++  const { api } = ctx;
++  const tile = await addTile(ctx, { stock: 10 });
++  assert.equal(api.addToSale(tile.id, "1", "box").ok, true);
++  const line = api.getSale().items[0];
++  same(plain(api.setSalePartial(line.lineId, true)), {});
++  assert.equal(api.updateSaleQuantity(line.lineId, "15").error, undefined);
++  addCustom(api, JACKET);
++  api.getSale().paidValue = "34000";
++  await api.completeSale();
++  assert.equal(ctx.app.errorText("saleError"), "", ctx.app.errorText("saleError"));
++  const inv = api.getInvoices()[0];
++
++  assert.equal(V.invoiceProblem(inv), "", "a delivery log next to a custom line is valid");
++  assert.equal(inv.items[1].itemType, "custom");
++  assert.equal(stockOf(api, tile.id), 0, "the 10 boxes there were left with the sale");
++  const detail = V.deliveryDetail(inv);
++  assert.equal(detail.tracked, true);
++  same(detail.lines.map((l) => [l.qty, l.delivered, l.remaining]), [[15, 10, 5], [1, 1, 0]]);
++  assert.equal(detail.toCollect.length, 1);
++  assert.equal(detail.status, "partial");
++
++  // the pick-up: the custom line can not be collected, the product can
++  const custom = inv.items[1];
++  const refused = await api.recordCollection(inv.id, [{ lineId: custom.lineId, qty: "1" }]);
++  assert.ok(refused.error);
++  await api.addStock(tile.id, 5);
++  const done = await api.recordCollection(inv.id, [{ lineId: inv.items[0].lineId, qty: "5" }]);
++  assert.equal(done.error, undefined);
++  assert.equal(stockOf(api, tile.id), 0);
++  assert.equal(V.deliveryDetail(invoiceById(api, inv.id)).status, "complete");
++
++  // the delivery box and the collection document list goods only
++  api.viewInvoice(inv.id);
++  api.renderDeliveryBox();
++  assert.doesNotMatch(ctx.app.field("delBody").innerHTML, /Jacket/);
++  assert.match(ctx.app.field("delBody").innerHTML, /Everton Grey/);
++});
++
++test("F: on an invoice delivered in steps a custom price can be corrected, but not its quantity, and no custom line can be added", async () => {
++  const ctx = await boot();
++  const { api } = ctx;
++  const tile = await addTile(ctx, { stock: 10 });
++  assert.equal(api.addToSale(tile.id, "1", "box").ok, true);
++  const line = api.getSale().items[0];
++  api.setSalePartial(line.lineId, true);
++  api.updateSaleQuantity(line.lineId, "15");
++  addCustom(api, JACKET);
++  api.getSale().paidValue = "34000";
++  await api.completeSale();
++  const inv = api.getInvoices()[0];
++  const before = await productsOf(ctx);
++
++  openEdit(ctx, inv);
++  assert.match(api.addCustomToSale(JACKET).error, /delivery record/);
++  assert.equal(api.openCustomDialog(), false);
++  typePrice(api, 1, "4500");
++  assert.equal(api.editPlan().error, undefined);
++  await api.saveInvoiceEdit();
++  const saved = invoiceById(api, inv.id);
++  assert.equal(saved.items[1].unitPrice, 4500);
++  assert.equal(saved.total, 30000 + 4500);
++  same(await productsOf(ctx), before);
++  assert.equal(V.invoiceProblem(saved), "");
++
++  openEdit(ctx, saved);
++  assert.equal(typeQty(api, 1, "2").error, undefined);
++  assert.ok(api.editPlan().error, "the quantity of a delivered invoice's line is a record");
++  api.cancelInvoiceEdit();
++});
++
++/* ==========================================================================
++   G. Saving, reloading, backups
++   ========================================================================== */
++
++test("G: custom lines survive closing and reopening the application, and the invoice can be shown again", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { stock: [{ product: tile, qty: "2" }], custom: [{ ...BROKEN, note: "grey" }, JACKET], paid: "3000" });
++  const saved = plain(inv);
++
++  const again = loadApp({ indexedDB: ctx.app.indexedDB });
++  await again.start();
++  const [loaded] = again.api.getInvoices();
++  same(plain(loaded.items), saved.items);
++  assert.equal(loaded.total, saved.total);
++  assert.equal(again.api.paymentInfo(loaded).remaining, saved.total - 3000);
++  assert.equal(again.api.getProducts()[0].stock, 18);
++
++  again.api.viewInvoice(loaded.id);
++  assert.match(again.api.invoiceHtml(loaded), /Jacket/);
++  // and it can still be edited after the reload
++  const r = again.api.startEditInvoice(loaded.id);
++  assert.equal(r.error, undefined);
++  assert.equal(again.api.getSale().items[1].itemType, "custom");
++  assert.equal(again.api.editDirty(), false);
++});
++
++test("G: backup export and import keep custom lines exactly, the products untouched, and the restored invoice behaves", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { stock: [{ product: tile, qty: "2" }], custom: [{ ...BROKEN, note: "grey" }, OLD], paid: "1000" });
++  await ctx.api.exportBackup();
++  const text = await ctx.app.downloadedText();
++  const parsed = V.parseBackup(text);
++  assert.equal(parsed.error, undefined, parsed.error);
++  same(plain(parsed.data.invoices[0].items), plain(inv.items), "the file holds the custom lines as saved");
++
++  const fresh = loadApp();
++  await fresh.start();
++  await fresh.api.importBackup(fresh.file(text));
++  const [restored] = fresh.api.getInvoices();
++  same(plain(restored.items), plain(inv.items));
++  assert.equal(restored.total, inv.total);
++  assert.equal(fresh.api.getProducts()[0].stock, 18);
++  assert.equal(V.invoiceProblem(restored), "");
++
++  // the restored invoice can be rolled back: only the product's stock returns
++  await fresh.api.deleteInvoice(restored.id);
++  assert.equal(fresh.api.getProducts()[0].stock, 20);
++});
++
++test("G: an invoice made before custom items existed (no item type) is an inventory invoice and rolls back as always", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { stock: [{ product: tile, qty: "3" }], paid: "6000" });
++  await ctx.api.exportBackup();
++  const legacy = JSON.parse(await ctx.app.downloadedText());
++  for (const item of legacy.data.invoices[0].items) delete item.itemType;   // what every earlier backup looks like
++  assert.equal(JSON.stringify(legacy).includes("itemType"), false);
++
++  const fresh = loadApp();
++  await fresh.start();
++  await fresh.api.importBackup(fresh.file(JSON.stringify(legacy)));
++  const [restored] = fresh.api.getInvoices();
++  assert.equal(restored.items[0].itemType, undefined, "an old line is not rewritten");
++  assert.equal(V.isCustomItem(restored.items[0]), false);
++  assert.equal(V.invoiceProblem(restored), "");
++  assert.equal(fresh.api.getProducts()[0].stock, 17);
++  same([...fresh.api.stockHeld(restored).keys()], [tile.id]);
++  await fresh.api.deleteInvoice(restored.id);
++  assert.equal(fresh.api.getProducts()[0].stock, 20, "an old invoice restores its stock exactly as before");
++  assert.equal(inv.items[0].stockDeducted, 3);
++});
++
++test("G: the rules refuse a custom line tied to the inventory, a bad type, or a bad custom field", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { custom: [BROKEN] });
++  const bad = (change) => { const copy = plain(inv); Object.assign(copy.items[0], change); return V.invoiceProblem(copy); };
++  assert.equal(bad({}), "");
++  assert.ok(bad({ productId: tile.id }), "a custom line has no product");
++  assert.ok(bad({ sellingUnit: "box" }), "a custom line has no selling unit");
++  assert.ok(bad({ stockUnit: "box" }));
++  assert.ok(bad({ stockDeducted: 3 }), "a custom line never takes stock");
++  assert.equal(bad({ stockDeducted: 0 }), "");
++  assert.ok(bad({ itemType: "service" }), "an unknown item type");
++  assert.ok(bad({ name: "" }));
++  assert.ok(bad({ unit: "" }));
++  assert.ok(bad({ note: 5 }));
++  assert.ok(bad({ total: -1 }));
++  assert.ok(bad({ qty: 0 }));
++
++  // the database refuses it too: an invoice like that never reaches the disk
++  const before = await snapshot(ctx);
++  const r = await ctx.api.commit((d) => { d.invoices[0].items[0].productId = tile.id; });
++  assert.ok(r.error, "the save was refused");
++  same(await snapshot(ctx), before);
++});
++
++test("G: a line total that is the typed quantity times the typed price never trips the backup check, even with fractions of a cent", async () => {
++  const ctx = await boot();
++  const inv = await sell(ctx, { custom: [{ name: "A", qty: "1.005", unit: "m", unitPrice: "1" }, { name: "B", qty: "0.333", unit: "m", unitPrice: "1.01" }, { name: "C", qty: "2.5", unit: "kg", unitPrice: "3.33" }] });
++  same(V.invoiceWarnings(inv), []);
++});
++
++/* ==========================================================================
++   H. What is printed and shown, and what the Dashboard counts
++   ========================================================================== */
++
++test("H: the printed invoice and the preview show each custom line: name, note, quantity with its unit, unit price and total", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  const inv = await sell(ctx, { stock: [{ product: tile, qty: "1" }], custom: [{ ...BROKEN, note: "white, 60x60" }, JACKET, OLD], paid: "" });
++  const parts = ctx.api.invoiceParts(inv);
++  assert.equal(parts.rows.length, 4);
++  const [product, broken, jacket, old] = parts.rows;
++  assert.match(product, /Everton Grey/);
++  assert.match(broken, /Broken Tiles/);
++  assert.match(broken, /white, 60x60/);
++  assert.match(broken, /3 Box/);
++  assert.match(broken, /300 <span class="inv-unit">\/ Box<\/span>/);
++  assert.match(broken, /<td class="num">900<\/td>/);
++  assert.match(jacket, /Jacket/);
++  assert.match(jacket, /4,000/);
++  assert.match(old, /12 m²/);
++  assert.match(old, /\/ m²/);
++  assert.match(old, /1,800/);
++  for (const row of [broken, jacket, old]) assert.doesNotMatch(row, /deleted product/);
++
++  const html = ctx.api.invoiceHtml(inv);
++  assert.match(html, /Old Ceramic/);
++  assert.match(html, /Jacket/);
++  // a name typed with markup is shown as text
++  const hostile = await sell(ctx, { custom: [{ name: "<img src=x onerror=alert(1)>", qty: "1", unit: "<b>Box</b>", unitPrice: "10", note: "<script>x</script>" }] });
++  const out = ctx.api.invoiceHtml(hostile);
++  assert.doesNotMatch(out, /<img src=x/);
++  assert.doesNotMatch(out, /<script>x/);
++  assert.match(out, /&lt;img src=x onerror=alert\(1\)&gt;/);
++  assert.equal(ctx.api.printItems(inv).length > 0, true);
++});
++
++test("H: the live preview of a sale on screen, and of an invoice being edited, includes the custom lines", async () => {
++  const ctx = await boot();
++  addCustom(ctx.api, BROKEN);
++  const draft = ctx.api.draftInvoice();
++  assert.equal(draft.items[0].itemType, "custom");
++  assert.equal(draft.total, 900);
++  assert.match(ctx.api.invoiceHtml(draft), /Broken Tiles/);
++
++  ctx.api.clearSale();
++  const inv = await sell(ctx, { custom: [BROKEN] });
++  openEdit(ctx, inv);
++  typeQty(ctx.api, 0, 5);
++  const preview = ctx.api.editPreviewInvoice();
++  assert.equal(preview.items[0].qty, 5);
++  assert.equal(preview.total, 1500);
++  assert.equal(invoiceById(ctx.api, inv.id).total, 900, "the saved invoice is untouched until Save");
++});
++
++test("H: the Dashboard's product rankings count products only; custom items do not appear in them", async () => {
++  const ctx = await boot();
++  const tile = await addTile(ctx, { stock: 20 });
++  await sell(ctx, { stock: [{ product: tile, qty: "2" }], custom: [JACKET, BROKEN], paid: "8900" });
++  const s = ctx.api.getState();
++  const f = A.compute({ invoices: s.invoices, products: s.products, debtTransfers: s.debtTransfers, purchases: s.purchases }, { now: new Date(), lowStock: 5 });
++  const names = f.bestSelling.byRevenue.map((p) => p.name);
++  same(names, ["Everton Grey"]);
++  same(f.bestSelling.byUnit.flatMap((u) => u.items.map((p) => p.name)), ["Everton Grey"]);
++});
++
++test("H: invoices of any language show the same custom unit as typed (a free unit is never translated)", async () => {
++  const ctx = await boot();
++  const inv = await sell(ctx, { custom: [BROKEN] });
++  for (const language of ["fr", "ar", "en"]) {
++    ctx.api.applyData({ ...(await ctx.api.db.loadAll()), settings: { ...ctx.api.getState().settings, language } });
++    const row = ctx.api.invoiceParts(invoiceById(ctx.api, inv.id)).rows[0];
++    assert.match(row, /Box/, language);
++    assert.match(row, /Broken Tiles/, language);
++  }
++});
++
++test("H: sample invoices from the shared fixtures (made before this feature) still print and total exactly as before", () => {
++  const api = loadApp().api;
++  api.applyData({ products: [], invoices: [], settings: { ...api.DEFAULT_SETTINGS }, counter: 0, lastSaved: "" });
++  const legacy = sampleInvoice();
++  assert.equal(V.invoiceProblem(legacy), "");
++  assert.equal(api.invoiceParts(legacy).rows.length, legacy.items.length);
++});

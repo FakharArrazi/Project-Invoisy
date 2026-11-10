@@ -82,6 +82,65 @@
   const round2 = Calc.roundMoney;
   const toNumber = Calc.toNumber;
 
+  /* ---------- Invoice item types: inventory and custom ----------
+     A line of an invoice is one of two kinds:
+       "inventory"  a product of the Stock page. It carries a productId, is sold in one of the units of calc.js and takes stock out.
+                    A line without an itemType (every invoice made before custom items existed) is an inventory line.
+       "custom"     anything else the customer buys: broken tiles, a jacket, cement, an old tile that is no longer in the catalogue.
+                    It lives on the invoice ONLY. It is a snapshot of what was typed (name, optional note, quantity, a free-text unit
+                    and the unit price) and has no productId, no sellingUnit and no stock: nothing that handles stock (selling,
+                    editing, returning, deleting, collecting, restoring a backup) ever reads or writes inventory for it.
+     isCustomItem is the one test every part of the app uses to tell them apart. */
+
+  const ITEM_TYPES = ["inventory", "custom"];
+  const CUSTOM_NAME_MAX = 120;
+  const CUSTOM_UNIT_MAX = 24;
+  const CUSTOM_NOTE_MAX = 300;
+  const isCustomItem = (item) => isObj(item) && item.itemType === "custom";
+
+  // Whitespace made single, ends trimmed: "  Broken   tiles " -> "Broken tiles".
+  const cleanCustomText = (value) => String(value == null ? "" : value).replace(/\s+/g, " ").trim();
+
+  // What is wrong with a SAVED custom line ("" when it is fine): the rules the database and a restored backup apply.
+  function customItemProblem(item) {
+    if (!isObj(item) || item.itemType !== "custom") return "";
+    if (!isStr(item.name) || !item.name.trim() || item.name.length > CUSTOM_NAME_MAX) return t("problem.badCustomItem");
+    if (!isStr(item.unit) || !item.unit.trim() || item.unit.length > CUSTOM_UNIT_MAX) return t("problem.badCustomItem");
+    if (item.note !== undefined && (!isStr(item.note) || item.note.length > CUSTOM_NOTE_MAX)) return t("problem.badCustomItem");
+    if (item.total !== undefined && !(isNum(item.total) && item.total >= 0)) return t("problem.badCustomItem");
+    // Never tied to the inventory: no product, no stock unit, nothing taken out of stock.
+    if (item.productId !== undefined || item.sellingUnit !== undefined || item.stockUnit !== undefined) return t("problem.badCustomItem");
+    if (item.stockDeducted !== undefined && item.stockDeducted !== 0) return t("problem.badCustomItem");
+    return "";
+  }
+
+  // The custom item a person typed: { name, note, qty, unit, unitPrice } as typed (text or numbers).
+  // Returns { item } (the line as an invoice keeps it, with its total) or { field, error } for the first thing that is wrong.
+  function readCustomItemInput(raw) {
+    const input = raw || {};
+    const fail = (field, error) => ({ field, error });
+    const name = cleanCustomText(input.name);
+    if (!name) return fail("name", t("custom.nameRequired"));
+    if (name.length > CUSTOM_NAME_MAX) return fail("name", t("custom.nameTooLong", { max: CUSTOM_NAME_MAX }));
+    const qtyText = String(input.qty == null ? "" : input.qty).trim();
+    const qty = Number(qtyText);
+    if (qtyText === "" || !Number.isFinite(qty) || qty <= 0) return fail("qty", t("custom.qtyPositive"));
+    const unit = cleanCustomText(input.unit);
+    if (!unit) return fail("unit", t("custom.unitRequired"));
+    if (unit.length > CUSTOM_UNIT_MAX) return fail("unit", t("custom.unitTooLong", { max: CUSTOM_UNIT_MAX }));
+    const priceText = String(input.unitPrice == null ? "" : input.unitPrice).trim();
+    const price = Number(priceText);
+    if (priceText === "" || !Number.isFinite(price)) return fail("price", t("custom.priceRequired"));
+    if (price < 0) return fail("price", t("custom.priceNegative"));
+    const note = cleanCustomText(input.note);
+    if (note.length > CUSTOM_NOTE_MAX) return fail("note", t("custom.noteTooLong", { max: CUSTOM_NOTE_MAX }));
+    const cleanQty = Calc.cleanNumber(qty);
+    const unitPrice = Calc.roundMoney(price);
+    const total = Calc.calculateLineTotal(cleanQty, unitPrice);
+    if (!Number.isFinite(total)) return fail("price", t("custom.priceRequired"));
+    return { item: { itemType: "custom", name, ...(note ? { note } : {}), qty: cleanQty, unit, unitPrice, total } };
+  }
+
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
@@ -974,7 +1033,8 @@
     }
     const lines = items.map((item, index) => {
       const qty = toNumber(item && item.qty);
-      const delivered = tracked ? Math.min(qty, handed.get(item && item.lineId) || 0) : qty;
+      // A custom line has no stock to hand over later: it always leaves with the sale, so it is never left to collect.
+      const delivered = tracked && !isCustomItem(item) ? Math.min(qty, handed.get(item && item.lineId) || 0) : qty;
       return { lineId: item && item.lineId ? item.lineId : null, index, item, qty, delivered, remaining: Math.max(0, Calc.cleanNumber(qty - delivered)) };
     });
     const toCollect = lines.filter((l) => l.remaining > DELIVERY_EPSILON);
@@ -999,6 +1059,7 @@
     if (!Array.isArray(inv.deliveries)) return t("problem.badDeliveries");
     const byLine = new Map();
     for (const item of inv.items) {
+      if (isCustomItem(item)) continue;   // never delivered in steps: no stock, no line in the delivery log
       if (!isStr(item.lineId) || !item.lineId || byLine.has(item.lineId)) return t("problem.badDeliveries");
       byLine.set(item.lineId, item);
     }
@@ -1082,6 +1143,12 @@
     if (!isDate(inv.date)) return t("problem.badDate");
     if (!Array.isArray(inv.items)) return t("problem.noItems");
     if (inv.items.some((i) => !isObj(i) || !isNum(i.qty) || i.qty <= 0 || !isNum(i.unitPrice) || i.unitPrice < 0 || (i.sellingUnit !== undefined && !SELLING_UNITS.includes(i.sellingUnit)))) return t("problem.badItem");
+    // An item type, when there is one, is inventory or custom (older invoices have none: they are inventory lines).
+    if (inv.items.some((i) => i.itemType !== undefined && !ITEM_TYPES.includes(i.itemType))) return t("problem.badItem");
+    for (const item of inv.items) {
+      const customProblem = customItemProblem(item);
+      if (customProblem) return customProblem;
+    }
     for (const key of Object.keys(AMOUNT_PROBLEMS)) {
       if (!isNum(inv[key]) || inv[key] < 0) return t(AMOUNT_PROBLEMS[key]);
     }
@@ -1170,7 +1237,7 @@
       }
     }
     if (Array.isArray(inv.items) && isNum(inv.subtotal)) {
-      const itemsTotal = round2(inv.items.reduce((sum, i) => sum + toNumber(i && i.qty) * toNumber(i && i.unitPrice), 0));
+      const itemsTotal = round2(inv.items.reduce((sum, i) => sum + (isCustomItem(i) ? Calc.calculateLineTotal(i.qty, i.unitPrice) : toNumber(i && i.qty) * toNumber(i && i.unitPrice)), 0));
       if (Math.abs(itemsTotal - inv.subtotal) > MONEY_TOLERANCE) {
         warnings.push(t("warn.subtotalMismatch", { number }));
       }
@@ -1738,6 +1805,7 @@
   globalThis.Validation = {
     APP_NAME, CURRENCY, CURRENCY_UNITS, DEFAULT_CURRENCY_UNIT, CENTIMES_PER_DINAR, CENTIMES_LABEL, DATA_VERSION, BACKUP_FORMAT_VERSION, MIRROR_KEY, LEGACY_KEYS, DEFAULT_BACKUP_DAYS,
     DEFAULT_SETTINGS, SELLING_UNITS, PRODUCT_TYPES, normalizeProductType, INVOICE_STATUSES,
+    ITEM_TYPES, CUSTOM_NAME_MAX, CUSTOM_UNIT_MAX, CUSTOM_NOTE_MAX, isCustomItem, customItemProblem, readCustomItemInput,
     MAX_PRODUCT_TYPES, MAX_PRODUCT_TYPE_LENGTH, isBuiltInProductType, productTypeKey, cleanProductTypeName, productTypeLabel, resolveProductType,
     cleanProductTypes, productTypesOf, addProductType, removeProductType, countProductsOfType, productTypeAllowed, DERIVED_INVOICE_FIELDS, WALK_IN,
     isObj, isStr, isNum, isDate, round2, toNumber, uid, sameValue,

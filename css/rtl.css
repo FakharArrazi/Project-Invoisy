@@ -130,3 +130,7 @@ html[dir="rtl"] .invoice-sheets .inv-sheet > .inv-page { transform-origin: top r
   html[dir="rtl"] .sale-table .collect-later { text-align: right; }
   html[dir="rtl"] .sale-table td.sale-remove { text-align: left; }
 }
+
+/* ---------- Custom items ---------- */
+
+html[dir="rtl"] .sale-table input.unit-input { text-align: right; }

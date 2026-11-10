@@ -26,6 +26,8 @@ if (typeof globalThis.WorkersUI === "undefined" || typeof globalThis.Workers ===
 
 // The data rules (setting defaults, units, ids, invoice numbers) live in validation.js; unit and price maths in calc.js.
 const { CURRENCY, DEFAULT_SETTINGS, SELLING_UNITS, round2, toNumber, uid, formatInvoiceNumber, invoiceSequence } = Validation;
+// A custom item is an invoice line that is not a Stock product (see "Invoice item types" in validation.js): it never touches inventory.
+const isCustomItem = Validation.isCustomItem;
 // These two names are saved inside invoices exactly as written here, so the data file does not depend on the
 // language. They are translated only when shown (see customerLabel and invoiceItemLabel).
 const WALK_IN = "Walk-in Customer";
@@ -277,6 +279,8 @@ function productTypeLabel(type) {
 // The type under the product name, in the same small grey style as the converted quantity ("1,42 m²").
 // No type: nothing at all, so the line is exactly what it always was.
 function invoiceItemTypeHtml(item) {
+  // A custom line has no product type: the optional note typed with it is shown there, in the same small grey style.
+  if (isCustomItem(item)) return item.note ? `<div class="inv-sub">${esc(item.note)}</div>` : "";
   const label = productTypeLabel(item.productType);
   return label ? `<div class="inv-sub">${esc(label)}</div>` : "";
 }
@@ -284,6 +288,11 @@ function invoiceItemTypeHtml(item) {
 // "10 Boxes", "2.5 m²": a quantity with the unit it is counted in.
 function qtyText(qty, unit) {
   return numberFormat.format(qty) + (unit ? ` ${unitLabel(unit, qty)}` : "");
+}
+
+// The quantity of a custom line with the unit text it was typed with ("3 Box", "2.5 m²"): the unit is free text, never translated.
+function customQtyText(item, qty = item.qty) {
+  return numberFormat.format(qty) + (item.unit ? ` ${item.unit}` : "");
 }
 
 /* ---------- State ---------- */
@@ -1519,6 +1528,7 @@ function stockNeeds(items, data = state) {
   const totals = new Map();
   const errors = [];
   for (const item of items) {
+    if (isCustomItem(item)) continue;   // a custom line is not in stock: it needs none
     const p = findProduct(item.productId, data);
     if (!p) continue;
     const d = Calc.stockDeduction(p, deliverNowQty(item), item.sellingUnit);
@@ -1731,6 +1741,14 @@ function removeFromSale(lineId) {
 // Returns { error } when the value is rejected; { error, clamped } when it was capped to stock.
 function updateSaleQuantity(lineId, rawQty) {
   const item = findSaleItem(lineId);
+  // A custom line has no stock to check: any quantity above 0 is fine, decimals included.
+  if (item && isCustomItem(item)) {
+    const typed = String(rawQty).trim();
+    const n = Number(typed);
+    if (typed === "" || !Number.isFinite(n) || n <= 0) return { error: t("custom.qtyPositive") };
+    item.qty = Calc.cleanNumber(n);
+    return {};
+  }
   const product = item && findProduct(item.productId);
   if (!item || !product) return { error: t("sale.productUnavailable") };
   const checked = Calc.validateQuantity(rawQty, item.sellingUnit);
@@ -1773,8 +1791,55 @@ function updateSalePrice(lineId, rawPrice) {
   const rounded = Calc.roundMoney(price);
   if (!Number.isFinite(Calc.calculateLineTotal(Calc.lineQuantity(item), rounded))) return { error: t("sale.enterPrice") };
   item.unitPrice = rounded;
-  item.priceOverridden = rounded !== round2(toNumber(item.listPrice));
+  if (!isCustomItem(item)) item.priceOverridden = rounded !== round2(toNumber(item.listPrice));   // a custom line has no catalogue price to differ from
   return {};
+}
+
+/* ---------- Custom items on the sale ----------
+   A custom line is { lineId, itemType: "custom", name, note?, qty, unit, unitPrice }: what was typed, nothing else. It has no productId, so no
+   function that looks a product up, checks stock, converts a unit or takes stock out ever finds anything to act on (and each of them also
+   skips it explicitly). Its total is qty x unitPrice, like every line, so the subtotal, the discount, the amount due and the balance treat
+   it as any other line. Adding is refused on an invoice sold in several deliveries (its lines are a record). */
+
+// Adds a custom line from what the person typed. { item } or { field, error }.
+function addCustomToSale(raw) {
+  if (state.invoiceEdit && state.invoiceEdit.tracked) return { field: "", error: t("edit.trackedLines") };
+  const read = Validation.readCustomItemInput(raw);
+  if (read.error) return read;
+  const { total, ...typed } = read.item;
+  const line = { lineId: uid(), ...typed };
+  state.sale.items.push(line);
+  return { item: line };
+}
+
+// Replaces what a custom line says (the same checks as when it is added). { item } or { field, error }.
+function updateCustomLine(lineId, raw) {
+  const line = findSaleItem(lineId);
+  if (!line || !isCustomItem(line)) return { field: "", error: t("sale.lineGone") };
+  const read = Validation.readCustomItemInput(raw);
+  if (read.error) return read;
+  const { total, ...typed } = read.item;
+  delete line.note;
+  Object.assign(line, typed);
+  return { item: line };
+}
+
+// The unit typed on a custom line (free text). { error } leaves the line as it was.
+function updateCustomUnit(lineId, rawUnit) {
+  const line = findSaleItem(lineId);
+  if (!line || !isCustomItem(line)) return { error: t("sale.lineGone") };
+  const unit = String(rawUnit == null ? "" : rawUnit).replace(/\s+/g, " ").trim();
+  if (!unit) return { error: t("custom.unitRequired") };
+  if (unit.length > Validation.CUSTOM_UNIT_MAX) return { error: t("custom.unitTooLong", { max: Validation.CUSTOM_UNIT_MAX }) };
+  line.unit = unit;
+  return {};
+}
+
+// What the line of a custom item keeps on an invoice: its own snapshot (name, note, quantity, unit, unit price, total) and nothing about stock.
+function customInvoiceLine(item, tracked) {
+  const read = Validation.readCustomItemInput({ name: item.name, note: item.note, qty: item.qty, unit: item.unit, unitPrice: item.unitPrice });
+  const line = read.item || { itemType: "custom", name: item.name, qty: item.qty, unit: item.unit, unitPrice: item.unitPrice, total: Calc.calculateLineTotal(item.qty, item.unitPrice) };
+  return { ...line, ...(tracked ? { lineId: item.lineId } : {}) };
 }
 
 function amountFrom(type, value, base) {
@@ -1883,6 +1948,11 @@ function validateSale() {
   const errors = [];
   if (state.sale.items.length === 0) errors.push(t("sale.addOne"));
   for (const item of state.sale.items) {
+    if (isCustomItem(item)) {
+      const read = Validation.readCustomItemInput({ name: item.name, note: item.note, qty: item.qty, unit: item.unit, unitPrice: item.unitPrice });
+      if (read.error) errors.push(t("edit.lineError", { name: String(item.name || "").trim() || t("sell.customBadge"), error: read.error }));
+      continue;
+    }
     const p = findProduct(item.productId);
     if (!p) { errors.push(t("sale.productMissing")); continue; }
     if (Calc.validateQuantity(item.qty, item.sellingUnit).error) {
@@ -1926,6 +1996,7 @@ function syncSaleWithProducts() {
   const notes = [];
   const used = new Map();   // stock (in the product's stock unit) already given to earlier lines of the same product
   state.sale.items = state.sale.items.filter((item) => {
+    if (isCustomItem(item)) return true;   // not a product: nothing in the inventory can change or remove it
     const p = findProduct(item.productId);
     // A line of the invoice being edited is never dropped, repriced or shortened behind the person's back: its price and
     // quantity are the saved ones. A problem with it (stock, a deleted product) is reported when the changes are saved.
@@ -2007,6 +2078,7 @@ function invoiceLineData(item, p, stockDeducted) {
   // for an area, the m² the goods contain, so the printed invoice can show "7 Boxes, 10.08 m², 1,400 DA/m²" from the line alone.
   const inPriceUnit = Number.isFinite(Number(item.chargedPrice)) && Calc.isUnit(priceUnit) && priceUnit !== sellingUnit;
   return {
+    itemType: "inventory",
     productId: item.productId,
     name: p ? p.name : DELETED_PRODUCT,
     productType: p ? Validation.normalizeProductType(p.productType) : "",   // a snapshot, like the name: editing the product later never changes a saved invoice
@@ -2073,6 +2145,8 @@ function buildInvoiceData(sale, invoiceNumber, dateIso, data = state) {
   const tracked = sale.items.some(leavesRemainder);
   const handedOver = [];
   const items = sale.items.map((item) => {
+    // A custom line is copied as typed: no product is looked up, no stock is worked out, nothing is handed over later.
+    if (isCustomItem(item)) return customInvoiceLine(item, tracked);
     const p = findProduct(item.productId, data);
     const handed = deliverNowQty(item);
     const taken = p ? Calc.stockDeduction(p, handed, item.sellingUnit) : { error: true };
@@ -2124,7 +2198,13 @@ function draftInvoice() {
 // The debt is checked again here against the latest data, and once more inside the database transaction.
 function applySale(d, sale) {
   d.debtTransfers = d.debtTransfers || [];
-  if (sale.items.some((i) => !findProduct(i.productId, d))) return { error: t("sale.productMissing") };
+  if (sale.items.some((i) => !isCustomItem(i) && !findProduct(i.productId, d))) return { error: t("sale.productMissing") };
+  // A custom line is checked again here as typed; it takes nothing from the stock below (stockNeeds leaves it out).
+  for (const i of sale.items) {
+    if (!isCustomItem(i)) continue;
+    const read = Validation.readCustomItemInput({ name: i.name, note: i.note, qty: i.qty, unit: i.unit, unitPrice: i.unitPrice });
+    if (read.error) return { error: read.error };
+  }
   const badDelivery = deliveryErrors(sale, d);
   if (badDelivery.length) return { error: badDelivery[0] };
   const needs = stockNeeds(sale.items, d);
@@ -2383,7 +2463,7 @@ function applyCollection(d, invoiceId, entries, note) {
     const raw = String(entry && entry.qty != null ? entry.qty : "").trim();
     if (raw === "") continue;
     const line = detail.lines.find((l) => l.lineId && l.lineId === entry.lineId);
-    if (!line || seen.has(line.lineId)) return { error: t("collect.badLine") };
+    if (!line || seen.has(line.lineId) || isCustomItem(line.item)) return { error: t("collect.badLine") };   // a custom line has nothing to collect later
     seen.add(line.lineId);
     const name = invoiceItemLabel(line.item);
     const unit = line.item.sellingUnit;
@@ -2477,6 +2557,13 @@ function deliveryInputs(inv) {
 //   - anything else (a price typed by hand, a price per box, an area typed in m²): the price really charged per unit sold.
 // `orig` is the saved line, `origIndex` its place on the invoice and `fromInvoice` says the line is still in its saved form.
 function saleLineFromItem(item, index) {
+  // A custom line stays a custom line: it comes back exactly as saved (name, note, quantity, unit, price) and never gets a product.
+  if (isCustomItem(item)) {
+    return {
+      lineId: uid(), origIndex: index, orig: item, fromInvoice: true, itemType: "custom", name: item.name, ...(item.note ? { note: item.note } : {}),
+      qty: item.qty, unit: item.unit, unitPrice: item.unitPrice,
+    };
+  }
   const unit = SELLING_UNITS.includes(item.sellingUnit) ? item.sellingUnit : "piece";
   const line = { lineId: uid(), origIndex: index, orig: item, fromInvoice: true, productId: item.productId, qty: item.qty, sellingUnit: unit };
   const savedTotal = round2(item.total != null ? toNumber(item.total) : Calc.calculateLineTotal(item.qty, item.unitPrice));
@@ -2596,7 +2683,7 @@ function saveSellerName() {
 function editSignature(sale = state.sale) {
   return JSON.stringify({
     customer: sale.customer, second: secondCustomerName(sale),
-    items: sale.items.map((i) => [i.origIndex == null ? null : i.origIndex, i.productId, i.sellingUnit, i.qty, i.unitPrice, i.priceQty]),
+    items: sale.items.map((i) => [i.origIndex == null ? null : i.origIndex, i.productId, i.sellingUnit, i.qty, i.unitPrice, i.priceQty, isCustomItem(i) ? [i.name, i.unit, i.note || ""] : null]),
     adjust: [sale.discountType, sale.discountValue],
     delivery: [sale.delivery.person, sale.delivery.phone, sale.delivery.fee],
   });
@@ -2629,7 +2716,7 @@ function editedCustomer(inv, sale) {
 function stockHeld(inv) {
   const held = new Map();
   const add = (item, qty) => {
-    if (!item || !(qty > 0)) return;
+    if (!item || isCustomItem(item) || !(qty > 0)) return;   // a custom line never held any stock: there is nothing to give back
     const entry = held.get(item.productId) || { qty: 0, unit: Calc.isUnit(item.stockUnit) ? item.stockUnit : null, name: invoiceItemLabel(item) };
     entry.qty = Calc.cleanNumber(entry.qty + qty);
     held.set(item.productId, entry);
@@ -2703,7 +2790,7 @@ function planInvoiceRollback(d, invoiceId, options = {}) {
     total: toNumber(inv.total), paid: Validation.paidTotal(inv), alreadyRefunded: Validation.refundedTotal(inv), refund,
     ...(deliveryFee > 0 ? { deliveryFee } : {}),
     payments: (Array.isArray(inv.payments) ? inv.payments : []).map((p) => ({ amount: p.amount, timestamp: p.timestamp })),
-    items: inv.items.map((item) => ({ name: invoiceItemLabel(item), qty: item.qty, unit: item.sellingUnit || null })),
+    items: inv.items.map((item) => ({ name: invoiceItemLabel(item), qty: item.qty, unit: isCustomItem(item) ? item.unit : item.sellingUnit || null, ...(isCustomItem(item) ? { custom: true } : {}) })),
     stock,
     ...(notRestored.length ? { notRestored } : {}),
     ...(Validation.isCancelled(inv) ? { wasCancelled: true } : {}),
@@ -2764,6 +2851,28 @@ function planInvoiceEdit(d, invoiceId, edit) {
   for (const line of lines) {
     const orig = line.origIndex != null ? inv.items[line.origIndex] : null;
     if (line.origIndex != null && !orig) return { error: t("edit.changedElsewhere") };
+    if (isCustomItem(line) || isCustomItem(orig)) {
+      // ----- a custom line: kept as a custom line (its name, note, quantity, unit and price may change); the stock is never involved -----
+      if (!isCustomItem(line) || (orig && !isCustomItem(orig))) return { error: t("edit.changedElsewhere") };
+      const read = Validation.readCustomItemInput({ name: line.name, note: line.note, qty: line.qty, unit: line.unit, unitPrice: line.unitPrice });
+      if (read.error) return { error: t("edit.lineError", { name: clean(line.name) || t("sell.customBadge"), error: read.error }) };
+      if (orig) {
+        if (used.has(line.origIndex)) return { error: t("edit.changedElsewhere") };
+        used.add(line.origIndex);
+        const item = { ...orig, ...read.item };
+        if (read.item.note === undefined) delete item.note;
+        if (tracked && item.qty !== orig.qty) return { error: t("edit.trackedQty", { name: invoiceItemLabel(orig) }) };
+        if (!Validation.sameValue(item, orig)) linesChanged = true;
+        if (line.origIndex !== items.length) linesChanged = true;   // moved or an earlier line removed
+        items.push(item);
+        origOf.push(orig);
+      } else {
+        items.push(read.item);
+        origOf.push(null);
+        linesChanged = true;
+      }
+      continue;
+    }
     if (orig && line.sellingUnit === orig.sellingUnit) {
       // ----- a kept line: every saved detail stays unless this edit changes it -----
       if (used.has(line.origIndex)) return { error: t("edit.changedElsewhere") };
@@ -2832,7 +2941,7 @@ function planInvoiceEdit(d, invoiceId, edit) {
   }
   // A saved line that was removed (or replaced by another unit) hands its stock back.
   inv.items.forEach((orig, index) => {
-    if (used.has(index)) return;
+    if (used.has(index) || isCustomItem(orig)) return;   // a removed custom line gives nothing back: it never took any stock
     const product = findProduct(orig.productId, d);
     if (product) bump(restore, product.id, lineStockTaken(orig));
   });
@@ -2841,15 +2950,15 @@ function planInvoiceEdit(d, invoiceId, edit) {
   items.forEach((item, n) => {
     const orig = origOf[n];
     if (orig) {
-      if (item.qty === orig.qty && item.unitPrice === orig.unitPrice) return;
-      lineLog.push({ name: invoiceItemLabel(orig), unit: orig.sellingUnit, qtyBefore: orig.qty, qtyAfter: item.qty,
+      if (item.qty === orig.qty && item.unitPrice === orig.unitPrice && !(isCustomItem(item) && (item.name !== orig.name || item.unit !== orig.unit))) return;
+      lineLog.push({ name: invoiceItemLabel(orig), unit: isCustomItem(orig) ? orig.unit : orig.sellingUnit, qtyBefore: orig.qty, qtyAfter: item.qty,
         ...(item.unitPrice !== orig.unitPrice ? { priceBefore: orig.unitPrice, priceAfter: item.unitPrice } : {}) });
     } else {
-      lineLog.push({ name: invoiceItemLabel(item), unit: item.sellingUnit, qtyBefore: 0, qtyAfter: item.qty, priceAfter: item.unitPrice });
+      lineLog.push({ name: invoiceItemLabel(item), unit: isCustomItem(item) ? item.unit : item.sellingUnit, qtyBefore: 0, qtyAfter: item.qty, priceAfter: item.unitPrice });
     }
   });
   inv.items.forEach((orig, index) => {
-    if (!used.has(index)) lineLog.push({ name: invoiceItemLabel(orig), unit: orig.sellingUnit, qtyBefore: orig.qty, qtyAfter: 0, priceBefore: orig.unitPrice });
+    if (!used.has(index)) lineLog.push({ name: invoiceItemLabel(orig), unit: isCustomItem(orig) ? orig.unit : orig.sellingUnit, qtyBefore: orig.qty, qtyAfter: 0, priceBefore: orig.unitPrice });
   });
   if (tracked && (items.length !== inv.items.length || items.some((i, n) => i.lineId !== inv.items[n].lineId || i.qty !== inv.items[n].qty))) return { error: t("edit.trackedLines") };
 
@@ -3058,6 +3167,7 @@ function renderEditChrome() {
   $("search").disabled = locked;
   $("addQty").disabled = locked;
   $("addUnit").disabled = locked;
+  $("addCustomItem").disabled = locked;
 }
 
 // The summary of the sale on screen while an invoice is edited: the corrected totals, what is already paid, what remains, the
@@ -3490,6 +3600,7 @@ function unitOptions(selected, product) {
 // "DA/m²", "DA/piece", "DA/box": what the unit price typed on a sale line is for: the unit the product is priced in,
 // which is not always the unit it is sold in.
 function linePriceUnit(item) {
+  if (isCustomItem(item)) return t("sell.priceUnit", { currency: state.settings.currency, unit: item.unit || "" });   // the unit as typed
   const unit = unitLabel(item.priceUnit || item.sellingUnit, 1).toLowerCase();
   return t("sell.priceUnit", { currency: state.settings.currency, unit });
 }
@@ -3497,6 +3608,7 @@ function linePriceUnit(item) {
 // Shows the product's own price and unit from Stock under the price input: "Product price: 1,150 DA / m²".
 // A price typed for this sale says so and shows the saved one. Old products without a price unit show nothing.
 function priceNote(item) {
+  if (isCustomItem(item)) return "";   // there is no catalogue price to compare with
   const p = findProduct(item.productId);
   const priced = p ? Calc.getUnitPrice(p, item.sellingUnit) : null;
   if (!priced || priced.error) return "";
@@ -3513,6 +3625,7 @@ function priceNote(item) {
 // Under the quantity: what the line is billed for when that is counted in another unit than the one sold, and how the
 // two relate: "Billed: 9 m² · 1 Box = 1.22 m²". Nothing when the price is for the unit sold.
 function qtyNote(item) {
+  if (isCustomItem(item)) return "";   // a custom line is billed for what it says: no conversion
   const unit = item.priceUnit || item.sellingUnit;
   if (!Calc.isUnit(unit) || unit === item.sellingUnit || item.priceQty == null) return "";
   const p = item.fromInvoice ? item.orig : findProduct(item.productId);   // a saved line converts with what it was sold with
@@ -3563,18 +3676,42 @@ function collectLaterText(item) {
   return t("sell.collectLater", { n: qtyText(Calc.cleanNumber(Math.max(0, item.qty - deliverNowQty(item))), item.sellingUnit) });
 }
 
+// One row of the current sale for a custom item. It has the same cells and hooks as a product row (quantity, price, line total, remove)
+// so the live refresh treats it alike, but it shows no stock, no unit list and no "deliver later" box: it is not in the inventory.
+function customSaleRowHtml(item, label) {
+  const name = item.name;
+  const locked = state.invoiceEdit && state.invoiceEdit.tracked ? " disabled" : "";   // a delivered invoice keeps its lines and quantities
+  return `<tr data-id="${esc(item.lineId)}" data-type="custom">` +
+    `<td class="sale-product"${label("col.product")}><div class="sale-name">${esc(name)}</div>` +
+    (item.note ? `<div class="muted small custom-note">${esc(item.note)}</div>` : "") +
+    `<div class="muted small custom-tag">${esc(t("sell.customNoStock"))}</div>` +
+    `<div class="custom-row-actions"><button type="button" class="btn small" data-action="edit-custom" aria-label="${esc(t("sell.customEditAria", { name }))}">${esc(t("common.edit"))}</button></div>` +
+    `<div class="error small" data-row-error></div></td>` +
+    `<td class="num sale-qty"${label("col.qty")}><div class="qty-cell"><input class="qty-input" type="number" min="0" step="any" value="${item.qty}" data-field="qty"${locked} aria-label="${esc(t("sell.qtyAria", { name }))}">` +
+    `<input class="unit-input" type="text" list="customUnitList" maxlength="${Validation.CUSTOM_UNIT_MAX}" value="${esc(item.unit)}" data-field="cunit"${locked} autocomplete="off" aria-label="${esc(t("sell.unitAria", { name }))}"></div>` +
+    `<div class="muted small qty-note" data-qty-note></div></td>` +
+    `<td class="num sale-price"${label("col.unitPrice")}><div class="price-cell"><input class="price-input" type="number" min="0" step="any" value="${item.unitPrice}" data-field="price" aria-label="${esc(t("sell.priceAria", { name, unit: linePriceUnit(item) }))}">` +
+    `<span class="price-unit" data-price-unit>${esc(linePriceUnit(item))}</span></div>` +
+    `<div class="muted small price-note" data-price-note></div></td>` +
+    `<td class="num sale-total"${label("col.total")} data-line-total>${esc(money(Calc.calculateLineAmount(item)))}</td>` +
+    `<td class="num sale-remove"><button type="button" class="btn small danger" data-action="remove"${locked} aria-label="${esc(t("sell.removeAria", { name }))}">${esc(t("common.remove"))}</button></td>` +
+    `</tr>`;
+}
+
 function renderSale() {
   return keepFocus(renderSaleNow);
 }
 
 function renderSaleNow() {
   const body = $("saleBody");
+  if (state.sale.items.some(isCustomItem)) renderCustomUnitList();   // the units offered while a custom line's unit is typed
   if (state.sale.items.length === 0) {
     body.innerHTML = `<tr class="empty-row"><td colspan="5">${esc(t("sell.empty"))}</td></tr>`;
   } else {
     // Each cell carries its column title (data-label) so a narrow screen can show the row as a stack (see .sale-table).
     const label = (key) => ` data-label="${esc(t(key))}"`;
     body.innerHTML = state.sale.items.map((item) => {
+      if (isCustomItem(item)) return customSaleRowHtml(item, label);
       const p = findProduct(item.productId);
       // A line of the invoice being edited keeps the name it was saved with (as the invoice prints it).
       const name = item.orig ? invoiceItemLabel(item.orig) : p ? productLabel(p) : t("sell.deletedProduct");
@@ -3686,6 +3823,11 @@ function invoiceParts(inv) {
   const delivery = Validation.deliveryDetail(inv);
   const rows = inv.items.length
     ? inv.items.map((i, index) => {
+        // A custom line prints what it says: the name (and note), the quantity with its unit as typed, the unit price and the total.
+        if (isCustomItem(i)) {
+          const total = i.total != null ? i.total : Calc.calculateLineTotal(i.qty, i.unitPrice);
+          return `<tr><td>${esc(invoiceItemLabel(i))}${invoiceItemTypeHtml(i)}</td><td class="num">${num(i.qty)}${i.unit ? ` ${esc(i.unit)}` : ""}</td><td class="num">${amt(i.unitPrice)}${i.unit ? ` <span class="inv-unit">/ ${esc(i.unit)}</span>` : ""}</td><td class="num">${amt(total)}</td></tr>`;
+        }
         const shown = invoiceLinePrice(i);
         const inPriceUnit = shown.qtyInPriceUnit == null ? "" : `<div class="inv-sub">${num(shown.qtyInPriceUnit)} ${esc(unitLabel(shown.unit, shown.qtyInPriceUnit))}</div>`;
         const left = delivery.tracked ? delivery.lines[index] : null;
@@ -4067,7 +4209,7 @@ function renderDeliveryBox() {
     });
   }
   deliveryBoxInvoiceId = inv.id;
-  $("delBody").innerHTML = detail.lines.map((l) => {
+  $("delBody").innerHTML = detail.lines.filter((l) => !isCustomItem(l.item)).map((l) => {   // custom lines are never collected later
     const unit = l.item.sellingUnit;
     const name = invoiceItemLabel(l.item);
     const whole = Calc.isWholeUnit(unit);
@@ -5291,6 +5433,81 @@ function confirmDebtDialog() {
   closeDebtDialog();
 }
 
+/* ---------- The custom item dialog ----------
+   "+ Custom Item" opens one dialog to add (or edit) a line that is not a Stock product. Nothing is saved from here: the line joins the
+   sale on screen (see addCustomToSale) and is saved with the invoice like any other line. */
+
+let customDialogReturnFocus = null;
+let customDialogLine = null;   // the lineId being edited, or null when a new custom item is added
+
+// The units offered while typing (the unit itself is free text: anything can be typed).
+function renderCustomUnitList() {
+  const units = [t("unit.box"), t("unit.m2"), t("unit.piece"), t("custom.unitBag"), t("unit.kg"), t("unit.m"), t("custom.unitLiter")];
+  $("customUnitList").innerHTML = units.map((u) => `<option value="${esc(u)}"></option>`).join("");
+}
+
+// The total shown in the dialog: quantity x unit price, worked out the way the line will be (nothing when it can not be yet).
+function updateCustomTotal() {
+  const qtyText = $("customQty").value.trim();
+  const priceText = $("customPrice").value.trim();
+  const qty = Number(qtyText);
+  const price = Number(priceText);
+  const ready = qtyText !== "" && priceText !== "" && Number.isFinite(qty) && qty > 0 && Number.isFinite(price) && price >= 0;
+  $("customTotal").textContent = money(ready ? Calc.calculateLineTotal(Calc.cleanNumber(qty), Calc.roundMoney(price)) : 0);
+}
+
+function openCustomDialog(lineId) {
+  const line = lineId ? findSaleItem(lineId) : null;
+  if (lineId && !(line && isCustomItem(line))) return false;
+  if (!line && state.invoiceEdit && state.invoiceEdit.tracked) { showError("addError", t("edit.trackedLines")); return false; }
+  customDialogLine = line ? line.lineId : null;
+  customDialogReturnFocus = typeof document.activeElement !== "undefined" ? document.activeElement : null;
+  $("customDialogTitle").textContent = t(line ? "custom.titleEdit" : "custom.title");
+  $("customConfirm").textContent = t(line ? "custom.save" : "custom.add");
+  $("customName").value = line ? line.name : "";
+  $("customNote").value = line && line.note ? line.note : "";
+  $("customQty").value = line ? String(line.qty) : "1";
+  $("customUnit").value = line ? line.unit : "";
+  $("customPrice").value = line ? String(line.unitPrice) : "";
+  $("customCurrency").textContent = state.settings.currency;
+  renderCustomUnitList();
+  showError("customError", "");
+  updateCustomTotal();
+  const dialog = $("customDialog");
+  if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
+  if ($("customName").focus) $("customName").focus();
+  return true;
+}
+
+function closeCustomDialog() {
+  const dialog = $("customDialog");
+  if (typeof dialog.close === "function") dialog.close(); else dialog.removeAttribute("open");
+  if (customDialogReturnFocus && typeof customDialogReturnFocus.focus === "function") customDialogReturnFocus.focus();
+  customDialogReturnFocus = null;
+  customDialogLine = null;
+  resumeBackup();
+}
+
+// Adds (or saves) the custom item typed in the dialog. The dialog stays open, with the problem written in it, when something is wrong.
+function submitCustomDialog() {
+  const raw = { name: $("customName").value, note: $("customNote").value, qty: $("customQty").value, unit: $("customUnit").value, unitPrice: $("customPrice").value };
+  const result = customDialogLine ? updateCustomLine(customDialogLine, raw) : addCustomToSale(raw);
+  if (result.error) {
+    showError("customError", result.error);
+    const field = { name: "customName", qty: "customQty", unit: "customUnit", price: "customPrice", note: "customNote" }[result.field];
+    if (field && $(field).focus) $(field).focus();
+    return result;
+  }
+  showError("customError", "");
+  closeCustomDialog();
+  showError("addError", "");
+  showError("saleError", "");
+  state.previewInvoice = null;
+  renderSale();
+  renderInvoice();
+  return result;
+}
+
 /* ==========================================================================
    NAVIGATION
    ========================================================================== */
@@ -5390,7 +5607,8 @@ function hasUnsavedWork() {
    resumeBackup), and at the next start at the latest. */
 function backupShouldWait() {
   const debtDialog = $("debtDialog");
-  return Boolean(state.saleDone) || Boolean(debtDialog && debtDialog.open) || hasUnsavedWork() || settingsTouched;
+  const customDialog = $("customDialog");
+  return Boolean(state.saleDone) || Boolean(debtDialog && debtDialog.open) || Boolean(customDialog && customDialog.open) || hasUnsavedWork() || settingsTouched;
 }
 
 function resumeBackup() {
@@ -5561,6 +5779,7 @@ function bindEvents() {
     const wasPartial = Boolean(findSaleItem(id) && findSaleItem(id).partial);
     const result = field === "qty" ? updateSaleQuantity(id, input.value.trim())
       : field === "deliver" ? updateSaleDeliverNow(id, input.value.trim())
+      : field === "cunit" ? updateCustomUnit(id, input.value)   // the unit of a custom line is free text
       : updateSalePrice(id, input.value.trim());
     if (result.clamped) input.value = field === "deliver" ? findSaleItem(id).deliverNow : findSaleItem(id).qty;
     // A quantity brought back to the stock: tell the person they can sell it all and let the customer collect the rest later.
@@ -5613,10 +5832,12 @@ function bindEvents() {
     const row = input.closest("tr");
     const item = findSaleItem(row.dataset.id);
     if (!item) return;
-    input.value = input.dataset.field === "qty" ? item.qty : input.dataset.field === "deliver" ? item.deliverNow : item.unitPrice;
+    input.value = input.dataset.field === "qty" ? item.qty : input.dataset.field === "deliver" ? item.deliverNow : input.dataset.field === "cunit" ? item.unit : item.unitPrice;
     row.querySelector("[data-row-error]").textContent = "";
   });
   saleBody.addEventListener("click", (e) => {
+    const editCustom = e.target.closest("[data-action='edit-custom']");
+    if (editCustom) { openCustomDialog(editCustom.closest("tr").dataset.id); return; }
     const btn = e.target.closest("[data-action='remove']");
     if (!btn) return;
     removeFromSale(btn.closest("tr").dataset.id);
@@ -5705,6 +5926,13 @@ function bindEvents() {
     const btn = e.target.closest("[data-debt-remove]");
     if (btn) removeDebtFromSale(btn.dataset.debtRemove);
   });
+  // Custom items: the button on the Sell page and its dialog (an item that is not in Stock, added to this invoice only).
+  $("addCustomItem").addEventListener("click", () => openCustomDialog());
+  $("customForm").addEventListener("submit", (e) => { e.preventDefault(); submitCustomDialog(); });
+  $("customCancel").addEventListener("click", closeCustomDialog);
+  $("customDialog").addEventListener("cancel", (e) => { e.preventDefault(); closeCustomDialog(); });
+  for (const id of ["customName", "customUnit", "customNote"]) $(id).addEventListener("input", () => showError("customError", ""));
+  for (const id of ["customQty", "customPrice"]) $(id).addEventListener("input", () => { showError("customError", ""); updateCustomTotal(); });
   $("debtForm").addEventListener("submit", (e) => { e.preventDefault(); confirmDebtDialog(); });
   $("debtDialogCancel").addEventListener("click", closeDebtDialog);
   $("debtDialog").addEventListener("cancel", (e) => { e.preventDefault(); closeDebtDialog(); });
@@ -6181,6 +6409,7 @@ if (globalThis.__INVOISY_TEST_EXPORTS__) {
     openDebtDialog, closeDebtDialog, confirmDebtDialog, collectDebtPicks, updateDebtDialogTotals, debtDialogRowsData,
     saleDue, saleCarried, draftCarriedLines, carriedToNumbers,
     setSalePartial, updateSaleDeliverNow, deliverNowQty, maxDeliverableNow, deliveryErrors,
+    isCustomItem, addCustomToSale, updateCustomLine, updateCustomUnit, customInvoiceLine, customQtyText, openCustomDialog, closeCustomDialog, submitCustomDialog, updateCustomTotal,
     applyCollection, recordCollection, collectionHtml, renderDeliveryBox, qtyText,
     viewInvoice, clearSale, draftInvoice, refreshAfterLoad, renderInvoices, renderInvoice, refreshLive,
     getDebtUi: () => state.debtUi,

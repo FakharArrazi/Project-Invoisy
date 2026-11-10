@@ -188,7 +188,7 @@
     for (const r of scanned.rows) {
       if (r.cancelled || !r.day || cmpDay(r.day, from) < 0 || cmpDay(r.day, to) > 0) continue;
       for (const item of Array.isArray(r.inv.items) ? r.inv.items : []) {
-        if (!item) continue;
+        if (!item || V.isCustomItem(item)) continue;   // a custom item is not a Stock product: it has no place in the product rankings (its money is in the invoice total)
         const product = item.productId ? byId.get(item.productId) : null;
         const key = item.productId ? "id:" + item.productId : "n:" + [item.name, item.tileSize, item.manufacturer].join("|");
         const e = map.get(key) || {

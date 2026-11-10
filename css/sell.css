@@ -20,6 +20,12 @@
 .sell-add, .sell-sale { padding: 20px; }
 .sell-add h2, .sell-sale h2 { margin-bottom: 14px; font-size: 16px; }
 
+/* The "+ Custom Item" button sits on the heading line of the Add products card. */
+.sell-add .sell-add-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 14px; }
+.sell-add .sell-add-head h2 { margin: 0; }
+.custom-add { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px 12px; }
+.custom-add .btn { min-height: 36px; padding: 0 16px; font-weight: 600; white-space: nowrap; }
+
 /* Search: the same box as the Stock page's (icon inside, 42px high). */
 .sell-search { position: relative; }
 .sell-search svg { position: absolute; top: 50%; inset-inline-start: 13px; width: 18px; height: 18px; margin-top: -9px; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
@@ -117,4 +123,33 @@
 
 @media (max-width: 1180px) {
   .preview-panel { scrollbar-gutter: auto; }
+}
+
+/* ---------- Custom items: the dialog and the rows of the sale ---------- */
+
+.custom-dialog { width: min(560px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; padding: 20px 22px; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--text); background: var(--panel); }
+.custom-dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+.custom-dialog h2 { margin: 0 0 6px; font-size: 18px; }
+.custom-dialog > form > p { margin: 0 0 14px; }
+.custom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.custom-grid .field { margin-bottom: 12px; min-width: 0; }
+.custom-grid .custom-wide { grid-column: 1 / -1; }
+.custom-grid label { margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.custom-grid input { height: 40px; border-radius: 6px; }
+.custom-total { display: flex; align-items: center; height: 40px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: #f6f8fa; font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.custom-dialog .error { min-height: 1.4em; margin: 0; }
+.custom-dialog .actions .btn { min-height: 42px; padding: 0 22px; font-size: 15px; font-weight: 600; }
+
+.sale-table input.unit-input { width: 92px; text-align: left; }
+.sale-table .custom-note { overflow-wrap: anywhere; }
+.sale-table .custom-tag { margin-top: 2px; }
+.sale-table .custom-row-actions { margin-top: 6px; }
+
+@media (max-width: 720px) {
+  .sell-add .sell-add-head { align-items: flex-start; }
+  .custom-add { justify-content: flex-start; width: 100%; }
+  .custom-add .btn { flex: 1 1 100%; }
+  .custom-dialog { padding: 16px; }
+  .custom-grid { grid-template-columns: 1fr; }
+  .custom-dialog .actions .btn { flex: 1 1 0; min-width: 0; }
 }
