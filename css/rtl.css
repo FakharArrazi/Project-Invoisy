@@ -36,6 +36,10 @@ html[dir="rtl"] .inv-phone { unicode-bidi: isolate; direction: ltr; }
 
 /* The arrows of "← Back" and "a → b" point the other way. */
 html[dir="rtl"] .dir-arrow { display: inline-block; transform: scaleX(-1); }
+html[dir="rtl"] .back-btn { padding: 4px 8px 4px 12px; }
+html[dir="rtl"] .back-btn:hover .back-icon { transform: scaleX(-1) translateX(-2px); }
+html[dir="rtl"] .stock-table tr.standing-good td:first-child { box-shadow: inset -3px 0 0 var(--good); }
+html[dir="rtl"] .stock-table tr.standing-attention td:first-child { box-shadow: inset -3px 0 0 var(--danger); }
 
 /* ---------- Layout: sides ---------- */
 

@@ -34,6 +34,8 @@
       detailId: null, open: "", form: null, formLang: "",
       report: { from: "", to: "", productId: "" },
     },
+    act: { type: "all", supplierId: "", q: "", from: "", to: "", order: "newest", limit: 100 },   // Supplier Activity filters (screen only)
+    trail: [], seenView: "", moving: false,   // where Back returns to (see "Back navigation")
     dash: { all: false, open: [] },   // Dashboard: all price insights shown, and the products whose purchase history is open (screen only)
     lastLanguage: "",
   };
@@ -129,6 +131,135 @@
     return `<header class="stock-header"><h1 class="stock-title">${esc(title)}</h1>${actions ? `<div class="page-actions">${actions}</div>` : ""}</header>`;
   }
   const SEARCH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>';
+
+  /* ---------- Icons for the compact action buttons ---------- */
+
+  const svg = (inner) => `<svg viewBox="0 0 24 24" aria-hidden="true">${inner}</svg>`;
+  const THUMB = '<path d="M7 11v9H4.5a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1H7z"/><path d="M7 11l3.6-7.2a2 2 0 0 1 2.4 1.9V9h5.6a2 2 0 0 1 2 2.3l-1.1 7a2 2 0 0 1-2 1.7H7"/>';
+  const ICON = {
+    view: svg('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
+    pay: svg('<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/>'),
+    purchase: svg('<circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h3l2.6 12.2a1 1 0 0 0 1 .8h9.2a1 1 0 0 0 1-.8L21 7H6"/>'),
+    edit: svg('<path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/>'),
+    good: svg(THUMB),
+    attention: svg(`<g transform="rotate(180 12 12)">${THUMB}</g>`),
+    activity: svg('<path d="M3 12h4l3-8 4 16 3-8h4"/>'),
+  };
+
+  // One compact icon button of the Suppliers table. The tooltip says what it does, the aria-label says what and to whom.
+  function iconButton(action, icon, id, labelKey, tipKey, name) {
+    const label = t("sup.rowAria", { action: t(labelKey), name });
+    return `<button type="button" class="icon-btn" data-act="${action}" data-id="${esc(id)}" title="${esc(t(tipKey))}" aria-label="${esc(label)}">${icon}</button>`;
+  }
+
+  // The two standing toggles of a supplier: only one can be on, and pressing the one that is on clears it.
+  function standingButtons(sp) {
+    const current = P.supplierStanding(sp);
+    const one = (value) => {
+      const on = current === value;
+      const tip = t(on ? "sup.standing.clear." + value : "sup.standing.tip." + value);
+      const label = t("sup.rowAria", { action: t("sup.standing." + value), name: sp.name });
+      return `<button type="button" class="icon-btn standing ${value}${on ? " is-on" : ""}" data-act="sup-standing" data-id="${esc(sp.id)}" data-standing="${value}" aria-pressed="${on}" title="${esc(tip)}" aria-label="${esc(label)}">${ICON[value]}</button>`;
+    };
+    return `<span class="icon-group standing-group" role="group" aria-label="${esc(t("sup.standing.group", { name: sp.name }))}">${one("good")}${one("attention")}</span>`;
+  }
+
+  /* ---------- Back navigation ----------
+     Every "Back" button of the suppliers and purchases screens looks the same and goes where the person actually came from:
+     a purchase opened from a supplier's profile goes back to that profile, one opened from the Supplier Activity list goes back
+     to that list, and so on. The places left behind are kept in ui.trail (screen only, never stored). When there is nothing in
+     it (the screen was reached some other way) the button goes to the screen's own list, so Back always has a destination.
+     A place is a small description: { v: view, s: screen, id } and is checked when used: a record deleted meanwhile is skipped. */
+
+  const BACK_ICON = '<svg class="back-icon dir-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>';
+  const TRAIL_MAX = 30;
+  const LIST_OF = { suppliers: { v: "suppliers", s: "list" }, purchases: { v: "purchases", s: "list", tab: "list" } };
+
+  const samePlace = (a, b) => Boolean(a && b) && a.v === b.v && a.s === b.s && (a.id || "") === (b.id || "");
+
+  // Where the person is right now, or null on a form (what is typed in a form is not kept, so Back never returns to one).
+  function here() {
+    const view = S().view;
+    if (view === "suppliers") {
+      const f = ui.sup;
+      if (f.screen === "profile" && supplierById(f.profileId)) return { v: view, s: "profile", id: f.profileId, tab: f.tab };
+      if (f.screen === "activity") return { v: view, s: "activity" };
+      return f.screen === "list" ? { v: view, s: "list" } : null;
+    }
+    if (view === "purchases") {
+      const f = ui.pur;
+      if (f.screen === "detail" && purchaseById(f.detailId)) return { v: view, s: "detail", id: f.detailId };
+      return f.screen === "list" ? { v: view, s: "list", tab: f.tab } : null;
+    }
+    return { v: view };
+  }
+
+  function placeExists(place) {
+    if (place.s === "profile") return Boolean(supplierById(place.id));
+    if (place.s === "detail") return Boolean(purchaseById(place.id));
+    return true;
+  }
+
+  // "Back to Suppliers", "Back to Bookseram", "Back to PUR-000012"...: the button names its destination.
+  function placeLabel(place) {
+    if (place.s === "profile") return t("back.named", { name: supplierById(place.id).name });
+    if (place.s === "detail") return t("back.named", { name: purchaseById(place.id).reference });
+    if (place.v === "suppliers") return t(place.s === "activity" ? "back.activity" : "back.suppliers");
+    if (place.v === "purchases") return t("back.purchases");
+    if (place.v === "dashboard") return t("back.dashboard");
+    if (place.v === "workers") return t("back.workers");
+    return t("back.named", { name: t("nav." + place.v) });
+  }
+
+  // Where Back goes: the last place still there, else the fallback.
+  function backPlace(fallback) {
+    while (ui.trail.length && !placeExists(ui.trail[ui.trail.length - 1])) ui.trail.pop();
+    return ui.trail.length ? ui.trail[ui.trail.length - 1] : fallback;
+  }
+
+  function backButton(action, fallback) {
+    const label = placeLabel(backPlace(fallback));
+    return `<button type="button" class="back-btn" data-act="${action}" title="${esc(label)}" aria-label="${esc(label)}">${BACK_ICON}<span>${esc(label)}</span></button>`;
+  }
+
+  function moveTo(apply) {
+    ui.moving = true;
+    try { apply(); } finally { ui.moving = false; }
+  }
+
+  // Goes to another screen and remembers the one being left. Going to the place Back would lead to is a step back, not a new step.
+  function travel(dest, apply) {
+    const from = here();
+    const top = ui.trail[ui.trail.length - 1];
+    if (dest && top && samePlace(top, dest)) ui.trail.pop();
+    else if (from && !samePlace(from, dest)) {
+      ui.trail.push(from);
+      if (ui.trail.length > TRAIL_MAX) ui.trail.shift();
+    }
+    moveTo(apply);
+  }
+
+  function restore(place) {
+    if (place.v === "suppliers") {
+      ui.sup.screen = place.s;
+      if (place.s === "profile") { ui.sup.profileId = place.id; ui.sup.tab = place.tab || "overview"; }
+    } else if (place.v === "purchases") {
+      ui.pur.screen = place.s;
+      ui.pur.form = null;
+      ui.pur.open = "";
+      if (place.s === "detail") ui.pur.detailId = place.id;
+      else ui.pur.tab = place.tab || "list";
+    }
+    if (S().view !== place.v) h.showView(place.v);
+    else if (place.v === "suppliers") renderSuppliers();
+    else if (place.v === "purchases") renderPurchases();
+  }
+
+  function goBack(fallback) {
+    const place = backPlace(fallback);
+    if (place !== fallback) ui.trail.pop();
+    moveTo(() => restore(place));
+  }
 
   // Net balance in words: positive = we owe the supplier, negative = we prepaid, zero = square. Never colour alone.
   const balanceState = (net) => (net > 0 ? "owes" : net < 0 ? "prepaid" : "square");
@@ -282,19 +413,23 @@
       const archived = sp.archived ? " " + badge("st-cancelled", t("sup.status.archived")) : "";
       const overdue = sum.overdueCount ? `<div>${badge("overdue", t("sup.overdueCount", { n: sum.overdueCount }))}</div>` : "";
       const contacts = [...P.supplierContactNames(sp), sp.email].filter(Boolean);
-      return `<tr data-id="${esc(sp.id)}">
-        <td class="name-cell"><button type="button" class="link" data-act="sup-open" data-id="${esc(sp.id)}">${esc(sp.name)}</button>${archived}${contacts.length ? `<div class="muted small">${esc(contacts.join(", "))}</div>` : ""}</td>
+      const standing = P.supplierStanding(sp);
+      const standingNote = standing === "neutral" ? "" : `<span class="sr-only"> (${esc(t("sup.standing." + standing))})</span>`;
+      return `<tr data-id="${esc(sp.id)}" class="sup-row${standing === "neutral" ? "" : " standing-" + standing}">
+        <td class="name-cell"><button type="button" class="link" data-act="sup-open" data-id="${esc(sp.id)}">${esc(sp.name)}</button>${standingNote}${archived}${contacts.length ? `<div class="muted small">${esc(contacts.join(", "))}</div>` : ""}</td>
         <td class="phone-cell">${P.supplierPhones(sp).map((phone) => `<div>${esc(h.ltr(phone))}</div>`).join("")}</td>
         <td class="num">${esc(money(sum.total))}</td>
         <td class="num">${esc(money(sum.paid))}</td>
         <td class="num ${balanceClass(sum.net)}">${esc(money(sum.net))}<div>${balanceBadge(sum.net)}</div></td>
         <td class="num">${num(sum.openInvoices)}${overdue}</td>
         <td class="num ${sum.advance > 0 ? "credit" : ""}">${esc(money(sum.advance))}</td>
-        <td class="num"><div class="row-actions">
-          <button type="button" class="btn small" data-act="sup-open" data-id="${esc(sp.id)}">${esc(t("common.view"))}</button>
-          ${sp.archived ? "" : `<button type="button" class="btn small" data-act="sup-deposit" data-id="${esc(sp.id)}">${esc(t("dep.short"))}</button>
-          <button type="button" class="btn small" data-act="pur-new" data-id="${esc(sp.id)}">${esc(t("sup.newPurchase"))}</button>`}
-          <button type="button" class="btn small" data-act="sup-edit" data-id="${esc(sp.id)}">${esc(t("common.edit"))}</button>
+        <td class="num actions-cell"><div class="icon-actions">
+          <span class="icon-group">
+            ${iconButton("sup-open", ICON.view, sp.id, "common.view", "sup.tip.view", sp.name)}
+            ${sp.archived ? "" : iconButton("sup-deposit", ICON.pay, sp.id, "dep.short", "sup.tip.pay", sp.name) + iconButton("pur-new", ICON.purchase, sp.id, "sup.newPurchase", "sup.tip.purchase", sp.name)}
+            ${iconButton("sup-edit", ICON.edit, sp.id, "common.edit", "sup.tip.edit", sp.name)}
+          </span>
+          ${standingButtons(sp)}
         </div></td></tr>`;
     }).join("");
   }
@@ -306,7 +441,7 @@
 
   function supplierListHtml() {
     const th = (key, label, cls) => `<th class="${cls || ""}"><button type="button" class="th-sort" data-act="sup-sort" data-key="${key}">${esc(label)}${sortArrow(ui.sup, key)}</button></th>`;
-    return `${pageHeader(t("nav.suppliers"), `<button type="button" class="btn primary" data-act="sup-add">${esc(t("sup.add"))}</button>`)}
+    return `${pageHeader(t("nav.suppliers"), `<button type="button" class="btn with-icon" data-act="sup-activity">${ICON.activity}${esc(t("act.title"))}</button><button type="button" class="btn primary" data-act="sup-add">${esc(t("sup.add"))}</button>`)}
       <div class="stat-strip" id="supStrip">${supplierSummaryStrip()}</div>
       <div class="panel stock-list">
         <div class="stock-toolbar">
@@ -330,6 +465,125 @@
               <th class="num">${esc(t("col.actions"))}</th>
             </tr></thead>
             <tbody id="supRows">${supplierTableRows()}</tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
+  /* ==========================================================================
+     SUPPLIER ACTIVITY: every purchase and every payment to a supplier in one list
+     ========================================================================== */
+
+  const ACTIVITY_PAGE = 100;   // rows drawn at a time; the totals always count everything that matches
+
+  const activityResult = () => P.supplierActivity(S(), {
+    type: ui.act.type, supplierId: ui.act.supplierId, q: ui.act.q, from: ui.act.from, to: ui.act.to, order: ui.act.order,
+  });
+
+  // The purchases and the payments listed: two separate totals, each only for the kinds that are on screen.
+  function activityStrip(totals) {
+    const cards = [];
+    if (ui.act.type !== "payments") {
+      cards.push(stat(t("act.stat.purchases"), `${esc(money(totals.purchases.amount))}<span class="state">${esc(tn("act.stat.purchaseCount", totals.purchases.count))}</span>`));
+    }
+    if (ui.act.type !== "purchases") {
+      cards.push(stat(t("act.stat.payments"), `${esc(money(totals.payments.amount))}<span class="state">${esc(tn("act.stat.paymentCount", totals.payments.count))}</span>`));
+    }
+    return cards.join("");
+  }
+
+  function activityRowHtml(r) {
+    const inForce = r.status === "active";
+    const open = `data-act="act-open" data-purchase="${esc(r.purchaseId)}" data-supplier="${esc(r.supplierId)}"`;
+    const supplier = supplierById(r.supplierId);
+    const supplierCell = supplier
+      ? `<button type="button" class="link" data-act="sup-open" data-id="${esc(supplier.id)}">${esc(supplier.name)}</button>`
+      : esc(r.supplierName);
+    let title;
+    const details = [];
+    let badges = badge("act-" + r.type, t("act.type." + r.type));
+    if (r.type === "purchase") {
+      const purchase = purchaseById(r.id);
+      title = t("act.desc.purchase", { ref: r.reference || r.ref });
+      if (r.reference && r.ref) details.push(r.ref);
+      details.push(tn("act.lines", r.lineCount));
+      if (purchase && inForce) badges += " " + payBadge(purchase, summaryOf(purchase));
+      if (!inForce) badges += " " + badge("st-cancelled", t("pur.status.cancelled"));
+    } else {
+      const invoice = r.invoiceNumber || r.ref;
+      title = r.kind === "advance" ? t("act.desc.advance") : invoice ? t("act.desc.paymentInvoice", { ref: invoice }) : t("act.desc.payment");
+      if (r.method) details.push(methodName(r.method));
+      if (r.reference) details.push(r.reference);
+      if (r.note) details.push(r.note);
+      if (!inForce) badges += " " + badge("st-cancelled", t("spay.voided"));
+    }
+    const entered = r.enteredAt ? t("act.entered", { time: h.formatDateTime(r.enteredAt) }) : t("act.noEntryTime");
+    return `<tr class="clickable${inForce ? "" : " voided"}" ${open}>
+      <td class="date-cell">${esc(fmtDay(r.date))}<div class="muted small">${esc(entered)}</div></td>
+      <td>${badges}</td>
+      <td>${supplierCell}</td>
+      <td><button type="button" class="link" ${open}>${esc(title)}</button>${details.length ? `<div class="muted small">${esc(details.join(" · "))}</div>` : ""}</td>
+      <td class="num">${esc(money(r.amount))}</td></tr>`;
+  }
+
+  function activityRowsHtml(rows) {
+    if (!rows.length) {
+      const none = !S().purchases.length && !S().supplierPayments.length && !(S().supplierDeposits || []).length;
+      return `<tr class="empty-row"><td colspan="5">${esc(t(none ? "act.empty" : "act.noMatch"))}</td></tr>`;
+    }
+    const shown = rows.slice(0, ui.act.limit);
+    const more = rows.length > shown.length
+      ? `<tr class="more-row"><td colspan="5"><span class="muted small">${esc(t("act.showing", { shown: num(shown.length), total: num(rows.length) }))}</span> <button type="button" class="btn small" data-act="act-more">${esc(t("act.more"))}</button></td></tr>`
+      : "";
+    return shown.map(activityRowHtml).join("") + more;
+  }
+
+  // Only the rows and the totals are redrawn while a filter is typed or changed, never the filters themselves.
+  function refreshActivity() {
+    const result = activityResult();
+    if ($("actRows")) $("actRows").innerHTML = activityRowsHtml(result.rows);
+    if ($("actStrip")) $("actStrip").innerHTML = activityStrip(result.totals);
+  }
+
+  function activityHtml() {
+    const a = ui.act;
+    const result = activityResult();
+    const suppliers = [...S().suppliers].sort((x, y) => x.name.localeCompare(y.name));
+    const tab = (key, label) => `<button type="button" role="tab" id="actTab-${key}" class="tab${a.type === key ? " active" : ""}" aria-selected="${a.type === key}" data-act="act-type" data-type="${key}">${esc(label)}</button>`;
+    return `${pageHeader(t("nav.suppliers"))}
+      <div class="panel profile-head">
+        <div>${backButton("act-back", LIST_OF.suppliers)}
+          <h2>${esc(t("act.title"))}</h2>
+          <p class="muted small">${esc(t("act.subtitle"))}</p></div>
+      </div>
+      <div class="stat-strip" id="actStrip">${activityStrip(result.totals)}</div>
+      <p class="muted small act-note">${esc(t("act.note"))}</p>
+      <div class="panel stock-list">
+        <div class="tabs" role="tablist">${tab("all", t("act.tab.all"))}${tab("purchases", t("act.tab.purchases"))}${tab("payments", t("act.tab.payments"))}</div>
+        <div class="stock-toolbar">
+          <div class="stock-search">
+            ${SEARCH_ICON}
+            <label class="sr-only" for="actSearch">${esc(t("act.search.label"))}</label>
+            <input type="search" id="actSearch" value="${esc(a.q)}" placeholder="${esc(t("act.search.placeholder"))}" autocomplete="off">
+          </div>
+          <div class="list-filters">
+            <label class="sr-only" for="actSupplier">${esc(t("act.filter.supplier"))}</label>
+            <select id="actSupplier">${option("", t("pur.filter.allSuppliers"), !a.supplierId)}${suppliers.map((sp) => option(sp.id, sp.name, sp.id === a.supplierId)).join("")}</select>
+            <label class="sr-only" for="actFrom">${esc(t("pur.filter.from"))}</label>
+            <input type="date" id="actFrom" value="${esc(a.from)}" title="${esc(t("pur.filter.from"))}">
+            <label class="sr-only" for="actTo">${esc(t("pur.filter.to"))}</label>
+            <input type="date" id="actTo" value="${esc(a.to)}" title="${esc(t("pur.filter.to"))}">
+            <label class="sr-only" for="actOrder">${esc(t("act.sort.label"))}</label>
+            <select id="actOrder">${option("newest", t("act.sort.newest"), a.order !== "oldest")}${option("oldest", t("act.sort.oldest"), a.order === "oldest")}</select>
+          </div>
+        </div>
+        <div class="table-wrap stock-table-wrap">
+          <table class="table stock-table act-table">
+            <thead><tr>
+              <th>${esc(t("pur.col.date"))}</th><th>${esc(t("act.col.type"))}</th><th>${esc(t("pur.col.supplier"))}</th>
+              <th>${esc(t("act.col.description"))}</th><th class="num">${esc(t("act.col.amount"))}</th>
+            </tr></thead>
+            <tbody id="actRows">${activityRowsHtml(result.rows)}</tbody>
           </table>
         </div>
       </div>`;
@@ -794,9 +1048,10 @@
     else if (ui.sup.tab === "products") body = profileProducts(sp);
     else body = profileDocuments(sp);
     return `${pageHeader(t("nav.suppliers"))}<div class="panel profile-head">
-        <div><button type="button" class="link back" data-act="sup-back"><span class="dir-arrow">←</span> ${esc(t("sup.title"))}</button>
-          <h2>${esc(sp.name)} ${sp.archived ? badge("st-cancelled", t("sup.status.archived")) : ""}</h2></div>
+        <div>${backButton("sup-back", LIST_OF.suppliers)}
+          <h2>${esc(sp.name)} ${sp.archived ? badge("st-cancelled", t("sup.status.archived")) : ""}${P.supplierStanding(sp) === "neutral" ? "" : " " + badge("standing-" + P.supplierStanding(sp), t("sup.standing." + P.supplierStanding(sp)))}</h2></div>
         <div class="actions wrap">
+          ${standingButtons(sp)}
           ${sp.archived ? "" : `<button type="button" class="btn primary" data-act="pur-new" data-id="${esc(sp.id)}">${esc(t("sup.newPurchase"))}</button>`}
           <button type="button" class="btn" data-act="sup-tab" data-tab="payments">${esc(t("spay.recordShort"))}</button>
           <button type="button" class="btn" data-act="sup-edit" data-id="${esc(sp.id)}">${esc(t("common.edit"))}</button>
@@ -888,7 +1143,7 @@
       }
     }
     s.formReady = false;
-    root.innerHTML = s.screen === "profile" ? supplierProfileHtml(supplierById(s.profileId)) : supplierListHtml();
+    root.innerHTML = s.screen === "profile" ? supplierProfileHtml(supplierById(s.profileId)) : s.screen === "activity" ? activityHtml() : supplierListHtml();
     updatePayFormSoon();
   }
 
@@ -898,11 +1153,13 @@
   }
 
   function openSupplier(id, tab) {
-    ui.sup.screen = "profile";
-    ui.sup.profileId = id;
-    ui.sup.tab = tab || "overview";
-    if (S().view !== "suppliers") h.showView("suppliers");
-    else renderSuppliers();
+    travel({ v: "suppliers", s: "profile", id }, () => {
+      ui.sup.screen = "profile";
+      ui.sup.profileId = id;
+      ui.sup.tab = tab || "overview";
+      if (S().view !== "suppliers") h.showView("suppliers");
+      else renderSuppliers();
+    });
   }
 
   // One form, three kinds of payment: for a named invoice (a direct payment), for the supplier (an advance, spread over the
@@ -1546,7 +1803,7 @@
     const ip = v.initialPayment;
     return `<form id="purchaseForm" data-form="pur-save" novalidate>
       <div class="panel">
-        <button type="button" class="link back" data-act="pur-back"><span class="dir-arrow">←</span> ${esc(t("pur.title"))}</button>
+        ${backButton("pur-back", LIST_OF.purchases)}
         <h2>${esc(t(editing ? "pur.editDraft" : "pur.newTitle"))}</h2>
         <p class="notice">${esc(t("pur.notASale"))}</p>
         <div class="grid-3">
@@ -1722,14 +1979,16 @@
   }
 
   function openPurchaseForm(values, attachments, editing) {
-    ui.pur.screen = "form";
-    ui.pur.tab = "list";
-    ui.pur.form = {
-      id: values.id, values, editing: Boolean(editing), attachments: attachments || [], pending: [], removed: [],
-      dueTouched: Boolean(values.dueDate), ready: false,
-    };
-    if (S().view !== "purchases") h.showView("purchases");
-    else renderPurchases();
+    travel(null, () => {
+      ui.pur.screen = "form";
+      ui.pur.tab = "list";
+      ui.pur.form = {
+        id: values.id, values, editing: Boolean(editing), attachments: attachments || [], pending: [], removed: [],
+        dueTouched: Boolean(values.dueDate), ready: false,
+      };
+      if (S().view !== "purchases") h.showView("purchases");
+      else renderPurchases();
+    });
   }
 
   function newPurchase(supplierId) {
@@ -1828,12 +2087,14 @@
      ========================================================================== */
 
   function openPurchase(id) {
-    ui.pur.screen = "detail";
-    ui.pur.detailId = id;
-    ui.pur.open = "";
-    ui.pur.form = null;
-    if (S().view !== "purchases") h.showView("purchases");
-    else renderPurchases();
+    travel({ v: "purchases", s: "detail", id }, () => {
+      ui.pur.screen = "detail";
+      ui.pur.detailId = id;
+      ui.pur.open = "";
+      ui.pur.form = null;
+      if (S().view !== "purchases") h.showView("purchases");
+      else renderPurchases();
+    });
   }
 
   function logLabel(entry) {
@@ -2054,7 +2315,7 @@
     actions.push(btn("pur-print", t("sup.print")));
     const info = (label, value) => (value ? `<dt>${esc(label)}</dt><dd>${value}</dd>` : "");
     return `<div class="panel profile-head">
-        <div><button type="button" class="link back" data-act="pur-back"><span class="dir-arrow">←</span> ${esc(t("pur.title"))}</button>
+        <div>${backButton("pur-back", LIST_OF.purchases)}
           <h2>${esc(p.reference)} ${statusBadge(p)} ${payBadge(p, sum)} ${deliveryBadge(p, sum)}</h2></div>
         <div class="actions wrap">${actions.join("")}</div>
       </div>
@@ -2247,7 +2508,43 @@
     "sup-add"() { ui.sup.editingId = null; ui.sup.screen = "form"; ui.sup.formReady = false; renderSuppliers(); },
     "sup-edit"(el) { ui.sup.editingId = el.dataset.id; ui.sup.screen = "form"; ui.sup.formReady = false; if (S().view !== "suppliers") h.showView("suppliers"); else renderSuppliers(); },
     "sup-open"(el) { openSupplier(el.dataset.id); },
-    "sup-back"() { ui.sup.screen = "list"; renderSuppliers(); },
+    "sup-back"() { goBack(LIST_OF.suppliers); },
+    "sup-standing"(el) {
+      const sp = supplierById(el.dataset.id);
+      if (!sp) return;
+      const wanted = el.dataset.standing;
+      const next = P.supplierStanding(sp) === wanted ? "neutral" : wanted;   // pressing the one that is on clears it
+      return act((d) => P.setSupplierStanding(d, sp.id, next), {
+        done: () => {
+          h.notify(t("sup.standing.set." + next, { name: sp.name }));
+          if (ui.sup.screen === "list") refreshSupplierRows(); else renderSuppliers();
+          const root = $("suppliersRoot");
+          const again = root && root.querySelector && root.querySelector(`[data-act="sup-standing"][data-id="${sp.id}"][data-standing="${wanted}"]`);
+          if (again && again.focus) again.focus();   // the button was redrawn: keep the keyboard where it was
+        },
+      });
+    },
+    "act-back"() { goBack(LIST_OF.suppliers); },
+    "act-type"(el) {
+      ui.act.type = el.dataset.type;
+      ui.act.limit = ACTIVITY_PAGE;
+      renderSuppliers();
+      const tabButton = $("actTab-" + ui.act.type);
+      if (tabButton && tabButton.focus) tabButton.focus();
+    },
+    "act-more"() { ui.act.limit += ACTIVITY_PAGE; refreshActivity(); },
+    // A row opens what it is about: a purchase and the payment of an invoice open that purchase, an advance opens the supplier's payments.
+    "act-open"(el) {
+      const purchaseId = el.dataset.purchase;
+      if (purchaseId && purchaseById(purchaseId)) openPurchase(purchaseId);
+      else if (el.dataset.supplier && supplierById(el.dataset.supplier)) openSupplier(el.dataset.supplier, "payments");
+    },
+    "sup-activity"() {
+      travel({ v: "suppliers", s: "activity" }, () => {
+        ui.sup.screen = "activity";
+        if (S().view !== "suppliers") h.showView("suppliers"); else renderSuppliers();
+      });
+    },
     "sup-contact-add"() { redrawContactRows(addContactRow()); },
     "sup-contact-remove"(el) { if (removeContactRow(el.dataset.row)) redrawContactRows(); },
     "sup-cancel"() { ui.sup.formReady = false; ui.sup.screen = ui.sup.editingId && supplierById(ui.sup.editingId) ? "profile" : "list"; if (ui.sup.screen === "profile") ui.sup.profileId = ui.sup.editingId; renderSuppliers(); },
@@ -2289,7 +2586,7 @@
       renderPurchases();
     },
     "pur-open"(el) { openPurchase(el.dataset.id); },
-    "pur-back"() { ui.pur.screen = "list"; ui.pur.form = null; ui.pur.open = ""; renderPurchases(); },
+    "pur-back"() { goBack(LIST_OF.purchases); },
     "pur-tab"(el) {
       ui.pur.tab = el.dataset.tab;
       if (ui.pur.tab === "reports" && !ui.pur.report.from && !ui.pur.report.to && !ui.pur.report.touched) ui.pur.report = { from: monthStart(), to: today(), productId: "", touched: true };
@@ -2311,8 +2608,10 @@
     },
     "pur-print"() { const p = purchaseById(ui.pur.detailId); if (p) printHtml(purchasePrintHtml(p), p.reference); },
     "pur-history"(el) {
-      ui.pur.screen = "list"; ui.pur.tab = "reports"; ui.pur.report = { from: "", to: "", productId: el.dataset.id, touched: true };
-      if (S().view !== "purchases") h.showView("purchases"); else renderPurchases();
+      travel({ v: "purchases", s: "list", tab: "reports" }, () => {
+        ui.pur.screen = "list"; ui.pur.tab = "reports"; ui.pur.report = { from: "", to: "", productId: el.dataset.id, touched: true };
+        if (S().view !== "purchases") h.showView("purchases"); else renderPurchases();
+      });
     },
     "pur-line-add"() {
       $("pfLines").insertAdjacentHTML("beforeend", lineHtml(blankLine()));
@@ -2435,6 +2734,7 @@
       return;
     }
     if (id === "supSearch") { ui.sup.q = el.value; refreshSupplierRows(); return; }
+    if (id === "actSearch") { ui.act.q = el.value; ui.act.limit = ACTIVITY_PAGE; refreshActivity(); return; }
     if (id === "purSearch") { ui.pur.q = el.value; refreshPurchaseList(); return; }
     if (el.closest && el.closest("#purchaseForm")) {
       ProductForm.route(e);   // typing in a new product's form (its price rows, its stock unit)
@@ -2454,6 +2754,11 @@
     if (el.classList && el.classList.contains("combo-input")) return;   // the product search only acts while it is typed in
     if (id === "supStatus") { ui.sup.status = el.value; refreshSupplierRows(); }
     else if (id === "sf-terms") { $("sf-termsCustom").disabled = el.value !== "custom"; if (el.value !== "custom") $("sf-termsCustom").value = ""; }
+    else if (id === "actSupplier" || id === "actFrom" || id === "actTo" || id === "actOrder") {
+      ui.act[{ actSupplier: "supplierId", actFrom: "from", actTo: "to", actOrder: "order" }[id]] = el.value;
+      ui.act.limit = ACTIVITY_PAGE;
+      refreshActivity();
+    }
     else if (id === "purStatus") { ui.pur.status = el.value; refreshPurchaseList(); }
     else if (id === "purPay") { ui.pur.pay = el.value; refreshPurchaseList(); }
     else if (id === "purSupplier") { ui.pur.supplierId = el.value; refreshPurchaseList(); }
@@ -2639,6 +2944,11 @@
   function render() {
     if (!h) return;
     const view = S().view;
+    // Reaching another view any way but through a button of these screens (the side menu) starts a fresh trail.
+    if (view !== ui.seenView) {
+      if (!ui.moving) ui.trail = [];
+      ui.seenView = view;
+    }
     if (view === "dashboard") renderDashboard();
     else if (view === "suppliers") renderSuppliers();
     else if (view === "purchases") renderPurchases();
@@ -2646,6 +2956,7 @@
 
   // The person pressed the menu button of the view they are already on: go back to its list (an open form is kept).
   function home(view) {
+    ui.trail = [];
     if (view === "suppliers" && ui.sup.screen !== "form") { ui.sup.screen = "list"; renderSuppliers(); }
     else if (view === "purchases" && ui.pur.screen !== "form") { ui.pur.screen = "list"; ui.pur.open = ""; renderPurchases(); }
   }
@@ -2654,6 +2965,7 @@
   function reset() {
     ui.sup.screen = "list"; ui.sup.editingId = null; ui.sup.profileId = null; ui.sup.formReady = false;
     ui.pur.screen = "list"; ui.pur.detailId = null; ui.pur.form = null; ui.pur.open = "";
+    ui.trail = []; ui.seenView = ""; ui.moving = false;
   }
 
   globalThis.PurchasesUI = {

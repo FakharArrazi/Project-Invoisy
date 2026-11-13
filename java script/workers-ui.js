@@ -64,6 +64,12 @@
     return `<header class="stock-header"><h1 class="stock-title">${esc(title)}</h1>${actions ? `<div class="page-actions">${actions}</div>` : ""}</header>`;
   }
 
+  // The same back button the Suppliers and Purchases screens use (see purchases-ui.js): an arrow and the name of where it goes.
+  const BACK_ICON = '<svg class="back-icon dir-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>';
+  function backRow(action, label) {
+    return `<div class="back-row"><button type="button" class="back-btn" data-act="${action}" title="${esc(label)}" aria-label="${esc(label)}">${BACK_ICON}<span>${esc(label)}</span></button></div>`;
+  }
+
   function showErr(id, message, fieldId) {
     const el = $(id);
     if (el) el.textContent = message || "";
@@ -327,7 +333,6 @@
     const inactive = worker.status === "inactive";
     const payable = calc.periods.some((p) => p.index <= calc.currentIndex && p._remainingCents > 0);
     const buttons = [
-      `<button type="button" class="btn" data-act="w-back">${esc(t("w.backToList"))}</button>`,
       `<button type="button" class="btn" data-act="w-edit" data-id="${esc(worker.id)}">${esc(t("w.edit"))}</button>`,
       `<button type="button" class="btn primary" data-act="w-advance"${inactive ? ` disabled title="${esc(t("w.err.inactive"))}"` : ""}>${esc(t("w.giveAdvance"))}</button>`,
       `<button type="button" class="btn primary" data-act="w-pay"${payable ? "" : ` disabled title="${esc(t("w.payNothing"))}"`}>${esc(t("w.paySalary"))}</button>`,
@@ -335,7 +340,7 @@
       `<button type="button" class="btn" data-act="w-recover"${calc.debt > 0 ? "" : ` disabled title="${esc(t("w.err.recNoDebt"))}"`}>${esc(t("w.recover"))}</button>`,
       `<button type="button" class="btn" data-act="w-status" data-status="${inactive ? "active" : "inactive"}">${esc(t(inactive ? "w.reactivate" : "w.deactivate"))}</button>`,
     ];
-    return pageHeader(worker.name, buttons.join(""));
+    return backRow("w-back", t("back.workers")) + pageHeader(worker.name, buttons.join(""));
   }
 
   /* -- Forms for a transaction (advance, salary payment, adjustment, debt recovery, correction) -- */
@@ -568,7 +573,7 @@
     if (!p) return "";
     const line = (label, value, cls) => `<tr class="${cls || ""}"><td>${esc(label)}</td><td class="num">${esc(value)}</td></tr>`;
     const other = p.adjustments;
-    return `${pageHeader(worker.name, `<button type="button" class="btn" data-act="w-period-back">${esc(t("w.backToWorker"))}</button>`)}
+    return `${backRow("w-period-back", t("back.named", { name: worker.name }))}${pageHeader(worker.name)}
       <div class="panel">
         <h2>${esc(t("w.periodTitle"))}: ${period(p)} ${periodStatus(p.status)}</h2>
         <p class="muted small">${esc(t("w.col.payday"))}: ${esc(fmtDay(p.payday))}${p.isCurrent ? " · " + esc(t("w.current")) : ""}</p>

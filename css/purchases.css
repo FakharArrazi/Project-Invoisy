@@ -54,3 +54,61 @@
 .pay-mode { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 6px 0; }
 .alloc-audit > summary, .alloc-detail > summary { cursor: pointer; }
 .alloc-detail { margin-top: 4px; }
+
+/* ----- Suppliers table: compact icon actions ----- */
+/* The two groups (the four actions, the two standing marks) stay whole: on one line when there is room, one above the other when not. */
+.icon-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px 14px; }
+.icon-group { display: inline-flex; flex-wrap: nowrap; gap: 4px; }
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 28px; height: 28px; padding: 0;
+  color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  cursor: pointer; transition: background-color .15s, border-color .15s, color .15s;
+}
+.icon-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.icon-btn:hover { color: var(--accent-dark); background: var(--accent-tint); border-color: var(--accent); }
+.icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.icon-btn.danger:hover { color: var(--danger); background: #fdecea; border-color: var(--danger); }
+.btn.with-icon { display: inline-flex; align-items: center; gap: 6px; }
+.btn.with-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ----- Supplier standing: the owner's own note (green: all good, red: needs attention), purely visual ----- */
+:root { --good: #1b6e3c; --good-bg: #eef7f1; --attention-bg: #fcf0ef; }
+.icon-btn.standing.good:hover { color: var(--good); background: var(--good-bg); border-color: var(--good); }
+.icon-btn.standing.attention:hover { color: var(--danger); background: var(--attention-bg); border-color: var(--danger); }
+.icon-btn.standing.good.is-on { color: #fff; background: var(--good); border-color: var(--good); }
+.icon-btn.standing.attention.is-on { color: #fff; background: var(--danger); border-color: var(--danger); }
+.stock-table tr.standing-good td { background: var(--good-bg); }
+.stock-table tr.standing-attention td { background: var(--attention-bg); }
+.stock-table tr.standing-good td:first-child { box-shadow: inset 3px 0 0 var(--good); }
+.stock-table tr.standing-attention td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
+.badge.standing-good { color: var(--good); }
+.badge.standing-attention { color: var(--danger); background: #fdecea; }
+.profile-head .standing-group { align-self: center; }
+
+/* ----- Supplier Activity ----- */
+.act-note { margin: 0 0 12px; }
+.badge.act-purchase { color: var(--accent-dark); }
+.badge.act-payment { color: var(--good); }
+.act-table td.date-cell { white-space: nowrap; }
+.act-table tr.clickable { cursor: pointer; }
+.act-table tr.clickable:hover td { background: #f6f8fb; }
+.act-table tr.voided td { color: var(--muted); }
+.act-table tr.voided td.num { text-decoration: line-through; }
+.act-table tr.more-row td { text-align: center; padding: 12px; }
+@media (max-width: 900px) {
+  .icon-actions { justify-content: flex-start; }
+}
+
+/* On a phone each activity row becomes a small card (date and amount on top), so nothing is hidden behind a sideways scroll. */
+@media (max-width: 700px) {
+  .act-table thead { display: none; }
+  .act-table, .act-table tbody { display: block; width: 100%; }
+  .act-table tr.clickable { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 12px 6px; border-bottom: 1px solid var(--border); }
+  .act-table tr.clickable td { display: block; min-width: 0; padding: 0; border: 0; }
+  .act-table tr.clickable td:nth-child(1) { grid-column: 1; grid-row: 1; }
+  .act-table tr.clickable td:nth-child(5) { grid-column: 2; grid-row: 1; font-weight: 700; }
+  .act-table tr.clickable td:nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
+  .act-table tr.clickable td:nth-child(3) { grid-column: 1 / -1; grid-row: 3; font-weight: 600; }
+  .act-table tr.clickable td:nth-child(4) { grid-column: 1 / -1; grid-row: 4; }
+}

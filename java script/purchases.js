@@ -184,6 +184,15 @@
   // The names of the contact persons of a supplier, each once.
   const supplierContactNames = (supplier) => [...new Set(supplierContacts(supplier).map((c) => c.name).filter(Boolean))];
 
+  /* ---------- Supplier standing ----------
+     The owner's own note on how things are with a supplier: "good" (everything is fine) or "attention" (open problems, or not
+     fully trusted). No note means neutral. It is stored as `standing` on the supplier and ONLY those two values are ever stored:
+     a supplier that was never marked, or was cleared again, keeps exactly the shape it had before this field existed.
+     It is a visual and organisational flag: no balance, payment, purchase or report reads it. */
+
+  const SUPPLIER_STANDINGS = ["good", "attention"];
+  const supplierStanding = (supplier) => (isObj(supplier) && SUPPLIER_STANDINGS.includes(supplier.standing) ? supplier.standing : "neutral");
+
   // Fills in the fields a supplier may not have. A value that is present but unusable is replaced by the
   // default here, so callers check supplierProblem() BEFORE normalizing (a restore never repairs).
   function normalizeSupplier(raw) {
@@ -205,6 +214,9 @@
     for (const key of SUPPLIER_TEXT_FIELDS) out[key] = text(raw[key]).trim();
     // The list is only there when it was saved: a supplier from before it existed keeps its exact shape.
     if (Array.isArray(raw.contacts)) out.contacts = cleanContacts(raw.contacts);
+    // Only a real standing is kept ("neutral" is the absence of the field), so an unmarked supplier keeps its exact old shape.
+    if (SUPPLIER_STANDINGS.includes(raw.standing)) out.standing = raw.standing;
+    else delete out.standing;
     return out;
   }
 
@@ -223,6 +235,7 @@
     if (s.paymentTermsDays !== undefined && (!Number.isInteger(s.paymentTermsDays) || s.paymentTermsDays < 0 || s.paymentTermsDays > MAX_TERMS_DAYS)) return t("problem.badField", { field: "paymentTermsDays" });
     if (s.creditLimit !== undefined && s.creditLimit !== null && (!isNum(s.creditLimit) || s.creditLimit < 0)) return t("problem.badField", { field: "creditLimit" });
     if (s.archived !== undefined && typeof s.archived !== "boolean") return t("problem.badField", { field: "archived" });
+    if (s.standing !== undefined && s.standing !== "neutral" && !SUPPLIER_STANDINGS.includes(s.standing)) return t("problem.badField", { field: "standing" });
     for (const key of ["archivedAt", "createdAt", "updatedAt"]) {
       if (s[key] !== undefined && s[key] !== null && s[key] !== "" && !isIso(s[key])) return t("problem.badField", { field: key });
     }
@@ -326,6 +339,20 @@
     supplier.archived = Boolean(archived);
     supplier.archivedAt = archived ? at : null;
     supplier.updatedAt = at;
+    supplier.revision = (supplier.revision || 1) + 1;
+    return { supplier };
+  }
+
+  // Sets or clears the owner's note on a supplier: "good", "attention" or "neutral" (clears it). Nothing but this one field and
+  // the supplier's own change stamp is touched; no balance, purchase or payment is read or written.
+  function setSupplierStanding(d, id, standing) {
+    const supplier = (d.suppliers || []).find((s) => s.id === id);
+    if (!supplier) return { error: t("sup.err.gone") };
+    if (standing !== "neutral" && !SUPPLIER_STANDINGS.includes(standing)) return { error: t("problem.badField", { field: "standing" }) };
+    if (supplierStanding(supplier) === standing) return { skip: true, supplier };
+    if (standing === "neutral") delete supplier.standing;
+    else supplier.standing = standing;
+    supplier.updatedAt = new Date().toISOString();
     supplier.revision = (supplier.revision || 1) + 1;
     return { supplier };
   }
@@ -1525,6 +1552,118 @@
   }
 
   /* ==========================================================================
+     SUPPLIER ACTIVITY: the purchases and the payments of every supplier as ONE list
+     ========================================================================== */
+
+  // A record's "entered into Invoisy" moment as milliseconds, or null when it has none that can be read (data from before
+  // the stamp existed). A missing moment is never made up: such a record is simply the oldest of its day.
+  const enteredAtMs = (iso) => {
+    const ms = isIso(iso) ? Date.parse(iso) : NaN;
+    return Number.isFinite(ms) ? ms : null;
+  };
+
+  // Oldest first. Two keys, in this order, and nothing else:
+  //   1. the transaction's own date (the invoice date of a purchase, the date of a payment);
+  //   2. the moment it was entered (a purchase: when it was confirmed, which is when it became a real transaction, as in
+  //      supplierLedger; a payment: when it was recorded). Editing a record never changes either stamp.
+  // Only when both are equal (a purchase and the payment made with it are saved at the very same instant) does the kind
+  // decide (the purchase first), then the record's id, so the order never depends on how the records were read from storage.
+  function compareActivity(a, b) {
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    if (a.enteredMs !== b.enteredMs) {
+      if (a.enteredMs === null) return -1;
+      if (b.enteredMs === null) return 1;
+      return a.enteredMs - b.enteredMs;
+    }
+    if (a.order !== b.order) return a.order - b.order;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  }
+
+  // One row per confirmed or cancelled purchase and one per payment made to a supplier. Nothing is created or changed here:
+  // every amount and date is the record's own.
+  //   - a draft is not a transaction yet, so it has no row;
+  //   - a cancelled purchase and a voided payment keep a row (so history is not hidden) with status "cancelled" / "voided";
+  //   - a refund received from a supplier is money coming IN, not money given, so it has no row;
+  //   - an allocation only moves a payment between invoices, it is not a payment: it has no row either.
+  //   row: { type: "purchase" | "payment", kind: "purchase" | "invoice" | "advance", id, key, date, enteredAt, enteredMs, order,
+  //          supplierId, supplierName, reference (the supplier's invoice number / the payment's reference),
+  //          ref (the purchase's own number), invoiceNumber (payments: the invoice paid), purchaseId, amount, method, note,
+  //          status: "active" | "cancelled" | "voided", lineCount (purchases) }
+  function activityRows(d) {
+    const { suppliers, purchases, payments, deposits } = dataOf(d);
+    const nameOf = new Map(suppliers.map((s) => [s.id, s.name]));
+    const byId = new Map(purchases.map((p) => [p.id, p]));
+    const rows = [];
+    for (const p of purchases) {
+      if (p.status !== "confirmed" && p.status !== "cancelled") continue;
+      const at = p.confirmedAt || p.createdAt;
+      rows.push({
+        type: "purchase", kind: "purchase", id: p.id, key: "purchase:" + p.id, order: 0,
+        date: text(p.invoiceDate), enteredAt: text(at), enteredMs: enteredAtMs(at),
+        supplierId: text(p.supplierId), supplierName: nameOf.get(p.supplierId) || "",
+        reference: text(p.supplierInvoiceNumber), ref: text(p.reference), invoiceNumber: "", purchaseId: p.id,
+        amount: toNumber(p.total), method: "", note: text(p.notes),
+        status: p.status === "cancelled" ? "cancelled" : "active", lineCount: Array.isArray(p.lines) ? p.lines.length : 0,
+      });
+    }
+    for (const x of payments) {
+      const p = byId.get(x.purchaseId);
+      rows.push({
+        type: "payment", kind: "invoice", id: x.id, key: "payment:" + x.id, order: 1,
+        date: text(x.date), enteredAt: text(x.createdAt), enteredMs: enteredAtMs(x.createdAt),
+        supplierId: text(x.supplierId), supplierName: nameOf.get(x.supplierId) || "",
+        reference: text(x.reference), ref: p ? text(p.reference) : "", invoiceNumber: p ? text(p.supplierInvoiceNumber) : "", purchaseId: text(x.purchaseId),
+        amount: toNumber(x.amount), method: text(x.method), note: text(x.note), status: x.status === "voided" ? "voided" : "active", lineCount: 0,
+      });
+    }
+    for (const x of deposits) {
+      if (x.kind === "refund") continue;
+      rows.push({
+        type: "payment", kind: "advance", id: x.id, key: "deposit:" + x.id, order: 1,
+        date: text(x.date), enteredAt: text(x.createdAt), enteredMs: enteredAtMs(x.createdAt),
+        supplierId: text(x.supplierId), supplierName: nameOf.get(x.supplierId) || "",
+        reference: text(x.reference), ref: "", invoiceNumber: "", purchaseId: "",
+        amount: toNumber(x.amount), method: text(x.method), note: text(x.note), status: x.status === "voided" ? "voided" : "active", lineCount: 0,
+      });
+    }
+    return rows;
+  }
+
+  // The Supplier Activity list: the rows above, filtered and sorted, with the totals of what is listed.
+  //   options.type       "all" | "purchases" | "payments"
+  //   options.supplierId only this supplier        options.q  supplier name, invoice or reference number
+  //   options.from / to  inclusive dates           options.order  "newest" (default) | "oldest"
+  //   -> { rows, totals: { purchases: { count, amount }, payments: { count, amount } } }
+  // The two totals are kept apart on purpose (what was bought and what was paid are not one figure) and only count rows that
+  // are in force: a cancelled purchase and a voided payment are listed, but are not in a total. No supplier balance is
+  // calculated here; the balances come from supplierSummary() as before.
+  function supplierActivity(d, options) {
+    const o = options || {};
+    const q = normText(o.q);
+    const rows = activityRows(d).filter((r) => {
+      if (o.type === "purchases" && r.type !== "purchase") return false;
+      if (o.type === "payments" && r.type !== "payment") return false;
+      if (o.supplierId && r.supplierId !== o.supplierId) return false;
+      if (o.from && r.date < o.from) return false;
+      if (o.to && r.date > o.to) return false;
+      if (q && ![r.supplierName, r.reference, r.ref, r.invoiceNumber].some((v) => normText(v).includes(q))) return false;
+      return true;
+    });
+    rows.sort(compareActivity);
+    if (o.order !== "oldest") rows.reverse();
+    const totals = { purchases: { count: 0, amount: 0 }, payments: { count: 0, amount: 0 } };
+    for (const r of rows) {
+      if (r.status !== "active") continue;
+      const sum = totals[r.type === "purchase" ? "purchases" : "payments"];
+      sum.count += 1;
+      sum.amount += r.amount;
+    }
+    totals.purchases.amount = round2(totals.purchases.amount);
+    totals.payments.amount = round2(totals.payments.amount);
+    return { rows, totals };
+  }
+
+  /* ==========================================================================
      PURCHASE OPERATIONS: draft, confirm, receive, reverse, cancel
      ========================================================================== */
 
@@ -2397,7 +2536,7 @@
     PURCHASE_STATUSES, RECEIPT_STATUSES, PAYMENT_STATUSES, DISCOUNT_TYPES, TAX_TYPES, TAX_MODES,
     ATTACHMENT_TYPES, ATTACHMENT_MAX_BYTES, REFERENCE_PREFIX, MAX_TERMS_DAYS, CONFIRMED_EDITABLE,
     isDay, toDay, addDays, daysBetween, normText, readNumber,
-    normalizeSupplier, supplierProblem, supplierContacts, supplierPhones, supplierContactNames, MAX_CONTACTS, findSupplierDuplicates, saveSupplier, setSupplierArchived, deleteSupplier, supplierHasHistory,
+    normalizeSupplier, supplierProblem, supplierContacts, supplierPhones, supplierContactNames, MAX_CONTACTS, findSupplierDuplicates, saveSupplier, setSupplierArchived, SUPPLIER_STANDINGS, supplierStanding, setSupplierStanding, deleteSupplier, supplierHasHistory,
     lineTotalOf, lineBaseQty, computeTotals, discountAmount, taxAmount, autoFactor,
     composePurchase, previewPurchase, purchaseToInput, duplicateInvoice, duplicateReference,
     normalizePurchase, purchaseProblem, purchaseWarnings, attachmentProblem, attachmentMetaProblem, attachmentMeta, withKeys, stripKeys,
@@ -2405,7 +2544,7 @@
     normalizePayment, paymentProblem, purchaseSummary, deliveryState, supplierSummary, supplierPayable,
     DEPOSIT_KINDS, DEPOSIT_STATUSES, ALLOCATION_STATUSES, PAYMENT_METHODS,
     normalizeDeposit, depositProblem, normalizeAllocation, allocationProblem, advanceTotals, depositRemaining,
-    recordDeposit, updateDeposit, voidDeposit, applyAdvance, reverseAllocation, supplierLedger, moneyOutReport,
+    recordDeposit, updateDeposit, voidDeposit, applyAdvance, reverseAllocation, supplierLedger, moneyOutReport, supplierActivity,
     openInvoices, previewAllocation, settleSupplierCredit, applyCredit, supplierPaymentHistory, purchasePaymentSources,
     saveDraft, deleteDraft, confirmPurchase, creditCheck, receiveDelivery, reverseReceipt, cancelPurchase, deletePurchase, deletionPreview, updatePurchaseDetails, setAttachmentMeta,
     recordPayment, updatePayment, voidPayment,
