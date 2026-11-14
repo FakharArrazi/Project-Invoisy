@@ -777,7 +777,7 @@ input:disabled, select:disabled, textarea:disabled { background: #f1f3f6; color:
 .att-list li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
 .file-add { display: block; margin-top: 8px; }
 .log { margin: 0; padding-left: 18px; font-size: 13px; }
-.sticky-actions { position: sticky; bottom: 0; padding: 10px 0; background: var(--bg); }
+.purchase-form-actions { padding: 10px 0; }
 .dr-line { max-width: 360px; }
 
 /* Printed supplier statements and purchase records use the invoice look; they stay hidden on screen. */

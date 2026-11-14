@@ -1867,7 +1867,7 @@
         <p class="error" id="pf-att-error" role="alert"></p>
       </div>
       <p class="error" id="pf-error" role="alert"></p>
-      <div class="actions left sticky-actions">
+      <div class="actions left purchase-form-actions">
         <button type="submit" class="btn" id="pf-saveDraft">${esc(t("pur.saveDraft"))}</button>
         <button type="button" class="btn primary" id="pf-confirm" data-act="pur-confirm-now">${esc(t("pur.confirm"))}</button>
         <button type="button" class="btn" data-act="pur-back">${esc(t("common.cancel"))}</button>

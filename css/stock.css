@@ -30,8 +30,8 @@
 .stock-form-panel .field { margin-bottom: 12px; }
 .stock-form-panel input, .stock-form-panel select { min-height: 38px; }
 
-/* Save stays reachable even when the form is taller than the screen. */
-.stock-form-actions { position: sticky; bottom: 0; z-index: 2; margin: 8px -20px -20px; padding: 14px 20px; background: var(--panel); border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; }
+/* The button row closes the form panel, flush with its edges, and scrolls with the page like the fields above it. */
+.stock-form-actions { margin: 8px -20px -20px; padding: 14px 20px; background: var(--panel); border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; }
 .stock-form-actions .btn { min-height: 42px; padding: 0 24px; font-size: 15px; }
 .stock-form-actions .btn.primary { font-weight: 600; }
 /* "Save as New Product": same size as its neighbours, in the accent colour but not filled, so it is not mistaken for Save or Cancel. */
