@@ -386,12 +386,12 @@ test("deposits and allocations persist, reload and keep their order after a reop
   assert.equal(P.supplierPayable(all, all.suppliers[0].id, day(0)).unapplied, 120000);
 });
 
-test("the database refuses to delete a deposit, to apply more than a deposit holds, or to overpay an invoice", async () => {
+test("the database refuses to delete a deposit and leave its allocations behind, to apply more than a deposit holds, or to overpay an invoice", async () => {
   const db = await seeded();
   await change(db, (d) => { P.recordDeposit(d, { id: "dep-1", supplierId: d.suppliers[0].id, amount: "10000", date: day(0) }); });
   await change(db, (d) => { confirmed(d, 20, {}); });   // 20,000 invoice: the 10,000 deposit is applied to it by itself
 
-  await assert.rejects(change(db, (d) => { d.supplierDeposits = []; }), /deposit/i, "a deposit is never deleted");
+  await assert.rejects(change(db, (d) => { d.supplierDeposits = []; }), /together with the advance applied from it/, "a deposit goes only together with the allocations drawn from it");
 
   const forged = (amount) => (d) => {
     const p = d.purchases[0];
@@ -399,7 +399,7 @@ test("the database refuses to delete a deposit, to apply more than a deposit hol
   };
   assert.equal((await db.loadAll()).advanceAllocations.length, 1, "the deposit was applied by confirming the purchase");
   await assert.rejects(change(db, forged(1)), "the deposit holds nothing more: applying more is refused");
-  await assert.rejects(change(db, (d) => { d.advanceAllocations = []; }), "an allocation is only removed with its purchase");
+  await assert.rejects(change(db, (d) => { d.advanceAllocations = []; }), /together with its purchase or with its deposit/, "an allocation is only removed with its purchase or its deposit");
   await assert.rejects(change(db, (d) => { d.supplierDeposits[0].status = "voided"; d.supplierDeposits[0].voidedAt = new Date().toISOString(); d.supplierDeposits[0].voidReason = "x"; }), "a voided deposit can not have applied allocations");
   await assert.rejects(change(db, (d) => { d.suppliers = []; }));
 });

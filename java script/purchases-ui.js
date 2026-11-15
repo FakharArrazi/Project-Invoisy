@@ -28,7 +28,7 @@
   const PAY_FILTERS = ["all", "unpaid", "partial", "paid", "overdue"];
 
   const ui = {
-    sup: { screen: "list", q: "", status: "active", sortKey: "name", sortDir: 1, editingId: null, profileId: null, tab: "overview", formReady: false, formLang: "", contactRows: [], depositNonce: "", editDepositId: "", voidDepositId: "", payMode: "advance" },
+    sup: { screen: "list", q: "", status: "active", sortKey: "name", sortDir: 1, editingId: null, profileId: null, tab: "overview", formReady: false, formLang: "", contactRows: [], depositNonce: "", editDepositId: "", voidDepositId: "", deleteKey: "", payMode: "advance" },
     pur: {
       screen: "list", tab: "list", q: "", status: "all", pay: "all", supplierId: "", from: "", to: "", sortKey: "date", sortDir: -1,
       detailId: null, open: "", form: null, formLang: "",
@@ -886,6 +886,8 @@
         <p class="error" id="dvError" role="alert"></p>
         <div class="actions left"><button type="submit" class="btn danger">${esc(t("dep.voidBtn"))}</button><button type="button" class="btn" data-act="sup-dep-cancel">${esc(t("common.cancel"))}</button></div></form></td></tr>`;
     }
+    const deleteKind = x.kind === "invoice" ? "payment" : "deposit";
+    if (ui.sup.deleteKey === deleteKind + ":" + x.id) return `<tr><td colspan="7">${deleteConfirmHtml(deleteKind, x.id, "sup-pay-delete-cancel")}</td></tr>`;
     const was = (x.history || []).map((hh) => `<div class="muted small">${esc(t("spay.was", { amount: money(hh.amount), date: fmtDay(hh.date) }))}</div>`).join("");
     let forWhat, details = "", actions = "";
     if (x.kind === "invoice") {
@@ -904,9 +906,14 @@
           `<div class="small${a.status === "reversed" ? " voided" : ""}">${esc(fmtDay(a.date))} · ${a.purchaseId ? `<button type="button" class="link" data-act="pur-open" data-id="${esc(a.purchaseId)}">${esc(a.ref)}</button>` : ""} · ${esc(money(a.amount))}${a.status === "reversed" ? " · " + esc(t("adv.reversed")) : ""}</div>`).join("")}</details>`;
       }
     }
+    // Void keeps the record (greyed); Delete removes it for good. Both are offered on a deposit; a payment for an invoice is
+    // voided or corrected on the invoice's page, and can be deleted here or there.
+    const deleteBtn = `<button type="button" class="btn small danger" data-act="sup-pay-delete" data-kind="${deleteKind}" data-id="${esc(x.id)}">${esc(t("common.delete"))}</button>`;
     if (x.kind !== "invoice" && !voided) {
       actions = `<div class="row-actions"><button type="button" class="btn small" data-act="sup-dep-edit" data-id="${esc(x.id)}">${esc(t("common.edit"))}</button>
-        <button type="button" class="btn small danger" data-act="sup-dep-void" data-id="${esc(x.id)}">${esc(t("spay.void"))}</button></div>`;
+        <button type="button" class="btn small danger" data-act="sup-dep-void" data-id="${esc(x.id)}">${esc(t("spay.void"))}</button>${deleteBtn}</div>`;
+    } else {
+      actions = `<div class="row-actions">${deleteBtn}</div>`;
     }
     const state = voided ? badge("st-cancelled", t("spay.voided")) : "";
     return `<tr${voided ? ' class="voided"' : ""}>
@@ -915,6 +922,31 @@
       <td>${esc(x.method ? methodName(x.method) : "")}</td>
       <td>${esc(x.reference)}${x.note ? `<div class="muted small">${esc(x.note)}</div>` : ""}${was}${voided ? `<div class="small">${esc(t("spay.voidedBecause", { reason: x.voidReason }))}</div>` : ""}</td>
       <td>${state}${details}</td><td class="num">${actions}</td></tr>`;
+  }
+
+  // The question asked before a payment is deleted for good. Not a void: nothing is kept afterwards.
+  //   kind: "payment" (made for an invoice) | "deposit" (an advance or a refund). cancelAct: the data-act that closes it.
+  function deleteConfirmHtml(kind, id, cancelAct) {
+    return `<div class="delete-confirm" role="alertdialog" aria-labelledby="delTitle-${esc(id)}" aria-describedby="delBody-${esc(id)}">
+      <p id="delTitle-${esc(id)}"><strong>${esc(t("spay.deleteTitle"))}</strong></p>
+      <p id="delBody-${esc(id)}">${esc(t("spay.deleteBody"))}</p>
+      <div class="actions left"><button type="button" class="btn" data-act="${cancelAct}">${esc(t("common.cancel"))}</button>
+        <button type="button" class="btn danger" data-act="pay-delete-confirm" data-kind="${kind}" data-id="${esc(id)}">${esc(t("spay.deleteBtn"))}</button></div></div>`;
+  }
+
+  // Permanently deletes a supplier payment (see Purchases.deletePayment / deleteDeposit): ONE transaction removes the record,
+  // everything that depended on it, and nothing is kept. A payment that is already gone is only reported. If the change is
+  // refused (for example refunds depend on the advance) nothing was saved and the question stays open with the reason.
+  function removePayment(kind, id) {
+    return act((d) => (kind === "deposit" ? P.deleteDeposit(d, id) : P.deletePayment(d, id)), {
+      done: (r) => {
+        h.notify(t(r.already ? "spay.deleteAlready" : "spay.deletedDone"));
+        ui.sup.deleteKey = "";
+        ui.sup.editDepositId = ""; ui.sup.voidDepositId = "";
+        if (ui.pur.open && ui.pur.open.startsWith("deletePay:")) ui.pur.open = "";
+        if (S().view === "suppliers") renderSuppliers(); else renderPurchases();
+      },
+    });
   }
 
   // What is chosen in the payment form: the kind of payment, and for a payment on an invoice, which invoice (and what it still needs).
@@ -2143,13 +2175,15 @@
           <p class="error" id="dv-error" role="alert"></p>
           <div class="actions left"><button type="submit" class="btn danger">${esc(t("spay.voidBtn"))}</button><button type="button" class="btn" data-act="pur-close-panel">${esc(t("common.cancel"))}</button></div></form></td></tr>`;
       }
+      if (open === "deletePay:" + x.id) return `<tr><td colspan="5">${deleteConfirmHtml("payment", x.id, "pur-close-panel")}</td></tr>`;
       const was = (x.history || []).map((hh) => `<div class="muted small">${esc(t("spay.was", { amount: money(hh.amount), date: fmtDay(hh.date) }))}</div>`).join("");
+      const deletePayBtn = `<button type="button" class="btn small danger" data-act="pur-panel" data-panel="deletePay:${esc(x.id)}">${esc(t("common.delete"))}</button>`;
       return `<tr${x.status === "voided" ? ' class="voided"' : ""}>
         <td>${esc(fmtDay(x.date))}</td><td class="num">${esc(money(x.amount))}</td>
         <td>${esc([x.method ? methodName(x.method) : "", x.reference].filter(Boolean).join(" · "))}${x.note ? `<div class="muted small">${esc(x.note)}</div>` : ""}${was}${x.status === "voided" ? `<div class="small">${esc(t("spay.voidedBecause", { reason: x.voidReason }))}</div>` : ""}</td>
         <td>${x.status === "voided" ? badge("st-cancelled", t("spay.voided")) : ""}</td>
         <td class="num">${x.status === "recorded" && p.status === "confirmed" ? `<div class="row-actions"><button type="button" class="btn small" data-act="pur-panel" data-panel="editPay:${esc(x.id)}">${esc(t("common.edit"))}</button>
-          <button type="button" class="btn small danger" data-act="pur-panel" data-panel="voidPay:${esc(x.id)}">${esc(t("spay.void"))}</button></div>` : ""}</td></tr>`;
+          <button type="button" class="btn small danger" data-act="pur-panel" data-panel="voidPay:${esc(x.id)}">${esc(t("spay.void"))}</button>${deletePayBtn}</div>` : `<div class="row-actions">${deletePayBtn}</div>`}</td></tr>`;
     }).join("");
     const payForm = open === "pay" ? `<div class="subpanel">${paymentFormHtml("pur-pay", null, sum)}</div>` : "";
     const pool = P.advanceTotals(p.supplierId, S().supplierDeposits, S().advanceAllocations).unapplied;
@@ -2554,7 +2588,7 @@
       else { ui.sup.sortKey = key; ui.sup.sortDir = key === "name" ? 1 : -1; }
       renderSuppliers();
     },
-    "sup-tab"(el) { ui.sup.tab = el.dataset.tab; ui.sup.editDepositId = ""; ui.sup.voidDepositId = ""; renderSuppliers(); },
+    "sup-tab"(el) { ui.sup.tab = el.dataset.tab; ui.sup.editDepositId = ""; ui.sup.voidDepositId = ""; ui.sup.deleteKey = ""; renderSuppliers(); },
     "sup-deposit"(el) { ui.sup.payMode = "advance"; openSupplier(el.dataset.id, "payments"); },
     "sup-pay-full"() {
       const sp = supplierById(ui.sup.profileId);
@@ -2564,9 +2598,12 @@
     "sup-apply-credit"(el) {
       return act((d) => P.applyCredit(d, el.dataset.id), { done: (r) => { h.notify(t("adv.creditApplied", { allocated: money(r.allocated || 0), credit: money(r.credit || 0) })); renderSuppliers(); } });
     },
-    "sup-dep-edit"(el) { ui.sup.editDepositId = el.dataset.id; ui.sup.voidDepositId = ""; renderSuppliers(); },
-    "sup-dep-void"(el) { ui.sup.voidDepositId = el.dataset.id; ui.sup.editDepositId = ""; renderSuppliers(); },
+    "sup-dep-edit"(el) { ui.sup.editDepositId = el.dataset.id; ui.sup.voidDepositId = ""; ui.sup.deleteKey = ""; renderSuppliers(); },
+    "sup-dep-void"(el) { ui.sup.voidDepositId = el.dataset.id; ui.sup.editDepositId = ""; ui.sup.deleteKey = ""; renderSuppliers(); },
     "sup-dep-cancel"() { ui.sup.editDepositId = ""; ui.sup.voidDepositId = ""; renderSuppliers(); },
+    "sup-pay-delete"(el) { ui.sup.deleteKey = el.dataset.kind + ":" + el.dataset.id; ui.sup.editDepositId = ""; ui.sup.voidDepositId = ""; renderSuppliers(); },
+    "sup-pay-delete-cancel"() { ui.sup.deleteKey = ""; renderSuppliers(); },
+    "pay-delete-confirm"(el) { return removePayment(el.dataset.kind, el.dataset.id); },
     "sup-save-anyway"() { return submitSupplier(true); },
     "sup-archive"(el) { return archiveSupplier(el.dataset.id); },
     "sup-delete"(el) { return removeSupplier(el.dataset.id); },

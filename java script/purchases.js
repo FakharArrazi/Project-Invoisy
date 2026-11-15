@@ -1249,7 +1249,7 @@
             a.status = "reversed"; a.reversedAt = at; a.reverseReason = t("adv.reason.depositEdited");
             reversed.push(a);
             const purchase = ctx.purchases.find((p) => p.id === a.purchaseId);
-            if (purchase) { touch(purchase, ctx); logEvent(purchase, "advanceReversed", ctx, { amount: a.amount, note: t("adv.reason.depositEdited") }); }
+            if (purchase) { touch(purchase, ctx); logEvent(purchase, "advanceReversed", ctx, { amount: a.amount, note: t("adv.reason.depositEdited"), allocationIds: [a.id] }); }
           }
         }
       }
@@ -1286,7 +1286,7 @@
           a.status = "reversed"; a.reversedAt = at; a.reverseReason = t("adv.reason.depositVoided", { reason: why });
           reversed.push(a);
           const purchase = ctx.purchases.find((p) => p.id === a.purchaseId);
-          if (purchase) { touch(purchase, ctx); logEvent(purchase, "advanceReversed", ctx, { amount: a.amount, note: why }); }
+          if (purchase) { touch(purchase, ctx); logEvent(purchase, "advanceReversed", ctx, { amount: a.amount, note: why, allocationIds: [a.id] }); }
         }
         const totals = advanceTotals(deposit.supplierId, d.supplierDeposits || [], d.advanceAllocations || []);
         if (round2(totals.unapplied - deposit.amount) < -1e-9) return { error: t("dep.err.refundsDepend") };
@@ -1297,6 +1297,108 @@
       deposit.updatedAt = at;
       const settled = settleSupplierCredit(d, deposit.supplierId, options);
       return { deposit, reversed, ...creditReport(d, deposit.supplierId, settled.allocations) };
+    });
+  }
+
+  /* ---------- Permanent deletion of a payment ----------
+     Void keeps the record (greyed, with its reason). DELETE does not: the record is removed from the data, together with
+     everything that exists only because of it, so afterwards it is as if it had never been entered:
+       - an invoice payment: the payment record;
+       - an advance or a refund (a deposit): the record, EVERY allocation drawn from it (applied or reversed, since an
+         allocation has no meaning without its deposit) and the lines in the purchases' own history that described those
+         allocations ("Advance applied", "Advance released").
+     Nothing else is touched: purchases, stock, products, suppliers, other payments, other voided records. No "deleted"
+     status, no copy and no log of the deletion is kept. Balances are never stored, so they are simply worked out again
+     from what remains; credit the supplier still holds is then spread over the invoices that became open again.
+     Both run on the data draft like every other operation and are saved by commit() in ONE transaction (allOrNothing puts
+     everything back if a step is refused). Deleting something that is already gone only reports it. */
+
+  const LOG_MATCH_MS = 5000;
+
+  // Takes out of a purchase's own history the lines that describe the removed allocations.
+  //   - A line written by this version names the allocations it describes (allocationIds). When all of them are removed the
+  //     line goes; when it also covers allocations of another deposit that stay, only the removed part is taken off it.
+  //   - A line written before the ids existed names nothing, so it is matched conservatively: same event, exactly the amount
+  //     of the removed allocation(s) it described, written within a few seconds of them. Anything not matched
+  //     beyond doubt is left as it is: a line is never removed on a guess.
+  function pruneAdvanceLog(purchase, removed) {
+    const log = Array.isArray(purchase.log) ? purchase.log : [];
+    if (!log.length || !removed.length) return 0;
+    const gone = new Map(removed.map((a) => [a.id, a]));
+    const linked = new Set();
+    for (const e of log) for (const id of Array.isArray(e.allocationIds) ? e.allocationIds : []) linked.add(id);
+    let changed = 0;
+    let next = [];
+    for (const e of log) {
+      const ids = Array.isArray(e.allocationIds) ? e.allocationIds : [];
+      const hit = ids.filter((id) => gone.has(id));
+      if (!hit.length) { next.push(e); continue; }
+      changed++;
+      const rest = ids.filter((id) => !gone.has(id));
+      if (!rest.length) continue;
+      const takenOff = round2(hit.reduce((s, id) => s + toNumber(gone.get(id).amount), 0));
+      next.push({ ...e, amount: round2(toNumber(e.amount) - takenOff), allocationIds: rest });
+    }
+    // Lines from before the ids: one "applied" line per group of allocations made at the same instant, one "released" line per allocation.
+    const old = removed.filter((a) => !linked.has(a.id));
+    const takeLine = (event, amount, at) => {
+      const target = Date.parse(at);
+      if (!Number.isFinite(target)) return;
+      let best = -1, bestGap = Infinity;
+      next.forEach((e, i) => {
+        if (e.event !== event || (Array.isArray(e.allocationIds) && e.allocationIds.length) || Math.abs(toNumber(e.amount) - amount) > 1e-9) return;
+        const gap = Math.abs(Date.parse(e.at) - target);
+        if (gap <= LOG_MATCH_MS && gap < bestGap) { best = i; bestGap = gap; }
+      });
+      if (best >= 0) { next = next.filter((_, i) => i !== best); changed++; }
+    };
+    const groups = new Map();
+    for (const a of old) groups.set(a.createdAt, round2((groups.get(a.createdAt) || 0) + toNumber(a.amount)));
+    for (const [at, amount] of groups) takeLine("advanceApplied", amount, at);
+    for (const a of old) if (a.status === "reversed" && a.reversedAt) takeLine("advanceReversed", round2(toNumber(a.amount)), a.reversedAt);
+    if (changed) purchase.log = next;
+    return changed;
+  }
+
+  // Permanently deletes ONE invoice payment (a record of supplierPayments), voided or not. The invoice is open again for that
+  // amount, and credit the supplier holds is applied to it like to any other open invoice.
+  function deletePayment(d, paymentId, options) {
+    const payment = (d.supplierPayments || []).find((p) => p.id === paymentId);
+    if (!payment) return { skip: true, already: true };
+    return allOrNothing(d, () => {
+      d.supplierPayments = d.supplierPayments.filter((p) => p.id !== paymentId);
+      const settled = settleSupplierCredit(d, payment.supplierId, options);
+      return { payment, allocations: settled.allocations };
+    });
+  }
+
+  // Permanently deletes ONE advance or refund (a record of supplierDeposits), voided or not, with every allocation drawn from
+  // it and the history lines about them. The invoices it had paid are open again; whatever the supplier's OTHER deposits
+  // still hold is applied to them, oldest first. Refused, changing nothing, when refunds were made out of this money (the
+  // supplier's unapplied deposits would go below zero), exactly as voiding is.
+  function deleteDeposit(d, depositId, options) {
+    const deposit = (d.supplierDeposits || []).find((x) => x.id === depositId);
+    if (!deposit) return { skip: true, already: true };
+    const ctx = ctxOf(d, options);
+    return allOrNothing(d, () => {
+      const mine = (d.advanceAllocations || []).filter((a) => a.depositId === depositId);
+      const byPurchase = new Map();
+      for (const a of mine) byPurchase.set(a.purchaseId, [...(byPurchase.get(a.purchaseId) || []), a]);
+      for (const [purchaseId, list] of byPurchase) {
+        const purchase = ctx.purchases.find((p) => p.id === purchaseId);
+        if (!purchase) continue;
+        pruneAdvanceLog(purchase, list);
+        touch(purchase, ctx);
+      }
+      const gone = new Set(mine.map((a) => a.id));
+      d.advanceAllocations = (d.advanceAllocations || []).filter((a) => !gone.has(a.id));
+      d.supplierDeposits = d.supplierDeposits.filter((x) => x.id !== depositId);
+      if (deposit.kind !== "refund" && deposit.status !== "voided") {
+        const totals = advanceTotals(deposit.supplierId, d.supplierDeposits, d.advanceAllocations);
+        if (totals.unapplied < -1e-9) return { error: t("dep.err.refundsDepend") };
+      }
+      const settled = settleSupplierCredit(d, deposit.supplierId, options);
+      return { deposit, removedAllocations: mine.length, ...creditReport(d, deposit.supplierId, settled.allocations) };
     });
   }
 
@@ -1355,7 +1457,7 @@
       made.push(...done.allocations);
       amount = round2(amount + take);
       touch(purchase, ctx);
-      logEvent(purchase, "advanceApplied", ctx, { amount: take, auto: true });
+      logEvent(purchase, "advanceApplied", ctx, { amount: take, auto: true, allocationIds: done.allocations.map((a) => a.id) });
     }
     return { allocations: made, amount };
   }
@@ -1434,7 +1536,7 @@
     const done = allocateAdvance(d, purchase, value, ctx);
     if (done.error) return done;
     touch(purchase, ctx);
-    logEvent(purchase, "advanceApplied", ctx, { amount: value });
+    logEvent(purchase, "advanceApplied", ctx, { amount: value, allocationIds: done.allocations.map((a) => a.id) });
     return { allocations: done.allocations, amount: value };
   }
 
@@ -1452,7 +1554,7 @@
     allocation.reversedAt = isoOf(ctx);
     allocation.reverseReason = why;
     const purchase = ctx.purchases.find((p) => p.id === allocation.purchaseId);
-    if (purchase) { touch(purchase, ctx); logEvent(purchase, "advanceReversed", ctx, { amount: allocation.amount, note: why }); }
+    if (purchase) { touch(purchase, ctx); logEvent(purchase, "advanceReversed", ctx, { amount: allocation.amount, note: why, allocationIds: [allocation.id] }); }
     return { allocation };
   }
 
@@ -1872,7 +1974,7 @@
         const done = allocateAdvance(d, purchase, next.advanceApply, fresh);
         if (done.error) return { error: done.error, field: "advanceApply" };
         allocations = done.allocations;
-        logEvent(purchase, "advanceApplied", ctx, { amount: next.advanceApply });
+        logEvent(purchase, "advanceApplied", ctx, { amount: next.advanceApply, allocationIds: allocations.map((a) => a.id) });
       }
       // Then whatever credit the supplier still holds is used on the invoices that are open, oldest first. This purchase is
       // confirmed now, so it takes part; its initial payment has already been recorded above, so the money is not counted
@@ -2547,7 +2649,7 @@
     recordDeposit, updateDeposit, voidDeposit, applyAdvance, reverseAllocation, supplierLedger, moneyOutReport, supplierActivity,
     openInvoices, previewAllocation, settleSupplierCredit, applyCredit, supplierPaymentHistory, purchasePaymentSources,
     saveDraft, deleteDraft, confirmPurchase, creditCheck, receiveDelivery, reverseReceipt, cancelPurchase, deletePurchase, deletionPreview, updatePurchaseDetails, setAttachmentMeta,
-    recordPayment, updatePayment, voidPayment,
+    recordPayment, updatePayment, voidPayment, deletePayment, deleteDeposit,
     linkProblems,
     purchasesInPeriod, periodReport, outstandingReport, purchasesBySupplier, productHistory, latestPurchasePrice, supplierProducts, priceInsights, PRICE_MODERATE_PCT, PRICE_HIGH_PCT, matchProducts, paymentsReport, overview,
   };

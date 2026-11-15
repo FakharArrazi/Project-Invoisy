@@ -651,7 +651,7 @@
       const transferChanges = changes.debtTransfers || {};
       const transfers = tx.objectStore(DEBT_TRANSFERS);
 
-      await guardSupplierSide(tx, { supplierChanges, purchaseChanges, paymentChanges, depositChanges, allocationChanges });
+      const removedTouch = await guardSupplierSide(tx, { supplierChanges, purchaseChanges, paymentChanges, depositChanges, allocationChanges });
       // A worker is never deleted (the history of what the shop paid and advanced can not be lost): it is set inactive.
       if ((workerChanges.remove || []).length) throw invalid([t("db.cannotDeleteWorker")]);
 
@@ -686,7 +686,7 @@
         const keys = await req(tx.objectStore(ATTACHMENTS).index("purchaseId").getAllKeys(id));
         for (const key of keys) tx.objectStore(ATTACHMENTS).delete(key);
       }
-      await checkSupplierLinks(tx, { supplierChanges, purchaseChanges, paymentChanges, depositChanges, allocationChanges, attachmentChanges });
+      await checkSupplierLinks(tx, { supplierChanges, purchaseChanges, paymentChanges, depositChanges, allocationChanges, attachmentChanges }, removedTouch);
       // Payroll: transactions are written after their worker, and each one must point at a worker that exists.
       const workerStore = tx.objectStore(WORKERS);
       const workerTxStore = tx.objectStore(WORKER_TRANSACTIONS);
@@ -740,28 +740,42 @@
 
     /* -- The supplier side of a write: what may never happen, checked before anything is written -- */
 
+    // Returns what the removals touch, { suppliers, purchases } (ids), so checkSupplierLinks can re-check their totals after the writes.
     async function guardSupplierSide(tx, { supplierChanges, purchaseChanges, paymentChanges, depositChanges, allocationChanges }) {
       const purchases = tx.objectStore(PURCHASES);
       const payments = tx.objectStore(SUPPLIER_PAYMENTS);
       const depositStore = tx.objectStore(SUPPLIER_DEPOSITS);
       const allocationStore = tx.objectStore(ADVANCE_ALLOCATIONS);
+      const removedTouch = { suppliers: new Set(), purchases: new Set() };
 
-      // A deposit is never deleted (it is voided), so the history of money given to a supplier can not be lost. An
-      // allocation is only removed together with the purchase it was applied to.
+      // A payment, a deposit (advance or refund) and an allocation CAN be deleted for good (Purchases.deletePayment /
+      // deleteDeposit). What may never happen is a record left pointing at something that is gone:
+      //   - a deposit only goes together with every allocation drawn from it;
+      //   - an allocation only goes together with the purchase it was applied to, or with its deposit.
+      // Whatever a removal touches is checked again after the writes (checkSupplierLinks), inside the same transaction.
       const removingPurchasesNow = new Set(purchaseChanges.remove || []);
-      if ((depositChanges.remove || []).length) throw invalid([t("db.cannotDeleteDeposit")]);
-      for (const id of allocationChanges.remove || []) {
+      const removingDepositsNow = new Set(depositChanges.remove || []);
+      const removingAllocationsNow = new Set(allocationChanges.remove || []);
+      for (const id of removingDepositsNow) {
+        const stored = await req(depositStore.get(id));
+        if (!stored) continue;
+        const keys = await req(allocationStore.index("depositId").getAllKeys(id));
+        if (keys.some((key) => !removingAllocationsNow.has(key))) throw invalid([t("db.depositHasAllocations")]);
+        removedTouch.suppliers.add(stored.supplierId);
+      }
+      for (const id of removingAllocationsNow) {
         const stored = await req(allocationStore.get(id));
-        if (stored && !removingPurchasesNow.has(stored.purchaseId)) throw invalid([t("db.cannotDeleteAllocation")]);
+        if (!stored) continue;
+        if (!removingPurchasesNow.has(stored.purchaseId) && !removingDepositsNow.has(stored.depositId)) throw invalid([t("db.cannotDeleteAllocation")]);
+        if (!removingPurchasesNow.has(stored.purchaseId)) { removedTouch.purchases.add(stored.purchaseId); removedTouch.suppliers.add(stored.supplierId); }
       }
 
-      // A payment is never deleted on its own (it is voided), so the history of what was paid can not be lost.
-      // It only goes together with the purchase it was made for, when that whole purchase is deleted.
+      // A payment can be deleted on its own. When its whole purchase is deleted the payments go with it (checked below).
       const removingPurchases = new Set(purchaseChanges.remove || []);
       const removingPayments = new Set(paymentChanges.remove || []);
       for (const id of removingPayments) {
         const stored = await req(payments.get(id));
-        if (stored && !removingPurchases.has(stored.purchaseId)) throw invalid([t("db.cannotDeletePayment")]);
+        if (stored && !removingPurchases.has(stored.purchaseId)) { removedTouch.purchases.add(stored.purchaseId); removedTouch.suppliers.add(stored.supplierId); }
       }
 
       // A draft purchase may be deleted. A confirmed or cancelled one is a financial record: it may only be deleted
@@ -817,6 +831,7 @@
           throw new DbError("CONSTRAINT", t(label, { value: field === "invoiceKey" ? keyed.supplierInvoiceNumber : keyed.reference }));
         }
       }
+      return removedTouch;
     }
 
     function writeSupplierSide(tx, { supplierChanges, purchaseChanges, paymentChanges, depositChanges, allocationChanges, attachmentChanges }) {
@@ -829,6 +844,7 @@
       for (const id of purchaseChanges.remove || []) purchases.delete(id);
       for (const id of paymentChanges.remove || []) payments.delete(id);
       for (const id of allocationChanges.remove || []) allocationStore.delete(id);
+      for (const id of depositChanges.remove || []) depositStore.delete(id);
       for (const id of supplierChanges.remove || []) suppliers.delete(id);
       for (const s of supplierChanges.put || []) suppliers.put(s);
       // Purchases that carry no unique keys go first, so a cancelled purchase frees its numbers before another uses them.
@@ -842,7 +858,7 @@
     }
 
     // After the writes (still inside the transaction): every link must point at something that exists.
-    async function checkSupplierLinks(tx, { supplierChanges, purchaseChanges, paymentChanges, depositChanges, allocationChanges, attachmentChanges }) {
+    async function checkSupplierLinks(tx, { supplierChanges, purchaseChanges, paymentChanges, depositChanges, allocationChanges, attachmentChanges }, removedTouch) {
       const suppliers = tx.objectStore(SUPPLIERS);
       const purchases = tx.objectStore(PURCHASES);
       const payments = tx.objectStore(SUPPLIER_PAYMENTS);
@@ -860,7 +876,8 @@
       }
       // Deposits and allocations: every link points at something that exists, and for the suppliers and purchases this
       // change touches the numbers still add up (read back from the database, inside this transaction).
-      const touchedSuppliers = new Set();
+      const touchedSuppliers = new Set(removedTouch ? removedTouch.suppliers : []);
+      for (const id of removedTouch ? removedTouch.purchases : []) touched.add(id);
       for (const x of depositChanges.put || []) {
         if ((await req(suppliers.getKey(x.supplierId))) === undefined) throw invalid([t("db.supplierGone")]);
         touchedSuppliers.add(x.supplierId);

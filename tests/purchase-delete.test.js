@@ -305,7 +305,7 @@ test("db: a second delete of the same purchase writes nothing", async () => {
   assert.equal(last.products[0].stock, 10);
 });
 
-test("db: a payment is never deleted on its own, and a purchase is never deleted with some of its payments left behind", async () => {
+test("db: a payment can be deleted on its own, but a purchase is never deleted with some of its payments left behind", async () => {
   const db = await openedDb();
   await change(db, (d) => { d.products.push(tile()); return P.saveSupplier(d, supplierInput()); });
   await change(db, (d) => confirmed(d, { initialPayment: { amount: "1000" } }) && {});
@@ -314,15 +314,19 @@ test("db: a payment is never deleted on its own, and a purchase is never deleted
   const all = await db.loadAll();
   const [p1, p2] = all.supplierPayments;
   const opts = { expectedRevision: all.revision };
-  await assert.rejects(db.commitChanges({ supplierPayments: { put: [], remove: [p1.id] } }, opts), /never deleted on its own/);
   await assert.rejects(db.commitChanges({ purchases: { put: [], remove: [pid] }, supplierPayments: { put: [], remove: [p1.id] } }, opts), /only be deleted together with all its payments/);
   await assert.rejects(db.commitChanges({ purchases: { put: [], remove: [pid] } }, opts), /only be deleted together/);
   const same = await db.loadAll();
   assert.equal(same.purchases.length, 1);
   assert.equal(same.supplierPayments.length, 2);
   assert.equal(same.revision, all.revision, "none of the refused writes changed anything");
-  // Together with ALL its payments it is accepted.
-  await db.commitChanges({ purchases: { put: [], remove: [pid] }, supplierPayments: { put: [], remove: [p1.id, p2.id] } }, opts);
+  // A payment on its own can be deleted for good (Purchases.deletePayment); the purchase stays with the other one.
+  const one = await db.commitChanges({ supplierPayments: { put: [], remove: [p1.id] } }, opts);
+  const fewer = await db.loadAll();
+  assert.equal(fewer.purchases.length, 1);
+  assert.deepEqual(fewer.supplierPayments.map((x) => x.id), [p2.id]);
+  // Together with ALL its payments the purchase is accepted.
+  await db.commitChanges({ purchases: { put: [], remove: [pid] }, supplierPayments: { put: [], remove: [p2.id] } }, { expectedRevision: one.revision });
   const gone = await db.loadAll();
   assert.equal(gone.purchases.length + gone.supplierPayments.length, 0);
 });

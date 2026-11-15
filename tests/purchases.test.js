@@ -693,7 +693,7 @@ test("db: two purchases with the same supplier invoice number are refused even i
   assert.equal((await change(db, (d) => P.saveDraft(d, purchaseInput(d, { supplierId: other, supplierInvoiceNumber: "FA-1" })))).error, undefined);
 });
 
-test("db: payments are never deleted, a confirmed purchase is never deleted or turned back into a draft, and overpayment is refused", async () => {
+test("db: a confirmed purchase is never deleted with payments left behind or turned back into a draft, and overpayment is refused", async () => {
   const db = await openedDb();
   await change(db, (d) => { d.products.push(tile()); return P.saveSupplier(d, supplierInput()); });
   const made = await change(db, (d) => {
@@ -703,7 +703,6 @@ test("db: payments are never deleted, a confirmed purchase is never deleted or t
   assert.equal(made.error, undefined);
   const all = await db.loadAll();
   const pay = all.supplierPayments[0];
-  await assert.rejects(db.commitChanges({ supplierPayments: { put: [], remove: [pay.id] } }, { expectedRevision: all.revision }), /never deleted/);
   await assert.rejects(db.commitChanges({ purchases: { put: [], remove: [all.purchases[0].id] } }, { expectedRevision: all.revision }), /only be deleted together with all its payments/);
   await assert.rejects(db.commitChanges({ purchases: { put: [{ ...all.purchases[0], status: "draft", receipts: [] }], remove: [] } }, { expectedRevision: all.revision }), /draft again/i);
   await assert.rejects(db.commitChanges({ suppliers: { put: [], remove: [all.suppliers[0].id] } }, { expectedRevision: all.revision }), /Archive/);
