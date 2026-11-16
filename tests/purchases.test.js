@@ -156,16 +156,19 @@ test("a supplier with the same name, phone number or tax number is warned about 
   assert.equal(d.suppliers[0].name, "Timgad Ceramic");
 });
 
-test("a supplier with no history can be deleted; one with purchases or payments can only be archived", () => {
+test("a supplier with no history can be deleted; one whose purchase has goods in stock is refused and can be archived", () => {
   const d = withSupplier();
   const lone = P.saveSupplier(d, { name: "Lone Co" }).supplier;
   assert.ok(P.deleteSupplier(d, lone.id).supplier);
   assert.equal(d.suppliers.length, 1);
 
-  draftPurchase(d);
+  confirmed(d);   // 200 boxes received: the goods are counted in Stock
   const id = d.suppliers[0].id;
-  assert.match(P.deleteSupplier(d, id).error, /archive/i, "history means archive, not delete");
+  const stockBefore = stockOf(d);
+  assert.match(P.deleteSupplier(d, id).error, /Stock/i, "goods in stock mean the supplier is not deleted (stock is never changed silently)");
   assert.equal(d.suppliers.length, 1);
+  assert.equal(d.purchases.length, 1);
+  assert.equal(stockOf(d), stockBefore);
   assert.equal(P.setSupplierArchived(d, id, true).supplier.archived, true);
   assert.ok(d.suppliers[0].archivedAt);
   assert.match(P.saveDraft(d, purchaseInput(d)).error, /archived/i, "an archived supplier is not offered for new purchases");
@@ -705,7 +708,7 @@ test("db: a confirmed purchase is never deleted with payments left behind or tur
   const pay = all.supplierPayments[0];
   await assert.rejects(db.commitChanges({ purchases: { put: [], remove: [all.purchases[0].id] } }, { expectedRevision: all.revision }), /only be deleted together with all its payments/);
   await assert.rejects(db.commitChanges({ purchases: { put: [{ ...all.purchases[0], status: "draft", receipts: [] }], remove: [] } }, { expectedRevision: all.revision }), /draft again/i);
-  await assert.rejects(db.commitChanges({ suppliers: { put: [], remove: [all.suppliers[0].id] } }, { expectedRevision: all.revision }), /Archive/);
+  await assert.rejects(db.commitChanges({ suppliers: { put: [], remove: [all.suppliers[0].id] } }, { expectedRevision: all.revision }), /deleted together with all of its purchases/);
   await assert.rejects(db.commitChanges({ supplierPayments: { put: [{ ...pay, amount: 999999 }], remove: [] } }, { expectedRevision: all.revision }), /more than its total/);
   await assert.rejects(db.commitChanges({ supplierPayments: { put: [{ ...pay, id: "orphan", purchaseId: "nope" }], remove: [] } }, { expectedRevision: all.revision }), /no longer exists/);
   assert.deepEqual(await dump(db), await dump(db), "stable");

@@ -144,12 +144,13 @@
     good: svg(THUMB),
     attention: svg(`<g transform="rotate(180 12 12)">${THUMB}</g>`),
     activity: svg('<path d="M3 12h4l3-8 4 16 3-8h4"/>'),
+    trash: svg('<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14a1 1 0 0 0 1 .9h8a1 1 0 0 0 1-.9L18 6"/><path d="M10 11v6M14 11v6"/>'),
   };
 
   // One compact icon button of the Suppliers table. The tooltip says what it does, the aria-label says what and to whom.
-  function iconButton(action, icon, id, labelKey, tipKey, name) {
+  function iconButton(action, icon, id, labelKey, tipKey, name, extraClass) {
     const label = t("sup.rowAria", { action: t(labelKey), name });
-    return `<button type="button" class="icon-btn" data-act="${action}" data-id="${esc(id)}" title="${esc(t(tipKey))}" aria-label="${esc(label)}">${icon}</button>`;
+    return `<button type="button" class="icon-btn${extraClass ? " " + extraClass : ""}" data-act="${action}" data-id="${esc(id)}" title="${esc(t(tipKey))}" aria-label="${esc(label)}">${icon}</button>`;
   }
 
   // The two standing toggles of a supplier: only one can be on, and pressing the one that is on clears it.
@@ -430,6 +431,7 @@
             ${iconButton("sup-edit", ICON.edit, sp.id, "common.edit", "sup.tip.edit", sp.name)}
           </span>
           ${standingButtons(sp)}
+          <span class="icon-group">${iconButton("sup-delete", ICON.trash, sp.id, "common.delete", "sup.tip.delete", sp.name, "danger")}</span>
         </div></td></tr>`;
     }).join("");
   }
@@ -1070,7 +1072,6 @@
   function supplierProfileHtml(sp) {
     const sum = P.supplierSummary(sp, S().purchases, S().supplierPayments, today(), S().supplierDeposits, S().advanceAllocations);
     const mine = S().purchases.filter((p) => p.supplierId === sp.id);
-    const hasHistory = P.supplierHasHistory(S(), sp.id);
     const tabs = PROFILE_TABS.map((k) => `<button type="button" class="tab" role="tab" aria-selected="${(ui.sup.tab === "deposits" ? "payments" : ui.sup.tab) === k}" data-act="sup-tab" data-tab="${k}">${esc(t("sup.tab." + k))}</button>`).join("");
     let body = "";
     if (ui.sup.tab === "overview") body = profileOverview(sp, sum);
@@ -1090,7 +1091,7 @@
           <button type="button" class="btn" data-act="sup-csv" data-id="${esc(sp.id)}">${esc(t("sup.exportCsv"))}</button>
           <button type="button" class="btn" data-act="sup-print" data-id="${esc(sp.id)}">${esc(t("sup.print"))}</button>
           <button type="button" class="btn" data-act="sup-archive" data-id="${esc(sp.id)}">${esc(t(sp.archived ? "sup.restore" : "sup.archive"))}</button>
-          ${hasHistory ? "" : `<button type="button" class="btn danger" data-act="sup-delete" data-id="${esc(sp.id)}">${esc(t("common.delete"))}</button>`}
+          <button type="button" class="btn danger" data-act="sup-delete" data-id="${esc(sp.id)}">${esc(t("common.delete"))}</button>
         </div>
       </div>
       <div class="tabs" role="tablist">${tabs}</div>
@@ -1260,11 +1261,93 @@
     });
   }
 
-  function removeSupplier(id) {
+  /* ---------- Deleting a supplier ----------
+     The question asked first is the page's own dialog (#supplierDeleteDialog), not the browser's box. It names the supplier
+     and says what goes with it: the payments (with their amount), the advances, the purchases that have no goods in stock.
+     When goods of a purchase are still counted in Stock the dialog only explains why nothing can be deleted yet (deleting
+     would have to change stock). A browser without <dialog> falls back to confirm() / a message. */
+
+  let supplierDeleteAsk = null;   // set while the dialog is open: a second request, click or key press is ignored
+
+  // The lines of what goes with the supplier, as plain text, from the figures of Purchases.supplierDeletionPreview.
+  function supplierDeleteLines(pv) {
+    const lines = [];
+    if (pv.payments.count) lines.push(t("sup.delete.payments", { n: num(pv.payments.count), amount: money(pv.payments.amount) }));
+    if (pv.advances.count) lines.push(t("sup.delete.advances", { n: num(pv.advances.count), amount: money(pv.advances.amount) }));
+    if (pv.refunds.count) lines.push(t("sup.delete.refunds", { n: num(pv.refunds.count), amount: money(pv.refunds.amount) }));
+    if (pv.allocations) lines.push(t("sup.delete.allocations", { n: num(pv.allocations) }));
+    if (pv.purchases.count) lines.push(t("sup.delete.purchases", { n: num(pv.purchases.count), total: money(pv.purchases.total) }));
+    if (pv.attachments) lines.push(t("sup.delete.files", { n: num(pv.attachments) }));
+    return lines;
+  }
+
+  function supplierDeleteTexts(pv) {
+    const name = pv.supplier.name;
+    if (pv.inStock.length) {
+      const list = pv.inStock.map((x) => [x.reference, x.supplierInvoiceNumber, money(x.total)].filter(Boolean).join(" · "));
+      return { blocked: true, title: t("sup.deleteBlockedTitle"), name, items: list, total: "", note: t("sup.deleteBlockedBody", { name }) };
+    }
+    const items = supplierDeleteLines(pv);
+    return {
+      blocked: false, title: t("sup.deleteTitle"), name,
+      items: items.length ? items : [t("sup.deleteNothing")],
+      total: pv.paymentCount ? t("sup.delete.total", { amount: money(pv.removedTotal) }) : "",
+      note: t("sup.deleteWarn") + (pv.purchases.count ? " " + t("sup.delete.stockSafe") : ""),
+    };
+  }
+
+  // Resolves true only when "Delete permanently" was pressed. A blocked supplier only gets the explanation (and Close).
+  function askAboutSupplierDelete(pv) {
+    const texts = supplierDeleteTexts(pv);
+    const dialog = $("supplierDeleteDialog");
+    if (!dialog || typeof dialog.showModal !== "function") {
+      if (texts.blocked) { h.notify(texts.note, "error"); return Promise.resolve(false); }
+      return Promise.resolve(confirm([texts.title, texts.name, "", ...texts.items.map((x) => "- " + x), texts.total, "", texts.note].filter((x, i, a) => x !== "" || (a[i - 1] !== "" && i > 0)).join("\n")));
+    }
+    if (supplierDeleteAsk) return Promise.resolve(false);
+    $("supplierDeleteTitle").textContent = texts.title;
+    $("supplierDeleteSubject").textContent = texts.name;
+    $("supplierDeleteList").innerHTML = texts.items.map((x) => `<li>${esc(x)}</li>`).join("");
+    $("supplierDeleteTotal").textContent = texts.total;
+    $("supplierDeleteBody").textContent = texts.note;
+    $("supplierDeleteCancel").textContent = t(texts.blocked ? "common.close" : "common.cancel");
+    $("supplierDeleteConfirm").hidden = texts.blocked;
+    return new Promise((resolve) => {
+      supplierDeleteAsk = { resolve };
+      dialog.showModal();
+      $("supplierDeleteCancel").focus();   // Enter must not delete by accident: Cancel has the focus
+    });
+  }
+
+  function answerSupplierDelete(yes) {
+    const ask = supplierDeleteAsk;
+    if (!ask) return;   // already answered
+    supplierDeleteAsk = null;
+    const dialog = $("supplierDeleteDialog");
+    if (dialog) { if (typeof dialog.close === "function") dialog.close(); else dialog.removeAttribute("open"); }
+    ask.resolve(yes);
+  }
+
+  // Deletes a supplier for good (the list's trash button and the profile's Delete button): ONE transaction removes the supplier,
+  // its payments, advances and allocations and its purchases without goods in stock (see Purchases.deleteSupplier). A supplier
+  // that is already gone is only reported. If the change is refused nothing was saved and the reason is shown.
+  async function removeSupplier(id) {
     const sp = supplierById(id);
-    if (!sp || !confirm(t("sup.confirmDelete", { name: sp.name }))) return;
+    if (!sp) { h.notify(t("sup.err.gone"), "error"); renderSuppliers(); return; }
+    const preview = P.supplierDeletionPreview(S(), id);
+    const yes = await askAboutSupplierDelete(preview);
+    if (!yes || preview.inStock.length) return;
     return act((d) => P.deleteSupplier(d, id), {
-      done: () => { h.notify(t("sup.deleted", { name: sp.name })); ui.sup.screen = "list"; ui.sup.profileId = null; renderSuppliers(); },
+      done: (r) => {
+        h.notify(t(r.already ? "sup.deleteAlready" : "sup.deleted", { name: sp.name }));
+        // What the screens remember about the supplier goes too, so nothing keeps pointing at it.
+        if (ui.sup.profileId === id) ui.sup.profileId = null;
+        if (ui.sup.editingId === id) ui.sup.editingId = null;
+        if (ui.act.supplierId === id) ui.act.supplierId = "";
+        if (ui.pur.supplierId === id) ui.pur.supplierId = "";
+        ui.sup.screen = "list";
+        renderSuppliers();
+      },
     });
   }
 
@@ -2975,6 +3058,11 @@
       root.addEventListener("mousedown", onMouseDown);
       root.addEventListener("close", onDialogClose, true);   // "close" does not bubble
     }
+    // The question before a supplier is deleted: Delete permanently deletes, Cancel / Close / Esc leaves everything as it was.
+    const on = (id, type, fn) => { const el = $(id); if (el && el.addEventListener) el.addEventListener(type, fn); };
+    on("supplierDeleteConfirm", "click", () => answerSupplierDelete(true));
+    on("supplierDeleteCancel", "click", () => answerSupplierDelete(false));
+    on("supplierDeleteDialog", "cancel", (e) => { e.preventDefault(); answerSupplierDelete(false); });
   }
 
   // Called by the page whenever it redraws. Only the Dashboard, Suppliers and Purchases views draw anything here.

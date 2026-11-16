@@ -51,7 +51,7 @@
      - History is never deleted here by accident: a DRAFT purchase can be removed; a confirmed or cancelled purchase
        only together with ALL its payments, advance allocations and attached files (an explicit "delete purchase", one
        transaction); a payment, a deposit and an allocation never on their own (they are voided or reversed instead); a
-       supplier with purchases, payments or deposits can not be removed.
+       supplier only together with ALL its purchases, payments, deposits and allocations (one transaction).
      - The supplier's deposits can never be applied for more than they hold, and an invoice can never be settled for more
        than its total by payments and allocations together. A violation aborts the whole transaction.
      - After any change that touches invoices or the ledger, the whole ledger is checked against the invoices INSIDE
@@ -789,13 +789,18 @@
         if (allocationKeys.some((key) => !(allocationChanges.remove || []).includes(key))) throw invalid([t("db.cannotDeletePurchase")]);
       }
 
-      // A supplier with purchases or payments is archived, not deleted.
+      // A supplier is only removed together with everything that belongs to it: every purchase, payment, advance (deposit /
+      // refund) and allocation of the supplier must be removed by this same change. One left behind would point at a
+      // supplier that no longer exists, so the whole change is refused and nothing is written.
       for (const id of supplierChanges.remove || []) {
         const purchaseKeys = await req(purchases.index("supplierId").getAllKeys(id));
         if (purchaseKeys.some((key) => !removingPurchases.has(key))) throw invalid([t("db.cannotDeleteSupplier")]);
-        if ((await req(payments.index("supplierId").count(id))) > 0) throw invalid([t("db.cannotDeleteSupplier")]);
-        if ((await req(depositStore.index("supplierId").count(id))) > 0) throw invalid([t("db.cannotDeleteSupplier")]);
-        if ((await req(allocationStore.index("supplierId").count(id))) > 0) throw invalid([t("db.cannotDeleteSupplier")]);
+        const paymentKeys = await req(payments.index("supplierId").getAllKeys(id));
+        if (paymentKeys.some((key) => !removingPayments.has(key))) throw invalid([t("db.cannotDeleteSupplier")]);
+        const depositKeys = await req(depositStore.index("supplierId").getAllKeys(id));
+        if (depositKeys.some((key) => !removingDepositsNow.has(key))) throw invalid([t("db.cannotDeleteSupplier")]);
+        const allocationKeys = await req(allocationStore.index("supplierId").getAllKeys(id));
+        if (allocationKeys.some((key) => !removingAllocationsNow.has(key))) throw invalid([t("db.cannotDeleteSupplier")]);
       }
 
       const puts = purchaseChanges.put || [];

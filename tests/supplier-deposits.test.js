@@ -272,12 +272,13 @@ test("a deposit can not be voided while refunds depend on it", () => {
   assert.ok(P.updateDeposit(d, x.id, { amount: "5000", date: x.date }).error);
 });
 
-test("11. a supplier with only a deposit can not be deleted", () => {
+test("11. a supplier with only a deposit is deleted together with it (the deposit never outlives its supplier)", () => {
   const d = draft();
   deposit(d, 1000);
   const r = P.deleteSupplier(d, d.suppliers[0].id);
-  assert.ok(r.error);
-  assert.equal(d.suppliers.length, 1);
+  assert.ok(r.supplier, r.error);
+  assert.equal(d.suppliers.length, 0);
+  assert.equal(d.supplierDeposits.length, 0);
 });
 
 test("12. data from before deposits existed (no deposit or allocation lists at all) still works", () => {

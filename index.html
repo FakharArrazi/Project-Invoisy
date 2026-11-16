@@ -758,6 +758,19 @@
   </div>
 </dialog>
 
+<!-- Asks before a supplier is deleted for good, listing what goes with it (and explains why one can not be deleted yet). Opened from Suppliers only. -->
+<dialog class="confirm-dialog no-print" id="supplierDeleteDialog" aria-labelledby="supplierDeleteTitle" aria-describedby="supplierDeleteBody">
+  <h2 id="supplierDeleteTitle">Delete this supplier?</h2>
+  <p class="confirm-dialog-subject" id="supplierDeleteSubject"></p>
+  <ul class="confirm-dialog-list" id="supplierDeleteList"></ul>
+  <p class="confirm-dialog-total" id="supplierDeleteTotal"></p>
+  <p class="muted" id="supplierDeleteBody">This is permanent and can not be undone.</p>
+  <div class="actions">
+    <button type="button" class="btn" id="supplierDeleteCancel" autofocus>Cancel</button>
+    <button type="button" class="btn danger-solid" id="supplierDeleteConfirm" data-i18n="sup.deleteBtn">Delete permanently</button>
+  </div>
+</dialog>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="java script/i18n.js"></script>

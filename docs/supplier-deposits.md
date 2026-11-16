@@ -40,7 +40,8 @@ Example: purchases 100,000 and a deposit of 150,000 give net −50,000, owed 0, 
 - **Edit / void a deposit**: old values are kept in its history. A deposit with applied allocations can not be voided and can
   not be lowered below what was applied (release the allocations first). A deposit can not be voided while refunds depend on it.
 - **Cancel a purchase** releases its allocations. **Delete a purchase** removes them with it (the question says how much comes
-  back). A supplier with deposits can not be deleted.
+  back). **Delete a supplier** removes its deposits, refunds, payments and allocations with it (the question lists them and
+  their total); it is refused while a purchase of the supplier still has goods in Stock.
 
 ## Persistence and backups
 

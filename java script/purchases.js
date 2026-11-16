@@ -362,14 +362,68 @@
       || (d.supplierDeposits || []).some((p) => p.supplierId === id) || (d.advanceAllocations || []).some((p) => p.supplierId === id);
   }
 
-  // A supplier that never had a purchase or a payment may be deleted. Any other supplier is archived instead,
-  // so the history of what was bought and paid is never lost.
+  // What deleting a supplier would take out, for the question asked before it is done. Nothing is changed.
+  //   payments    the supplier's invoice payments (voided ones too): { count, amount } (amount = payments that still count)
+  //   advances    the supplier's advance payments / acomptes: { count, amount }
+  //   refunds     money the supplier gave back out of the advances: { count, amount }
+  //   allocations how many times an advance was applied to an invoice (accounting links, no money of their own)
+  //   purchases   the supplier's purchases that go with it (none of them has goods in stock): { count, total }
+  //   inStock     the purchases that stop the deletion: goods they received are still counted in Stock. Deleting them
+  //               would change stock quantities, so the supplier is never deleted over them (see deleteSupplier).
+  //   removedTotal  payments + advances that still count: the money that disappears from the books
+  function supplierDeletionPreview(d, id) {
+    const supplier = (d.suppliers || []).find((s) => s.id === id);
+    if (!supplier) return null;
+    const purchases = (d.purchases || []).filter((p) => p.supplierId === id);
+    const holdsStock = (p) => (p.receipts || []).some((r) => r.status === "applied");
+    const inStock = purchases.filter(holdsStock);
+    const going = purchases.filter((p) => !holdsStock(p));
+    const payments = (d.supplierPayments || []).filter((x) => x.supplierId === id);
+    const deposits = (d.supplierDeposits || []).filter((x) => x.supplierId === id);
+    const advances = deposits.filter((x) => x.kind !== "refund");
+    const refunds = deposits.filter((x) => x.kind === "refund");
+    const sum = (list) => round2(list.reduce((s, x) => s + toNumber(x.amount), 0));
+    const payAmount = sum(activePayments(payments));
+    const advAmount = sum(activeDeposits(advances));
+    return {
+      supplier,
+      payments: { count: payments.length, amount: payAmount },
+      advances: { count: advances.length, amount: advAmount },
+      refunds: { count: refunds.length, amount: sum(activeDeposits(refunds)) },
+      allocations: (d.advanceAllocations || []).filter((x) => x.supplierId === id).length,
+      purchases: { count: going.length, total: round2(going.filter((p) => p.status === "confirmed").reduce((s, p) => s + toNumber(p.total), 0)) },
+      attachments: going.reduce((n, p) => n + (Array.isArray(p.attachments) ? p.attachments.length : 0), 0),
+      inStock: inStock.map((p) => ({ id: p.id, reference: p.reference, supplierInvoiceNumber: p.supplierInvoiceNumber || "", status: p.status, total: toNumber(p.total) })),
+      paymentCount: payments.length + advances.length,
+      removedTotal: round2(payAmount + advAmount),
+    };
+  }
+
+  // Deletes a supplier for good, with everything that belongs to it alone, on the draft `d` (run through commit(), it is
+  // saved in ONE transaction, so there is never a payment, advance or allocation left without its supplier):
+  //   - its invoice payments, advance payments (acomptes), refunds and the allocations of advances to invoices;
+  //   - its purchases that have no goods in stock (drafts, invoices nothing was received for, cancelled ones) with their files.
+  // Everything else is untouched: products, stock, sales, other suppliers. Balances, available advances and totals are
+  // worked out from the records, so they are right the moment these are gone.
+  // Refused, changing nothing, when a purchase of the supplier still has goods in Stock: deleting it would have to take them
+  // out of stock. Delete that purchase first (the Purchases page asks about the stock) or archive the supplier.
+  // Deleting twice never does anything twice: once the supplier is gone the second attempt only reports it.
   function deleteSupplier(d, id) {
     const supplier = (d.suppliers || []).find((s) => s.id === id);
-    if (!supplier) return { error: t("sup.err.gone") };
-    if (supplierHasHistory(d, id)) return { error: t("sup.err.hasHistory", { name: supplier.name }) };
+    if (!supplier) return { skip: true, already: true };
+    const preview = supplierDeletionPreview(d, id);
+    if (preview.inStock.length) return { error: t("sup.err.hasStock", { name: supplier.name, n: preview.inStock.length }), preview };
+    const purchaseIds = new Set((d.purchases || []).filter((p) => p.supplierId === id).map((p) => p.id));
+    if (!d.attachments) d.attachments = { put: [], remove: [] };
+    for (const p of d.purchases || []) {
+      if (purchaseIds.has(p.id)) for (const a of p.attachments || []) d.attachments.remove.push(a.id);
+    }
+    d.supplierPayments = (d.supplierPayments || []).filter((x) => x.supplierId !== id && !purchaseIds.has(x.purchaseId));
+    d.advanceAllocations = (d.advanceAllocations || []).filter((x) => x.supplierId !== id && !purchaseIds.has(x.purchaseId));
+    d.supplierDeposits = (d.supplierDeposits || []).filter((x) => x.supplierId !== id);
+    d.purchases = (d.purchases || []).filter((p) => p.supplierId !== id);
     d.suppliers = d.suppliers.filter((s) => s.id !== id);
-    return { supplier };
+    return { supplier, preview };
   }
 
   /* ==========================================================================
@@ -2638,7 +2692,7 @@
     PURCHASE_STATUSES, RECEIPT_STATUSES, PAYMENT_STATUSES, DISCOUNT_TYPES, TAX_TYPES, TAX_MODES,
     ATTACHMENT_TYPES, ATTACHMENT_MAX_BYTES, REFERENCE_PREFIX, MAX_TERMS_DAYS, CONFIRMED_EDITABLE,
     isDay, toDay, addDays, daysBetween, normText, readNumber,
-    normalizeSupplier, supplierProblem, supplierContacts, supplierPhones, supplierContactNames, MAX_CONTACTS, findSupplierDuplicates, saveSupplier, setSupplierArchived, SUPPLIER_STANDINGS, supplierStanding, setSupplierStanding, deleteSupplier, supplierHasHistory,
+    normalizeSupplier, supplierProblem, supplierContacts, supplierPhones, supplierContactNames, MAX_CONTACTS, findSupplierDuplicates, saveSupplier, setSupplierArchived, SUPPLIER_STANDINGS, supplierStanding, setSupplierStanding, deleteSupplier, supplierDeletionPreview, supplierHasHistory,
     lineTotalOf, lineBaseQty, computeTotals, discountAmount, taxAmount, autoFactor,
     composePurchase, previewPurchase, purchaseToInput, duplicateInvoice, duplicateReference,
     normalizePurchase, purchaseProblem, purchaseWarnings, attachmentProblem, attachmentMetaProblem, attachmentMeta, withKeys, stripKeys,

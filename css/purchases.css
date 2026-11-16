@@ -68,7 +68,14 @@
 .icon-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
 .icon-btn:hover { color: var(--accent-dark); background: var(--accent-tint); border-color: var(--accent); }
 .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.icon-btn.danger { color: var(--danger); }
 .icon-btn.danger:hover { color: var(--danger); background: #fdecea; border-color: var(--danger); }
+
+/* ----- Deleting a supplier: the list of what goes with it, inside the page's confirm dialog ----- */
+.confirm-dialog-list { margin: 0 0 10px; padding: 0; padding-inline-start: 20px; font-size: 14px; }
+.confirm-dialog-list li { margin: 2px 0; overflow-wrap: anywhere; }
+.confirm-dialog-total { margin: 0 0 10px; font-weight: 700; color: var(--danger); }
+.confirm-dialog-total:empty { display: none; }
 .btn.with-icon { display: inline-flex; align-items: center; gap: 6px; }
 .btn.with-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
